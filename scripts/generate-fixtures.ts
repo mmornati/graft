@@ -129,6 +129,52 @@ function repair(name: string, payload: Record<string, unknown>): void {
 
 const fixtures: Record<string, Record<string, unknown>> = {};
 
+const TEST_APP_ID = 12345;
+
+/** Read a dotted path out of a JSON-ish value. */
+function get(root: unknown, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], root);
+}
+
+/** The re-run request for Graft's own provenance check on the PR fixture's head commit. */
+function fixCheckRun(p: Record<string, unknown>): void {
+  const pr = rewrite(fixtures["pull_request.opened"]?.pull_request);
+  const sha = get(pr, "head.sha") as string;
+  p.repository = { ...(p.repository as Record<string, unknown>), ...repo(REPOS.ts) };
+  const run = p.check_run as Record<string, unknown>;
+  const suite = run.check_suite as Record<string, unknown>;
+  run.name = "graft/provenance";
+  run.head_sha = sha;
+  run.external_id = "";
+  run.app = { ...(run.app as Record<string, unknown>), id: TEST_APP_ID };
+  run.check_suite = {
+    ...suite,
+    head_sha: sha,
+    after: sha,
+    app: { ...(suite.app as Record<string, unknown>), id: TEST_APP_ID },
+  };
+  const side = (s: string) => ({
+    ref: get(pr, `${s}.ref`),
+    sha: get(pr, `${s}.sha`),
+    repo: {
+      id: get(pr, `${s}.repo.id`),
+      url: get(pr, `${s}.repo.url`),
+      name: get(pr, `${s}.repo.name`),
+    },
+  });
+  run.pull_requests = [
+    {
+      id: get(pr, "id"),
+      number: get(pr, "number"),
+      url: get(pr, "url"),
+      head: side("head"),
+      base: side("base"),
+    },
+  ];
+}
+
 {
   // Older upstream example: add the fields the current schema requires.
   const p = pick("ping", undefined);
@@ -174,6 +220,14 @@ fixtures["installation.new_permissions_accepted"] = pick(
 }
 fixtures["pull_request.opened"] = pick("pull_request", "opened");
 fixtures["pull_request.synchronize"] = pick("pull_request", "synchronize");
+fixtures["pull_request.reopened"] = pick("pull_request", "reopened");
+{
+  // The upstream catalog has no `edited` example: clone `opened`.
+  const p = pick("pull_request", "opened");
+  p.action = "edited";
+  p.changes = { body: { from: "Old description." } };
+  fixtures["pull_request.edited"] = p;
+}
 {
   // The upstream catalog has no merged example, so turn the first closed one into a merge.
   const p = pick("pull_request", "closed");
@@ -191,6 +245,7 @@ for (const [name, payload] of Object.entries(fixtures)) {
   if (name.startsWith("installation")) fixInstallation(rewritten);
   else if (name !== "ping")
     rewritten.installation = { id: INSTALLATION_ID, node_id: "I_fake1000001" };
+  if (name === "check_run.rerequested") fixCheckRun(rewritten);
   repair(name, rewritten);
   writeFileSync(new URL(`${name}.json`, OUT), `${JSON.stringify(rewritten, null, 2)}\n`);
   console.log("wrote", name);

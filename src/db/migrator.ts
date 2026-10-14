@@ -18,6 +18,13 @@ export async function migrateToLatest(db: Db): Promise<string[]> {
   return (set.results ?? []).filter((r) => r.status === "Success").map((r) => r.migrationName);
 }
 
+/** Roll back only the most recently applied migration. */
+export async function migrateDownOne(db: Db): Promise<string[]> {
+  const set = await createMigrator(db).migrateDown();
+  assertOk(set);
+  return (set.results ?? []).filter((r) => r.status === "Success").map((r) => r.migrationName);
+}
+
 /** Roll back every applied migration. */
 export async function migrateDown(db: Db): Promise<string[]> {
   const migrator = createMigrator(db);

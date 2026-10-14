@@ -12,3 +12,11 @@ Every Phase 0 step appends to this checklist. Each item says who does it, what i
 - [ ] **Add then remove `empty`** (who: org owner) from the installation, and check that `removed_at` gets set on its `repositories` row.
 - [ ] **Push this repo to GitHub** and check that CI is green. Who: repo owner. CI needs no secrets.
 - [ ] **Open decisions from the plan**: pilot team source, first agent harness, diff retention ("not stored"). Who: product owner. Produces: written answers in `docs/plan/development-plan.md`.
+
+## Step 2: Provenance
+
+- [ ] **Configure the first harness (Claude Code) to add `Graft-*` trailers**: instruct it in the project's `CLAUDE.md`, or use a `prepare-commit-msg` hook. Who: repo owner.
+- [ ] **Open a PR in `sample-ts` with trailers** and check the comment and the `graft/provenance` check. Then force-push without trailers and check that the output flips to "Human" (or to "Agent (agent co-author)").
+- [ ] **Confirm that comments created by the App carry `performed_via_github_app.id`.** If they do not, set `GITHUB_APP_SLUG` (the fallback matches the bot login `<slug>[bot]` plus the marker) and report it, because decision D13 then needs a permanent bot-login rule. Who: repo owner, from the first real PR.
+- [ ] **Decide `GRAFT_AGENT_LOGINS` for the pilots.** Who: product owner.
+

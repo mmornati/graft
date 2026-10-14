@@ -174,3 +174,53 @@ export async function listActiveRepositories(
     .orderBy("id")
     .execute();
 }
+
+/**
+ * Make sure a repository row exists (a repo created after an `all` install has none).
+ * Active rows get their name/visibility/default branch refreshed; a removed row is left alone.
+ */
+export async function ensureRepository(
+  ex: Executor,
+  installationId: number,
+  repo: { id: number; full_name: string; private: boolean; default_branch: string },
+  now: Date,
+): Promise<"active" | "removed"> {
+  await ex
+    .insertInto("repositories")
+    .values({
+      id: repo.id,
+      installation_id: installationId,
+      full_name: repo.full_name,
+      private: repo.private,
+      default_branch: repo.default_branch,
+      removed_at: null,
+      created_at: now,
+      updated_at: now,
+    })
+    .onConflict((oc) => oc.column("id").doNothing())
+    .execute();
+  const updated = await ex
+    .updateTable("repositories")
+    .set({
+      full_name: repo.full_name,
+      private: repo.private,
+      default_branch: repo.default_branch,
+      updated_at: now,
+    })
+    .where("id", "=", repo.id)
+    .where("removed_at", "is", null)
+    .returning("id")
+    .executeTakeFirst();
+  return updated ? "active" : "removed";
+}
+
+/** The installation row when it exists and is neither deleted nor suspended. */
+export async function getActiveInstallation(ex: Executor, id: number) {
+  return ex
+    .selectFrom("installations")
+    .selectAll()
+    .where("id", "=", id)
+    .where("deleted_at", "is", null)
+    .where("suspended_at", "is", null)
+    .executeTakeFirst();
+}

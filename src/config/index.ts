@@ -23,6 +23,26 @@ const intString = (min: number, max: number) =>
     .transform(Number)
     .pipe(z.number().int().min(min).max(max));
 
+const csv = (v: string): string[] =>
+  v
+    .split(",")
+    .map((x) => x.trim().toLowerCase())
+    .filter((x) => x !== "");
+
+const loginList = z
+  .string()
+  .transform(csv)
+  .refine((l) => l.every((x) => /^[a-z0-9-]+(\[bot\])?$/.test(x)), {
+    message: "must be comma-separated GitHub logins (letters, digits, '-', optional [bot])",
+  });
+
+const emailList = z
+  .string()
+  .transform(csv)
+  .refine((l) => l.every((x) => x.split("@").length === 2 && !/\s/.test(x)), {
+    message: "must be comma-separated emails, each with exactly one '@'",
+  });
+
 const url = z.string().refine((v) => URL.canParse(v), "must be a URL");
 
 const EnvSchema = z.object({
@@ -45,6 +65,11 @@ const EnvSchema = z.object({
   WORKER_CONCURRENCY: withDefault(intString(1, 50), "5"),
   WEBHOOK_BODY_LIMIT_BYTES: withDefault(intString(1, Number.MAX_SAFE_INTEGER), "26214400"),
   SMEE_URL: opt(url),
+  GRAFT_AGENT_LOGINS: withDefault(loginList, ""),
+  GRAFT_AGENT_COAUTHOR_EMAILS: withDefault(emailList, "noreply@anthropic.com"),
+  GITHUB_APP_SLUG: opt(
+    z.string().regex(/^[A-Za-z0-9-]+$/, "must be the App slug (letters, digits, '-')"),
+  ),
 });
 
 export interface Config {
@@ -61,6 +86,12 @@ export interface Config {
   readonly workerConcurrency: number;
   readonly webhookBodyLimitBytes: number;
   readonly smeeUrl: string | undefined;
+  /** Lowercased logins that count as agent accounts (step 2). */
+  readonly agentLogins: readonly string[];
+  /** Lowercased co-author emails that mark a commit as agent-written (step 2). */
+  readonly agentCoauthorEmails: readonly string[];
+  /** The App's slug; enables the `<slug>[bot]` fallback for recognising Graft's comment. */
+  readonly githubAppSlug: string | undefined;
 }
 
 function isPem(key: string): boolean {
@@ -135,5 +166,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     workerConcurrency: d.WORKER_CONCURRENCY,
     webhookBodyLimitBytes: d.WEBHOOK_BODY_LIMIT_BYTES,
     smeeUrl: d.SMEE_URL,
+    agentLogins: Object.freeze([...d.GRAFT_AGENT_LOGINS]),
+    agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
+    githubAppSlug: d.GITHUB_APP_SLUG,
   });
 }

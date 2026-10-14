@@ -1,5 +1,7 @@
+import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import { defineWebhookHandler } from "../../webhooks/handler.js";
+import { parsePayload } from "../../webhooks/payload.js";
 import {
   type InstallationInput,
   markAllRepositoriesRemoved,
@@ -38,6 +40,44 @@ interface InstallationEventPayload {
   repositories_removed?: RepoLike[];
 }
 
+const repoSchema = z.looseObject({
+  id: z.number().int(),
+  full_name: z.string(),
+  private: z.boolean(),
+});
+const installationSchema = z.looseObject({
+  id: z.number().int(),
+  account: z
+    .looseObject({
+      id: z.number().int(),
+      login: z.string().optional(),
+      slug: z.string().optional(),
+      type: z.string().optional(),
+    })
+    .nullable(),
+  repository_selection: z.string(),
+});
+
+const installationEventSchema = z.looseObject({
+  action: z.string(),
+  installation: installationSchema,
+  repositories: z.array(repoSchema).optional(),
+});
+const repositoriesEventSchema = z.looseObject({
+  action: z.string(),
+  installation: installationSchema,
+  repositories_added: z.array(repoSchema),
+  repositories_removed: z.array(repoSchema),
+});
+
+const KNOWN_INSTALLATION_ACTIONS = new Set([
+  "created",
+  "deleted",
+  "suspend",
+  "unsuspend",
+  "new_permissions_accepted",
+]);
+
 function toInstallation(i: InstallationLike): InstallationInput {
   if (!i.account) throw new Error("installation payload has no account");
   const type = i.account.type;
@@ -57,7 +97,17 @@ export const trackInstallations = defineWebhookHandler({
   name: "installations.track",
   on: ["installation", "installation_repositories"] as const,
   async handle(event, ctx: JobContext) {
-    const payload = event.payload as unknown as InstallationEventPayload;
+    // Validate before anything else: the event header is not covered by the webhook HMAC.
+    const payload = (
+      event.name === "installation"
+        ? parsePayload(installationEventSchema, event, ctx.log)
+        : parsePayload(repositoriesEventSchema, event, ctx.log)
+    ) as InstallationEventPayload | undefined;
+    if (!payload) return;
+    if (event.name === "installation" && !KNOWN_INSTALLATION_ACTIONS.has(payload.action)) {
+      ctx.log.debug({ action: payload.action }, "installation action not tracked");
+      return;
+    }
     const now = ctx.clock.now();
     const inst = toInstallation(payload.installation);
 

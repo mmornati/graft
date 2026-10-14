@@ -1,4 +1,5 @@
 import type { ColumnType, Generated } from "kysely";
+import type { WarningCode } from "../modules/provenance/fields.js";
 
 /** timestamptz NOT NULL DEFAULT now(): optional on insert. */
 type Timestamp = ColumnType<Date, Date | undefined, Date>;
@@ -57,6 +58,11 @@ export interface ChangesTable {
   opened_at: Date;
   closed_at: Date | null;
   merged_at: Date | null;
+  /** GitHub `updated_at` of the applied snapshot (ordering guard). */
+  pr_updated_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+  author_is_bot: Generated<boolean>;
+  /** The Graft-managed PR comment. */
+  graft_comment_id: ColumnType<number | null, number | null | undefined, number | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -64,13 +70,50 @@ export interface ChangesTable {
 export interface ProvenanceTable {
   id: Generated<string>;
   change_id: string;
-  source: "trailer" | "mcp";
+  source: "trailer" | "pr_body" | "mcp";
   commit_sha: string | null;
   agent: string | null;
   model: string | null;
   task_external_id: string | null;
   session_url: string | null;
   created_at: CreatedAt;
+}
+
+export type ProvenanceFieldName = "agent" | "model" | "task" | "session";
+
+export interface FieldSource {
+  source: "commit" | "pr_body";
+  commitSha?: string;
+}
+
+export interface StoredWarning {
+  code: WarningCode;
+  field?: ProvenanceFieldName;
+  commitSha?: string;
+  source: "commit" | "pr_body";
+}
+
+export interface ChangeProvenanceTable {
+  change_id: string;
+  head_sha: string;
+  author_kind: "agent" | "human";
+  author_kind_reason: "trailer" | "bot_account" | "configured_login" | "agent_coauthor" | "none";
+  agent: string | null;
+  model: string | null;
+  task_external_id: string | null;
+  session_url: string | null;
+  field_sources: Json<Partial<Record<ProvenanceFieldName, FieldSource>>>;
+  conflicts: Json<Partial<Record<ProvenanceFieldName, string[]>>>;
+  warnings: Json<StoredWarning[]>;
+  commits_total: number;
+  commits_scanned: number;
+  commits_with_trailers: number;
+  agent_coauthor_commits: number;
+  commits_truncated: Generated<boolean>;
+  check_run_id: number | null;
+  computed_at: Date;
+  created_at: Timestamp;
+  updated_at: Timestamp;
 }
 
 export interface IntentCardsTable {
@@ -143,6 +186,7 @@ export interface Database {
   tasks: TasksTable;
   changes: ChangesTable;
   provenance: ProvenanceTable;
+  change_provenance: ChangeProvenanceTable;
   intent_cards: IntentCardsTable;
   policy_verdicts: PolicyVerdictsTable;
   guard_events: GuardEventsTable;
@@ -155,6 +199,7 @@ export const TABLE_NAMES = [
   "tasks",
   "changes",
   "provenance",
+  "change_provenance",
   "intent_cards",
   "policy_verdicts",
   "guard_events",

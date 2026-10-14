@@ -1,5 +1,6 @@
 import type { JobContext } from "../core/context.js";
 import type { Registry } from "../webhooks/registry.js";
+import { PermanentJobError } from "./errors.js";
 import type { PgBossJobQueue } from "./queue.js";
 
 export async function startWorker(
@@ -19,6 +20,11 @@ export async function startWorker(
             const data = job.schema.parse(j.data);
             await job.handle(data, { ...ctx, log });
           } catch (err) {
+            if (err instanceof PermanentJobError) {
+              // Retrying cannot help: log and return so pg-boss completes the job.
+              log.error({ err, permanent: true, reason: err.reason }, "job failed permanently");
+              continue;
+            }
             // Rethrow: pg-boss fails the job and retries per the queue's options.
             log.error({ err }, "job failed");
             throw err;

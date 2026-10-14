@@ -102,4 +102,32 @@ describe("config", () => {
       "GITHUB_WEBHOOK_SECRET",
     );
   });
+
+  it("U-CFG-7 agent logins and co-author emails: defaults, normalization, and rejection by name only", () => {
+    const d = loadConfig(valid);
+    expect(d.agentLogins).toEqual([]);
+    expect(d.agentCoauthorEmails).toEqual(["noreply@anthropic.com"]);
+    expect(Object.isFrozen(d.agentLogins)).toBe(true);
+    expect(Object.isFrozen(d.agentCoauthorEmails)).toBe(true);
+
+    const c = loadConfig({
+      ...valid,
+      GRAFT_AGENT_LOGINS: " Claude-Bot ,my-agent[bot],, ",
+      GRAFT_AGENT_COAUTHOR_EMAILS: " A@Example.com , b@x.dev ",
+      GITHUB_APP_SLUG: "graft-dev",
+    });
+    expect(c.agentLogins).toEqual(["claude-bot", "my-agent[bot]"]);
+    expect(c.agentCoauthorEmails).toEqual(["a@example.com", "b@x.dev"]);
+    expect(c.githubAppSlug).toBe("graft-dev");
+
+    const badLogin = errorOf({ ...valid, GRAFT_AGENT_LOGINS: "ok-one,bad login" }).message;
+    expect(badLogin).toContain("GRAFT_AGENT_LOGINS");
+    expect(badLogin).not.toContain("bad login");
+    const badEmail = errorOf({ ...valid, GRAFT_AGENT_COAUTHOR_EMAILS: "no-at-sign" }).message;
+    expect(badEmail).toContain("GRAFT_AGENT_COAUTHOR_EMAILS");
+    expect(badEmail).not.toContain("no-at-sign");
+    expect(errorOf({ ...valid, GRAFT_AGENT_COAUTHOR_EMAILS: "a@b@c" }).message).toContain(
+      "GRAFT_AGENT_COAUTHOR_EMAILS",
+    );
+  });
 });

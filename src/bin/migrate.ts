@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ConfigError } from "../config/index.js";
 import { createDb } from "../db/client.js";
-import { createMigrator, migrateDown, migrateToLatest } from "../db/migrator.js";
+import { createMigrator, migrateDownOne, migrateToLatest } from "../db/migrator.js";
 import { loadDotEnv } from "./env.js";
 
 async function main(): Promise<number> {
@@ -27,7 +27,7 @@ async function main(): Promise<number> {
         applied.length === 0 ? "no pending migrations" : `applied: ${applied.join(", ")}`,
       );
     } else if (command === "down") {
-      const rolled = await migrateDown(db);
+      const rolled = await migrateDownOne(db);
       console.log(
         rolled.length === 0 ? "nothing to roll back" : `rolled back: ${rolled.join(", ")}`,
       );

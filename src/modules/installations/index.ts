@@ -5,4 +5,9 @@ import { trackInstallations } from "./handlers.js";
 export const webhookHandlers: WebhookHandler[] = [trackInstallations];
 export const jobs: JobDefinition<unknown>[] = [];
 
-export { getActiveRepository, listActiveRepositories } from "./store.js";
+export {
+  ensureRepository,
+  getActiveInstallation,
+  getActiveRepository,
+  listActiveRepositories,
+} from "./store.js";

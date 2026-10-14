@@ -17,7 +17,9 @@ const EXPECTED = [
   "installation_repositories.removed",
   "ping",
   "pull_request.closed",
+  "pull_request.edited",
   "pull_request.opened",
+  "pull_request.reopened",
   "pull_request.synchronize",
 ];
 

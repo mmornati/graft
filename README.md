@@ -1,6 +1,6 @@
 # Graft
 
-Graft is a GitHub App and service that adds intent review and policy checks to agent-written pull requests. This repo holds the service; step 1 is the base skeleton (webhook intake, job queue, installation tracking).
+Graft is a GitHub App and service that adds intent review and policy checks to agent-written pull requests. This repo holds the service; step 1 is the base skeleton (webhook intake, job queue, installation tracking) and step 2 adds provenance (who wrote each PR, shown in a check run and the managed PR comment).
 
 See the [MVP spec](docs/spec/mvp-spec.md), the [development plan](docs/plan/development-plan.md) and the [Phase 0 steps](docs/phase-0/README.md).
 
@@ -31,7 +31,7 @@ curl localhost:3000/readyz
 
 `.env.example` already points `GITHUB_APP_PRIVATE_KEY_PATH` at `./dev.pem`. Neither process runs migrations; if the schema is behind they exit with `run pnpm db:migrate`.
 
-Other scripts: `pnpm db:status`, `pnpm db:rollback`, `pnpm format`, `pnpm build` then `pnpm start:server` / `pnpm start:worker`.
+Other scripts: `pnpm db:status`, `pnpm db:rollback` (reverts only the latest migration), `pnpm format`, `pnpm build` then `pnpm start:server` / `pnpm start:worker`.
 
 ## 3. Tests
 
@@ -67,7 +67,7 @@ GitHub ──POST /webhooks/github──▶ server (Fastify)
 worker (pg-boss) ── github.webhook job ──▶ handlers registered by modules
 ```
 
-**How later steps plug in.** Each feature is a folder `src/modules/<name>/` whose `index.ts` exports `webhookHandlers: WebhookHandler[]` and `jobs: JobDefinition[]`. `src/app/registry.ts` is the only file that lists modules. Expected additions: `modules/provenance` (step 2), `modules/intent` plus `src/llm/` holding the model-client interface and its fake (step 3), `eval/` with `src/bin/eval.ts` (step 4), `modules/policy` (step 5), `modules/pilot` with `scripts/pilot/` (step 6), and `src/mcp/` (Phase 1). Modules import from `config`, `core`, `db`, `github`, `queue` and `webhooks`. They import another module only through its `index.ts`, never its internals.
+**How later steps plug in.** Each feature is a folder `src/modules/<name>/` whose `index.ts` exports `webhookHandlers: WebhookHandler[]` and `jobs: JobDefinition[]`. `src/app/registry.ts` is the only file that lists modules. Step 2 added `modules/changes` (the `changes` row and its guarded upsert; store only, no handlers) and `modules/provenance` (trailers, handlers, the `provenance.refresh` job). Expected additions: `modules/intent` plus `src/llm/` holding the model-client interface and its fake (step 3), `eval/` with `src/bin/eval.ts` (step 4), `modules/policy` (step 5), `modules/pilot` with `scripts/pilot/` (step 6), and `src/mcp/` (Phase 1). Modules import from `config`, `core`, `db`, `github`, `queue` and `webhooks`. They import another module only through its `index.ts`, never its internals.
 
 **Contracts.**
 
@@ -75,7 +75,38 @@ worker (pg-boss) ── github.webhook job ──▶ handlers registered by modu
 - Deliveries can be processed out of order and concurrently (`WORKER_CONCURRENCY`, retries with backoff, and GitHub itself does not order them), so handlers must tolerate reordering. For order-sensitive state, compare the head SHA or the payload's timestamp and ignore stale events, or use a `key_strict_fifo` queue keyed by installation or PR. Step 1's installation handlers are idempotent but not order-proof (for example a late `added` after `deleted`).
 - Code that would persist file contents, diffs or patches does not pass review. Only paths, SHAs, numbers and model prose go in the DB.
 
+**Managed PR comment.** Graft keeps exactly one comment per PR, created once and then updated in place (it is not pinned through the API). The contract lives in the doc comment of [`src/github/managed-comment.ts`](src/github/managed-comment.ts), which steps 3 and 5 reuse:
+
+- The body starts with `<!-- graft:managed-comment v1 -->`, then `## Graft`, then one block per section, `<!-- graft:section:<name>:start -->` ... `<!-- graft:section:<name>:end -->`, in the order `intent`, `provenance`, `policy`; unknown sections found in an existing body are kept verbatim after them. A `<sub>` footer closes it.
+- Each module writes only its own section through `upsertManagedSection`; every other section is preserved byte for byte. Section markdown may not contain `<!-- graft:` and is capped at 20,000 characters.
+- Finding the comment: the stored `changes.graft_comment_id` if it still exists and is ours, else the first of the PR's comments that is ours, else a new comment. **Ours** means the marker is the first line **and** `performed_via_github_app.id` equals `GITHUB_APP_ID`. Because D13 (that field being present on REST comment responses) is unverified against real GitHub, there is a fallback: when `GITHUB_APP_SLUG` is set, a comment authored by the bot login `<slug>[bot]` (type `Bot`) with the marker also counts. A human pasting the marker is never adopted.
+- **`withChangeLock(db, changeId, fn)`** (`src/db/locks.ts`): every writer of the managed comment or of per-change GitHub output (check runs) must hold this per-change advisory lock, and must store the comment id in `changes.graft_comment_id` inside the same transaction. The lock is a transaction that holds a pooled connection while requests are in flight, so **do no slow work (LLM calls, diff fetches) inside `withChangeLock`; compute first, then lock, re-check freshness (head SHA and `pr_updated_at`) and publish.**
+- **`PermanentJobError(message, reason)`** (`src/queue/errors.ts`): a job throws it when a retry cannot help (deleted PR, lost permission, repo mismatch). The worker logs it and completes the job. `toJobError` in `src/github/errors.ts` maps Octokit errors: 404/410/401/non-rate-limit 403/422 are permanent; 429, rate-limit 403 and 5xx/network errors are retried.
+
+**Webhook replay.** The webhook HMAC covers only the body, so `X-GitHub-Event` and `X-GitHub-Delivery` are unauthenticated: anyone holding one captured signed body can replay it under a new delivery ID (bypassing the `webhook_deliveries` dedup) or under another event name. Mitigations: (1) a payload is only a **trigger**: `pull_request` and `check_run` handlers validate the payload and enqueue a job, nothing else; the job re-fetches the PR from the API and writes only what the API returned (it also checks the PR number and repository id); (2) every handler parses its payload with a zod schema (`parsePayload`, logging issue paths only) and returns on a mismatch, which catches a relabeled event; (3) replays converge: the same body under a fresh delivery ID yields the same job dedup key, so no job is created within 7 days, and a later or stale replay only refreshes live state. **The rule for later steps: handlers treat payloads as triggers; jobs write only from API data or from data Graft computed.** Residual risk: an attacker with a captured body can force extra GitHub API calls after the 7-day window, but cannot forge state. A replayed `check_run.rerequested` body is not bounded even inside the window: its key is `prov-rerun:{deliveryId}` (a re-run must always run), so every fresh delivery ID enqueues a full refresh (`pulls.get`, commit pages, two writes). The work is idempotent and never forges state; only cost is at stake.
+
 Layout: `src/config` (env), `src/core` (clock, logger, context), `src/db` (Kysely, migrations), `src/queue` (pg-boss wrapper, worker), `src/webhooks` (receiver, registry, dispatch job), `src/github` (Octokit factory, the only place an Octokit is built), `src/http`, `src/modules`, `src/bin` (entry points).
+
+## Provenance trailers for agents
+
+Graft works out who wrote a PR from `Graft-*` git trailers in its commits, with the PR description as a fallback. Agents add them with `git commit --trailer`:
+
+```sh
+git commit -m "Fix the retry loop" \
+  --trailer "Graft-Agent: claude-code" \
+  --trailer "Graft-Model: claude-sonnet-5-5" \
+  --trailer "Graft-Task: #42" \
+  --trailer "Graft-Session: https://claude.ai/code/session/abc"
+```
+
+| Key | Value rule |
+| --- | --- |
+| `Graft-Agent` | `[A-Za-z0-9][A-Za-z0-9 ._:/@+()-]{0,99}` |
+| `Graft-Model` | `[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}` |
+| `Graft-Task` | `[A-Za-z0-9#][A-Za-z0-9._:/#@+-]{0,127}`; `#42` links issue 42 of the repo |
+| `Graft-Session` | an `https` URL, at most 2,048 characters, no credentials, a plain LDH hostname (letters, digits, hyphen, dots; at least two labels; no IP, no `localhost`); `( ) [ ] \| \ `` ` `` `*` are percent-encoded |
+
+Keys are case-insensitive. The trailers must be in the last paragraph of the message (git `interpret-trailers` rules, simplified; the subject alone never counts). A value that fails its rule is ignored and listed as a warning (the warning never repeats the value). **Precedence:** per field, the newest commit with a valid value wins, then older commits, then the PR description (same trailer syntax, last paragraph). If values disagree, the newest wins and all distinct values are shown. **Agent or human:** a PR is agent-authored if any of these holds, in this order: a resolved `Graft-Agent`; the PR author is a GitHub Bot account; the author login is in `GRAFT_AGENT_LOGINS`; a commit has a `Co-authored-by` with an email in `GRAFT_AGENT_COAUTHOR_EMAILS` (default `noreply@anthropic.com`, Claude Code's). Otherwise it is human. Graft stores parsed `Graft-*` values only; commit messages and e-mail addresses are read in memory and never stored.
 
 ## 6. GitHub App permissions
 
@@ -84,10 +115,10 @@ Layout: `src/config` (env), `src/core` (clock, logger, context), `src/db` (Kysel
 | Permission / event | Level | Phase 0 use |
 | --- | --- | --- |
 | `metadata` | read | Mandatory for every App; repository listing. |
-| `contents` | read | Read `graft.yaml` (step 5) and commit data for trailers (step 2). |
+| `contents` | read | Read `graft.yaml` (step 5) and commit data for trailers (step 2); `git.getCommit` for the head commit when a PR has more than 250 commits. |
 | `issues` | read | Read the linked issue for the intent writer (step 3). No write: comments go through `pull_requests: write`. |
-| `pull_requests` | write | Read PRs, files, diffs, commits and reviews (steps 2, 3, 6). Write is only for creating and updating the pinned card comment, since the issue-comments API accepts `pull_requests: write`. |
-| `checks` | write | Create `graft/intent` and `graft/policy` check runs (steps 3 and 5). |
+| `pull_requests` | write | Read PRs, files, diffs, commits and reviews (steps 2, 3, 6); list PR commits (step 2). Write is only for creating and updating the pinned card comment, since the issue-comments API accepts `pull_requests: write`. |
+| `checks` | write | Create `graft/provenance` (step 2), `graft/intent` and `graft/policy` check runs (steps 3 and 5). |
 | `pull_request` event | — | Trigger provenance, intent and policy on opened, synchronize, reopened, edited and closed. |
 | `check_run` event | — | `rerequested` re-runs our checks. |
 | `installation`, `installation_repositories` | — | Delivered to every App without a subscription; drive the installations module. |
@@ -122,6 +153,24 @@ Versions in the lockfile (majors): Fastify 5, Kysely 0.29, pg 8, **pg-boss 12**,
 - Store functions (`getActiveRepository`, `listActiveRepositories`, ...) take a Kysely `Db` or `Transaction` as their first argument.
 - Extra files not in the layout: `src/bin/bootstrap.ts` and `src/bin/env.ts` (shared wiring), `scripts/generate-fixtures.ts` (how the fixtures were produced), `pnpm-workspace.yaml` (pnpm 11 build-script allowlist for esbuild), `test/helpers/app.ts`, `test/helpers/stubs.ts`.
 - The upstream webhook examples are older than `@octokit/webhooks-schemas` and contain no merged `pull_request.closed`; the generator repairs missing required fields with neutral values and marks the closed PR as merged so all fixtures validate (U-FIX-1).
+
+### Step 2 deviations and additions
+
+- **Library reality.** `@octokit/rest` 22 includes `paginate.iterator` (used for commits and comments; the iterator is stopped early after 3 and 10 pages). `checks.update` takes the check run id and no `head_sha`, so the PATCH body omits it. Nothing else differed from the spec's assumptions. pg-boss 12 only marks a failed job `retry` and bumps `retry_count` when it is next fetched, so I-Q-4 asserts the `retry` state, not the count.
+- **D13 fallback (added).** New optional env `GITHUB_APP_SLUG` (`Config.githubAppSlug`). When set, a comment authored by `<slug>[bot]` (type `Bot`) that starts with the marker is accepted as ours when `performed_via_github_app.id` does not match. Without the slug the strict app-id check is the only check. Tested in U-MC-9, U-MC-10 and I-PROV-9. HUMAN-TODO has an item to confirm the field on real GitHub.
+- **Dedup key carries `updated_at` for every action.** D6 as written would swallow any return to an earlier state within 7 days: `closed`/`reopened` after `opened`, a body edited X to Y to X, or a force-push H1 to H2 to H1 would all hit the key of a completed job, leaving stale provenance. The key is `prov:{repo}:{pr}:{head}:{base}:{bodyHash}:{pull_request.updated_at}` for all five actions, and `pull_request.updated_at` is required in the payload schema (a payload without it enqueues nothing). A replayed body has the same `updated_at`, so replay protection is kept. The cost is one redundant, idempotent job for a title-only edit (the comment comes back `unchanged`, the check run gets one PATCH).
+- **In-lock staleness check.** Inside `withChangeLock` the job publishes only if the stored head SHA equals the live head and the stored `pr_updated_at` is not newer than the live `updated_at`. Otherwise two jobs on the same head with different bodies could publish the older body last (I-PROV-10b; the head-moved branch is I-PROV-10c). `updated_at` has one-second resolution, so two edits inside the same second cannot be ordered; the later job still refreshes on the next event.
+- **Session host is plain LDH (D14 hardening).** `validateSessionUrl` additionally requires every host label to match `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`, at least two labels, at most 253 characters (one trailing dot is tolerated and `localhost.` is rejected), because the hostname is the link text and WHATWG `URL` accepts `` ` * _ ~ ! $ & ' { } = `` in a host. `\`, `` ` `` and `*` are percent-encoded in the href. Trailer whitespace follows git (space and tab only), not JavaScript `\s`.
+- **Output-size failures are permanent.** `upsertManagedSection` throws `PermanentJobError` (`invalid_output`) for a marker in the section or an oversize section or comment, instead of retrying a deterministic failure 8 times.
+- **Order inside the lock.** The job upserts the managed comment first and then the check run (T14 lists the check run first). This is what I-PROV-8 describes ("comment created, then the check-run POST fails") and it keeps the outcome identical: a failure rolls everything back and the retry adopts the existing comment (T8 3b).
+- **Not applied snapshot returns early.** If `upsertChangeFromPull` reports `applied: false` (stored `updated_at` is newer), the job logs `stale` and stops before any commit fetch or publish. That is what I-PROV-3 requires; T14 does not say it.
+- **`parseTrailerBlock` also returns `blockTooLong`** (P7 needs a way to reach the `block_too_long` warning); `ProvenanceResult` also carries `truncated` (the renderer needs it and `counts` cannot express it); `persistProvenance` also takes `repositoryFullName` (for the issue URL). When the text was cut from the front (P2) the single remaining paragraph is not treated as a subject.
+- **Session URLs must be printable ASCII** (no non-ASCII at all, not even in the path), a stricter reading of "all character sets are ASCII". `|` is percent-encoded as well as `( ) [ ]`, because the URL is rendered inside a table cell (and see the LDH rule below).
+- **Rendering of warnings without a field** (`unknown_graft_key`, `block_too_long`): `- <where>: trailer block ignored (<code>)`, or `unknown Graft key ignored (unknown_graft_key)` for an unknown key. When there are no trailers and the PR is truncated, the "no `Graft-*` trailers found" footer still gets the truncation sentence appended.
+- **U-REN-7** uses the agent value `octo@bot/@team`: the spec's `@octo/bot` starts with `@`, which the agent character set rejects (a separate assertion checks that it is rejected and never rendered).
+- **I-SEC-3** posts the `installation.created` body as `pull_request` twice: unchanged (the receiver ignores it, since the action `created` is not handled) and with `action: "opened"` so the handler really runs and logs `payload_shape_mismatch`.
+- **`pnpm db:rollback` reverts one migration** (the latest), as T1 requires; in step 1 it rolled back everything. The test helper `migrateDown` still goes to zero.
+- **Extras:** `getActiveInstallation` (installations store, exported) is the "installation exists and is not deleted or suspended" check used by the handlers and the job; `ProvenanceTable.source` gains `pr_body`; `changes.pr_updated_at` and `graft_comment_id` are optional on insert so step 1 tests compile unchanged; a `continue` instead of `return` lets the worker finish a batch after a permanent error (batch size is 1).
 
 ## 8. Troubleshooting
 

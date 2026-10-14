@@ -1,10 +1,14 @@
 import { buildAppRegistry } from "../../src/app/registry.js";
 import type { AppDeps, JobContext } from "../../src/core/context.js";
+import type { Logger } from "../../src/core/logger.js";
 import type { Db } from "../../src/db/client.js";
-import type { GitHubClientFactory } from "../../src/github/client-factory.js";
+import {
+  createGitHubClientFactory,
+  type GitHubClientFactory,
+} from "../../src/github/client-factory.js";
 import type { buildServer } from "../../src/http/server.js";
 import { createPgBossQueue, type PgBossJobQueue } from "../../src/queue/queue.js";
-import { fixedClock, TEST_WEBHOOK_SECRET, testConfig } from "./config.js";
+import { fixedClock, TEST_PRIVATE_KEY, TEST_WEBHOOK_SECRET, testConfig } from "./config.js";
 import { testDb } from "./db.js";
 import { loadFixture } from "./fixtures.js";
 import { sign } from "./sign.js";
@@ -32,26 +36,44 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-export async function createTestApp(opts: { supervise?: boolean } = {}): Promise<TestApp> {
-  const config = testConfig();
+/** A real client factory whose HTTP goes to the in-memory fake GitHub API. */
+export function fakeGitHubFactory(api: { fetch: typeof fetch }): GitHubClientFactory {
+  return createGitHubClientFactory({
+    appId: 12345,
+    privateKey: TEST_PRIVATE_KEY,
+    baseUrl: "https://api.github.com",
+    fetch: api.fetch,
+  });
+}
+
+export async function createTestApp(
+  opts: {
+    supervise?: boolean;
+    github?: GitHubClientFactory;
+    log?: Logger;
+    config?: Record<string, string>;
+  } = {},
+): Promise<TestApp> {
+  const config = testConfig(opts.config);
+  const log = opts.log ?? silentLog;
   const db = testDb();
   const registry = buildAppRegistry();
   const queue = createPgBossQueue({
     connectionString: config.databaseUrl,
     schema: config.pgbossSchema,
     registry,
-    log: silentLog,
+    log,
     supervise: opts.supervise ?? false,
   });
   await queue.start();
   const deps = {
     config,
-    log: silentLog,
+    log,
     db,
     queue,
     registry,
     clock: fixedClock,
-    github: forbiddenGitHub(),
+    github: opts.github ?? forbiddenGitHub(),
   };
   return {
     deps,

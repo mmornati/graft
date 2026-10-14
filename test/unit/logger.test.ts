@@ -1,7 +1,6 @@
 import { Writable } from "node:stream";
-import { pino } from "pino";
 import { describe, expect, it } from "vitest";
-import { REDACT_PATHS } from "../../src/core/logger.js";
+import { createLogger } from "../../src/core/logger.js";
 import { testConfig } from "../helpers/config.js";
 
 describe("logger redaction", () => {
@@ -13,8 +12,8 @@ describe("logger redaction", () => {
         cb();
       },
     });
-    const log = pino({ redact: { paths: REDACT_PATHS, censor: "[redacted]" } }, stream);
     const config = testConfig();
+    const log = createLogger({ logLevel: "info" }, stream);
     log.info({ config }, "config");
     expect(out).not.toContain(config.githubAppPrivateKey);
     expect(out).not.toContain(config.githubWebhookSecret);

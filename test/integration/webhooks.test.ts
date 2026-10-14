@@ -5,8 +5,9 @@ import { buildServer } from "../../src/http/server.js";
 import { defineJob } from "../../src/queue/job.js";
 import type { JobQueue } from "../../src/queue/queue.js";
 import { createPgBossQueue } from "../../src/queue/queue.js";
-import { createTestApp, postFixture, type TestApp } from "../helpers/app.js";
+import { createTestApp, postFixture, postRaw, type TestApp } from "../helpers/app.js";
 import { countJobs, truncateAll } from "../helpers/db.js";
+import { loadFixture } from "../helpers/fixtures.js";
 
 let t: TestApp;
 let server: Awaited<ReturnType<typeof buildServer>>;
@@ -66,21 +67,30 @@ describe("webhook receiver (real Postgres + pg-boss)", () => {
     expect(await countJobs(t.db)).toBe(1);
   });
 
-  it("I-WH-4 ping and pull_request.opened -> 202 ignored; status ignored; no job", async () => {
+  it("I-WH-4 ping and a pull_request.labeled are ignored; pull_request.opened is enqueued", async () => {
     const ping = await postFixture(server, "ping", "wh-4a");
     expect(ping.statusCode).toBe(202);
     expect(ping.json()).toEqual({ status: "ignored" });
-    const pr = await postFixture(server, "pull_request.opened", "wh-4b");
+
+    const opened = loadFixture("pull_request.opened");
+    const labeled = JSON.stringify({ ...opened.payload, action: "labeled" });
+    const lab = await postRaw(server, "pull_request", labeled, "wh-4b");
+    expect(lab.statusCode).toBe(202);
+    expect(lab.json()).toEqual({ status: "ignored" });
+
+    const pr = await postFixture(server, "pull_request.opened", "wh-4c");
     expect(pr.statusCode).toBe(202);
-    expect(pr.json()).toEqual({ status: "ignored" });
+    expect(pr.json()).toEqual({ status: "enqueued" });
 
     const rows = await deliveries();
-    expect(rows).toHaveLength(2);
-    for (const r of rows) {
-      expect(r.status).toBe("ignored");
-      expect(r.job_id).toBeNull();
+    expect(rows).toHaveLength(3);
+    const byId = new Map(rows.map((r) => [r.delivery_id, r]));
+    for (const id of ["wh-4a", "wh-4b"]) {
+      expect(byId.get(id)?.status).toBe("ignored");
+      expect(byId.get(id)?.job_id).toBeNull();
     }
-    expect(await countJobs(t.db)).toBe(0);
+    expect(byId.get("wh-4c")?.status).toBe("enqueued");
+    expect(await countJobs(t.db)).toBe(1);
   });
 
   it("I-WH-5 a queue whose send throws -> 500 and no delivery row; a retry with a working queue succeeds", async () => {
@@ -185,6 +195,7 @@ describe("webhook receiver (real Postgres + pg-boss)", () => {
   it("I-WH-6 delivery row gone but job exists -> 200 duplicate; the new row records the existing job id", async () => {
     expect((await postFixture(server, "installation.created", "wh-6")).statusCode).toBe(202);
     const before = (await deliveries())[0]?.job_id;
+    expect(before).toBeTruthy();
     await t.db.deleteFrom("webhook_deliveries").execute();
     const again = await postFixture(server, "installation.created", "wh-6");
     expect(again.statusCode).toBe(200);

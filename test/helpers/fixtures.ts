@@ -22,3 +22,12 @@ export function fixtureNames(): string[] {
     .map((f) => f.replace(/\.json$/, ""))
     .sort();
 }
+
+/** Set a dotted path inside a JSON-ish value (creating nothing: the parents must exist). */
+export function setPath(root: unknown, path: string, value: unknown): void {
+  const keys = path.split(".");
+  const last = keys.pop() as string;
+  let cur = root as Record<string, unknown>;
+  for (const k of keys) cur = cur[k] as Record<string, unknown>;
+  cur[last] = value;
+}
