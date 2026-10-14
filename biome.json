@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": false },
+  "files": {
+    "includes": [
+      "src/**",
+      "test/**",
+      "scripts/**",
+      "github/*.json",
+      "*.json",
+      "*.ts",
+      "!**/dist",
+      "!**/node_modules",
+      "!test/fixtures"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "suspicious": { "noExplicitAny": "error" }
+    }
+  },
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

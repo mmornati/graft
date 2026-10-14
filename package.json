@@ -1,0 +1,53 @@
+{
+  "name": "graft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.14.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "dev:server": "tsx watch src/bin/server.ts",
+    "dev:worker": "tsx watch src/bin/worker.ts",
+    "start:server": "node dist/bin/server.js",
+    "start:worker": "node dist/bin/worker.js",
+    "db:up": "docker compose up -d --wait",
+    "db:migrate": "tsx src/bin/migrate.ts up",
+    "db:rollback": "tsx src/bin/migrate.ts down",
+    "db:status": "tsx src/bin/migrate.ts status",
+    "webhook:send": "tsx scripts/send-webhook.ts",
+    "tunnel": "smee --url \"$SMEE_URL\" --target \"http://localhost:${PORT:-3000}/webhooks/github\""
+  },
+  "dependencies": {
+    "@octokit/app": "^16.1.4",
+    "@octokit/rest": "^22.0.1",
+    "@octokit/webhooks": "^14.2.0",
+    "@octokit/webhooks-methods": "^6.0.0",
+    "fastify": "^5.12.7",
+    "kysely": "^0.29.6",
+    "pg": "^8.23.1",
+    "pg-boss": "^12.38.0",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@octokit/webhooks-examples": "^7.6.1",
+    "@octokit/webhooks-schemas": "^7.6.1",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "ajv": "^8.20.0",
+    "smee-client": "^5.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

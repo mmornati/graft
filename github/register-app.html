@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Register the Graft GitHub App</title>
+  </head>
+  <body>
+    <h1>Register the Graft GitHub App</h1>
+    <p>
+      Edit <code>github/app-manifest.json</code> first (name, url, hook URL), then paste its
+      contents below. GitHub will redirect to the manifest's <code>redirect_url</code> with a
+      <code>?code=...</code>; convert it with
+      <code>gh api -X POST /app-manifests/&lt;code&gt;/conversions</code>.
+    </p>
+    <form id="form" method="post">
+      <p>
+        <label>Organization login
+          <input id="org" name="org" required placeholder="graft-sandbox-xyz" />
+        </label>
+      </p>
+      <p>
+        <label>Manifest JSON<br />
+          <textarea id="manifest-text" rows="22" cols="80"></textarea>
+        </label>
+      </p>
+      <input type="hidden" name="manifest" id="manifest" />
+      <button type="submit">Register on GitHub</button>
+    </form>
+    <script>
+      const form = document.getElementById("form");
+      const text = document.getElementById("manifest-text");
+      fetch("app-manifest.json")
+        .then((r) => r.text())
+        .then((t) => { text.value = t; })
+        .catch(() => { text.placeholder = "Paste github/app-manifest.json here"; });
+      form.addEventListener("submit", (e) => {
+        const org = document.getElementById("org").value.trim();
+        try {
+          document.getElementById("manifest").value = JSON.stringify(JSON.parse(text.value));
+        } catch {
+          e.preventDefault();
+          alert("Manifest is not valid JSON");
+          return;
+        }
+        form.action = "https://github.com/organizations/" + encodeURIComponent(org) + "/settings/apps/new";
+      });
+    </script>
+  </body>
+</html>

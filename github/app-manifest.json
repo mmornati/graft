@@ -1,0 +1,17 @@
+{
+  "name": "Graft Dev (CHANGE-ME)",
+  "url": "https://github.com/CHANGE-ME",
+  "description": "Intent review and policy checks for agent-written pull requests.",
+  "public": false,
+  "hook_attributes": { "url": "https://smee.io/CHANGE-ME", "active": true },
+  "redirect_url": "http://localhost:3000/",
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "read",
+    "issues": "read",
+    "pull_requests": "write",
+    "checks": "write"
+  },
+  "default_events": ["check_run", "pull_request"]
+}
