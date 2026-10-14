@@ -1,4 +1,4 @@
-import { PermanentJobError } from "../queue/errors.js";
+import { PermanentJobError, sanitizeError } from "../queue/errors.js";
 
 export type GitHubErrorClass = "not_found" | "rate_limited" | "forbidden" | "invalid" | "transient";
 
@@ -43,18 +43,22 @@ export function classifyGitHubError(err: unknown): GitHubErrorClass {
 }
 
 /**
- * Permanent classes become PermanentJobError (the worker completes the job); everything else is
- * returned unchanged and so stays retryable. Only the status and `what` are put in the message.
+ * Permanent classes become PermanentJobError (the worker completes the job); everything else stays
+ * retryable. Either way the result is a new error that holds metadata only (status, method, route
+ * template, request id, a short message): never the original, whose request and response bodies
+ * can hold model output. A PermanentJobError that is passed in is already ours and is sanitized.
  */
 export function toJobError(err: unknown, what: string): Error {
+  if (err instanceof PermanentJobError) return sanitizeError(err);
   const cls = classifyGitHubError(err);
+  const safe = sanitizeError(err);
+  const status = isHttpError(err) ? err.status : undefined;
   if (cls === "not_found" || cls === "forbidden" || cls === "invalid") {
-    const status = isHttpError(err) ? err.status : undefined;
     return new PermanentJobError(
       `GitHub ${what} failed (${cls}${status ? `, HTTP ${status}` : ""})`,
       cls,
-      { cause: err },
+      { cause: safe },
     );
   }
-  return err instanceof Error ? err : new Error(`GitHub ${what} failed`, { cause: err });
+  return safe;
 }

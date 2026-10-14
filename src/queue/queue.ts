@@ -5,6 +5,7 @@ import { PgBoss } from "pg-boss";
 import type { Logger } from "../core/logger.js";
 import type { Database } from "../db/schema.js";
 import type { Registry } from "../webhooks/registry.js";
+import { sanitizeError } from "./errors.js";
 import type { JobDefinition } from "./job.js";
 
 /**
@@ -39,6 +40,9 @@ export interface JobQueue {
     data: T,
     opts?: { tx?: Transaction<Database>; singletonKey?: string; startAfterSeconds?: number },
   ): Promise<string | null>;
+  /** Recurring job (cron, UTC). Validates `data` with the job schema. Idempotent per job name. */
+  schedule<T>(job: JobDefinition<T>, cron: string, data: T): Promise<void>;
+  unschedule<T>(job: JobDefinition<T>): Promise<void>;
   ping(): Promise<boolean>;
 }
 
@@ -95,10 +99,11 @@ export function createPgBossQueue(o: PgBossQueueOptions): PgBossJobQueue {
       connectionString: o.connectionString,
       schema: o.schema,
       supervise: o.supervise,
-      schedule: false,
+      // Only the worker runs the cron scheduler (D23).
+      schedule: o.supervise,
       application_name: o.supervise ? "graft-worker" : "graft-server",
     });
-  boss.on("error", (err) => o.log.error({ err }, "pg-boss error"));
+  boss.on("error", (err) => o.log.error({ err: sanitizeError(err) }, "pg-boss error"));
 
   const byName = new Map(o.registry.jobs.map((j) => [j.name, j] as const));
   let started = false;
@@ -140,6 +145,16 @@ export function createPgBossQueue(o: PgBossQueueOptions): PgBossJobQueue {
       }
       if (opts?.startAfterSeconds !== undefined) sendOpts.startAfter = opts.startAfterSeconds;
       return boss.send(job.name, parsed as object, sendOpts);
+    },
+    async schedule(job, cron, data) {
+      const parsed = job.schema.parse(data);
+      if (!byName.has(job.name)) {
+        throw new Error(`job "${job.name}" is not registered`);
+      }
+      await boss.schedule(job.name, cron, parsed as object);
+    },
+    async unschedule(job) {
+      await boss.unschedule(job.name);
     },
     async ping() {
       if (!started) return false;

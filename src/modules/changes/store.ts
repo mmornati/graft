@@ -16,11 +16,16 @@ export interface LivePull {
   closed_at: string | null;
   merged_at: string | null;
   body: string | null;
+  title: string;
+  changed_files: number;
+  additions: number;
+  deletions: number;
   commits: number;
   user: { login: string; type: string } | null;
   head: { sha: string };
   base: {
     ref: string;
+    sha?: string;
     repo: { id: number; full_name: string; private: boolean; default_branch: string };
   };
 }

@@ -12,12 +12,13 @@ describe("logger redaction", () => {
         cb();
       },
     });
-    const config = testConfig();
+    const config = testConfig({ ANTHROPIC_API_KEY: "sk-ant-LOGCANARY-0123" });
     const log = createLogger({ logLevel: "info" }, stream);
     log.info({ config }, "config");
     expect(out).not.toContain(config.githubAppPrivateKey);
     expect(out).not.toContain(config.githubWebhookSecret);
     expect(out).not.toContain(config.databaseUrl);
+    expect(out).not.toContain("sk-ant-LOGCANARY-0123");
     expect(out).toContain("[redacted]");
   });
 });

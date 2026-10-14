@@ -1,0 +1,62 @@
+/**
+ * The model boundary (step 3, D1). Modules never build SDK clients: they receive an `LlmClient`
+ * through `JobContext.llm`. `complete` returns a result for every API outcome (success, timeout,
+ * rate limit, refusal, bad JSON, ...) and throws only on programmer errors.
+ *
+ * Never log `system`, `user` or `value`: they contain diffs, PR text and model output.
+ */
+export type LlmPurpose = "writer" | "writer_escalated" | "verifier";
+export type LlmEffort = "low" | "medium" | "high";
+
+export interface LlmRequest {
+  purpose: LlmPurpose;
+  model: string;
+  /** Stable per PROMPT_VERSION; sent with cache_control. */
+  system: string;
+  /** Contains untrusted data blocks; NEVER logged. */
+  user: string;
+  /** JSON Schema for output_config.format. */
+  outputSchema: Record<string, unknown>;
+  maxOutputTokens: number;
+  effort: LlmEffort;
+  /** Per attempt. */
+  timeoutMs: number;
+  /**
+   * Wall-clock limit for the whole call, SDK retries and their backoff included. Defaults to the
+   * per-attempt timeout.
+   */
+  deadlineMs?: number;
+}
+
+export interface LlmUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export type LlmFailure =
+  | "timeout"
+  | "rate_limited"
+  | "unavailable"
+  | "auth"
+  | "bad_request"
+  | "refusal"
+  | "max_tokens"
+  | "invalid_json"
+  | "not_configured";
+
+export type LlmResult =
+  | { ok: true; value: unknown; usage: LlmUsage; model: string; durationMs: number }
+  | { ok: false; failure: LlmFailure; usage: LlmUsage; model: string; durationMs: number };
+
+export interface LlmClient {
+  complete(req: LlmRequest): Promise<LlmResult>;
+}
+
+export const ZERO_USAGE: LlmUsage = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+});

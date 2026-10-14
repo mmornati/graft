@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { Writable } from "node:stream";
 import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../../src/core/logger.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
 import { buildServer } from "../../src/http/server.js";
+import { forbiddenLlm } from "../../src/llm/fake.js";
+import type { LlmClient } from "../../src/llm/types.js";
 import { startWorker } from "../../src/queue/worker.js";
 import {
   createTestApp,
@@ -22,6 +25,7 @@ import {
   makePull,
   PR_NUMBER,
 } from "../helpers/github-builders.js";
+import { loadIntentScenario, scenarioLlm, writerReply } from "../helpers/intent-scenario.js";
 import { seedWorld } from "../helpers/seed.js";
 import { waitFor } from "../helpers/wait.js";
 
@@ -29,6 +33,9 @@ let t: TestApp;
 let server: Awaited<ReturnType<typeof buildServer>>;
 let api: FakeGitHubApi;
 let logged = "";
+// The model is per test, reached through this proxy because the worker captured its context.
+let model: LlmClient = forbiddenLlm();
+const llm: LlmClient = { complete: (r) => model.complete(r) };
 // The worker captured its context at start, so the per-test fake is reached through this proxy.
 let factory: GitHubClientFactory;
 const github: GitHubClientFactory = {
@@ -46,6 +53,7 @@ beforeAll(async () => {
   t = await createTestApp({
     supervise: true,
     github,
+    llm,
     log: createLogger({ logLevel: "info" }, stream),
   });
   server = await buildServer(t.deps);
@@ -57,6 +65,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   logged = "";
+  model = forbiddenLlm();
   await truncateAll(t.db);
   await seedWorld(t.db);
   api = createFakeGitHubApi();
@@ -145,6 +154,33 @@ describe("webhook replay and relabel hardening", () => {
   });
 });
 
+describe("intent handlers", () => {
+  it("I-SEC-5 intent handlers only validate and enqueue; an installation body as check_run creates no intent job", async () => {
+    const src = readFileSync(
+      new URL("../../src/modules/intent/handlers.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(
+      /insertInto|updateTable|deleteFrom|\.rest\.|forInstallation|asApp|octokit/i,
+    );
+
+    // As-is the action 'created' is not one any check_run handler routes; with a routed action
+    // the receiver cannot tell the body is wrong, and the handlers' shape checks reject it.
+    expect(
+      (await postRaw(server, "check_run", body("installation.created"), "sec-5a")).statusCode,
+    ).toBe(202);
+    for (const [i, action] of ["rerequested", "requested_action"].entries()) {
+      const routed = body("installation.created", (p) => setPath(p, "action", action));
+      expect((await postRaw(server, "check_run", routed, `sec-5b${i}`)).statusCode).toBe(202);
+    }
+    await waitFor(() => dispatchDone(2));
+    expect(await countJobs(t.db, "intent.generate")).toBe(0);
+    expect(await countJobs(t.db, "intent.feedback.record")).toBe(0);
+    expect(api.requests).toHaveLength(0);
+    expect(logged).toContain("payload_shape_mismatch");
+  });
+});
+
 describe("end to end", () => {
   it("I-E2E-2 server + worker + fake GitHub: a signed pull_request.opened with trailers publishes within 10 s", async () => {
     const trailers = commitMessage("Add feature", undefined, [
@@ -172,5 +208,65 @@ describe("end to end", () => {
     });
     expect(api.find("POST", /\/issues\/2\/comments$/)).toHaveLength(1);
     expect(api.find("POST", /\/check-runs$/)).toHaveLength(1);
+  });
+
+  it("I-E2E-3 server + worker + fake model + fake GitHub: a signed pull_request.opened publishes the intent card and provenance within 15 s", async () => {
+    loadIntentScenario(api);
+    api.state.commits.set(PR_NUMBER, [makeCommit(makePull().head.sha, commitMessage("Fix"))]);
+    model = scenarioLlm();
+    const raw = body("pull_request.opened", (p) => {
+      const pr = p.pull_request as Record<string, unknown>;
+      pr.title = "Fix the retry loop";
+      pr.body = "Fixes #42\n\nRetries failed webhook deliveries.";
+    });
+    const res = await postRaw(server, "pull_request", raw, "e2e-3");
+    expect(res.statusCode).toBe(202);
+
+    await waitFor(async () => {
+      const text = api.state.comments[0]?.body ?? "";
+      // The check runs come after the comment in each publish.
+      return (
+        text.includes("### Intent") &&
+        text.includes("### Provenance") &&
+        api.state.checkRuns.some((r) => r.name === "graft/intent") &&
+        api.state.checkRuns.some((r) => r.name === "graft/provenance")
+      );
+    }, 15_000);
+    expect(api.state.comments).toHaveLength(1);
+    expect(api.state.checkRuns.filter((r) => r.name === "graft/intent")).toHaveLength(1);
+    expect(api.state.checkRuns.filter((r) => r.name === "graft/provenance")).toHaveLength(1);
+  });
+
+  it("I-E2E-4 a GitHub failure while publishing leaves no rendered-card text in the logs or in pgboss.job.output", async () => {
+    const SENTINEL = "RenderedCardSentinelQ7Z";
+    loadIntentScenario(api);
+    api.state.commits.set(PR_NUMBER, [makeCommit(makePull().head.sha, commitMessage("Fix"))]);
+    model = scenarioLlm({ writer: writerReply({ goal: `Goal ${SENTINEL} for the card.` }) });
+    // Both publishers fail once on the check-run POST; the response body carries the sentinel too.
+    for (let i = 0; i < 2; i++) {
+      api.failNext("POST", /\/check-runs$/, 500, {}, { message: "boom", extra: SENTINEL });
+    }
+    const raw = body("pull_request.opened", (p) => {
+      const pr = p.pull_request as Record<string, unknown>;
+      pr.title = "Fix the retry loop";
+      pr.body = "Fixes #42\n\nRetries failed webhook deliveries.";
+    });
+    expect((await postRaw(server, "pull_request", raw, "e2e-4")).statusCode).toBe(202);
+
+    const failed = await waitFor(async () => {
+      const r = await sql<{ output: unknown }>`
+        select output from pgboss.job where name = 'intent.generate' and output is not null`.execute(
+        t.db,
+      );
+      return r.rows[0];
+    }, 15_000);
+    // The model ran and the card text was sent in the request that failed.
+    expect(api.find("POST", /\/check-runs$/).length).toBeGreaterThan(0);
+    expect(JSON.stringify(api.requests)).toContain(SENTINEL);
+    const outputs = await sql<{ output: unknown }>`select output from pgboss.job`.execute(t.db);
+    expect(JSON.stringify(outputs.rows)).not.toContain(SENTINEL);
+    expect(JSON.stringify(failed.output)).toContain("500");
+    expect(logged).toContain("job failed");
+    expect(logged).not.toContain(SENTINEL);
   });
 });

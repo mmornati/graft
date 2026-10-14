@@ -13,6 +13,7 @@ import type { Db } from "../../src/db/client.js";
 import type { Database } from "../../src/db/schema.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
 import { buildServer } from "../../src/http/server.js";
+import { forbiddenLlm } from "../../src/llm/fake.js";
 import { createRegistry } from "../../src/webhooks/registry.js";
 import { fixedClock, testConfig } from "../helpers/config.js";
 import { FakeJobQueue } from "../helpers/fake-queue.js";
@@ -60,6 +61,7 @@ async function server(opts: { dbFails?: boolean; queueOk?: boolean }) {
     registry: createRegistry({ webhookHandlers: [], jobs: [] }),
     clock: fixedClock,
     github: {} as GitHubClientFactory,
+    llm: forbiddenLlm(),
   };
   return buildServer(deps);
 }

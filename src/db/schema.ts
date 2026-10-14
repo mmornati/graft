@@ -1,5 +1,4 @@
 import type { ColumnType, Generated } from "kysely";
-import type { WarningCode } from "../modules/provenance/fields.js";
 
 /** timestamptz NOT NULL DEFAULT now(): optional on insert. */
 type Timestamp = ColumnType<Date, Date | undefined, Date>;
@@ -80,6 +79,17 @@ export interface ProvenanceTable {
 }
 
 export type ProvenanceFieldName = "agent" | "model" | "task" | "session";
+/** Same set under the name the provenance module uses. */
+export type GraftField = ProvenanceFieldName;
+export type WarningCode =
+  | "invalid_value"
+  | "value_too_long"
+  | "empty_value"
+  | "duplicate_key"
+  | "unknown_graft_key"
+  | "invalid_session_url"
+  | "message_truncated"
+  | "block_too_long";
 
 export interface FieldSource {
   source: "commit" | "pr_body";
@@ -116,27 +126,105 @@ export interface ChangeProvenanceTable {
   updated_at: Timestamp;
 }
 
+export type IntentFailureReason =
+  | "not_configured"
+  | "budget_exceeded"
+  | "too_large"
+  | "llm_timeout"
+  | "llm_rate_limited"
+  | "llm_unavailable"
+  | "llm_auth"
+  | "llm_bad_request"
+  | "llm_refusal"
+  | "invalid_output"
+  | "deadline_exceeded";
+
+/** timestamptz / bigint / integer column that has a database default. */
+type Optional<T> = ColumnType<T, T | undefined, T>;
+
+/** Model-written prose and paths only: no diff, patch, PR body or issue text (README §5). */
 export interface IntentCardsTable {
   id: Generated<string>;
   change_id: string;
   head_sha: string;
   prompt_version: string;
-  goal: string;
+  input_hash: string;
+  status: "ok" | "unavailable";
+  failure_reason: IntentFailureReason | null;
+  goal: string | null;
   behavior_changes: Json<string[]>;
-  out_of_scope_edits: Json<string[]>;
+  out_of_scope_edits: Json<{ path: string; reason: string }[]>;
+  /** Final class. */
   risk_class: RiskClass;
   risk_floor: RiskClass;
+  floor_reasons: Json<unknown[]>;
   model_risk_class: RiskClass | null;
-  verifier_status: "pending" | "agree" | "disagree" | "error";
-  verifier_notes: string | null;
-  writer_model: string;
+  model_risk_reason: string | null;
+  first_pass_risk_class: RiskClass | null;
+  verifier_risk_class: RiskClass | null;
+  risk_raised_by: Json<string[]>;
+  verifier_status: "agree" | "disagree" | "error" | "skipped";
+  verifier_failure: string | null;
+  verifier_claims: Json<unknown[]>;
+  verifier_missing: Json<string[]>;
+  verifier_unexplained: Json<string[]>;
+  instructions_in_data: Optional<boolean>;
+  writer_model: string | null;
+  first_pass_model: string | null;
   verifier_model: string | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  comment_id: number | null;
-  check_run_id: number | null;
+  llm_calls: Optional<number>;
+  input_tokens: Optional<number>;
+  output_tokens: Optional<number>;
+  cache_read_tokens: Optional<number>;
+  cache_write_tokens: Optional<number>;
+  files_total: number;
+  files_listed: number;
+  files_full: number;
+  files_partial: number;
+  files_omitted: number;
+  omitted_files: Json<{ path: string; reason: string }[]>;
+  lines_added: number;
+  lines_deleted: number;
+  inputs_truncated: boolean;
+  linked_issue_number: number | null;
+  comment_id: ColumnType<number | null, number | null | undefined, number | null>;
+  check_run_id: ColumnType<number | null, number | null | undefined, number | null>;
+  published_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
+}
+
+export interface IntentFeedbackTable {
+  id: Generated<string>;
+  card_id: string;
+  change_id: string;
+  user_id: number;
+  user_login: string;
+  verdict: "up" | "down";
+  source: "reaction" | "check_action";
+  reacted_at: Date;
+  is_pr_author: Optional<boolean>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface IntentSpendTable {
+  id: Generated<string>;
+  repository_id: number;
+  change_id: string | null;
+  tokens: number;
+  llm_calls: Optional<number>;
+  spent_at: Date;
+}
+
+export interface IntentDisplaysTable {
+  id: Generated<string>;
+  /** Insertion order: breaks ties between displays with the same `shown_at`. */
+  seq: Generated<number>;
+  change_id: string;
+  card_id: string;
+  status: "ok" | "unavailable";
+  shown_at: Date;
 }
 
 export interface PolicyVerdictsTable {
@@ -188,6 +276,9 @@ export interface Database {
   provenance: ProvenanceTable;
   change_provenance: ChangeProvenanceTable;
   intent_cards: IntentCardsTable;
+  intent_feedback: IntentFeedbackTable;
+  intent_spend: IntentSpendTable;
+  intent_displays: IntentDisplaysTable;
   policy_verdicts: PolicyVerdictsTable;
   guard_events: GuardEventsTable;
   webhook_deliveries: WebhookDeliveriesTable;
@@ -201,6 +292,9 @@ export const TABLE_NAMES = [
   "provenance",
   "change_provenance",
   "intent_cards",
+  "intent_feedback",
+  "intent_spend",
+  "intent_displays",
   "policy_verdicts",
   "guard_events",
   "webhook_deliveries",

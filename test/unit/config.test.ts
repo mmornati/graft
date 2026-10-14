@@ -130,4 +130,61 @@ describe("config", () => {
       "GRAFT_AGENT_COAUTHOR_EMAILS",
     );
   });
+  it("U-CFG-8 LLM and intent settings: defaults, rules, and rejection by variable name only", () => {
+    const d = loadConfig(valid);
+    expect(d).toMatchObject({
+      anthropicApiKey: undefined,
+      llmModelFast: "claude-haiku-5-5",
+      llmModelStrong: "claude-sonnet-5-5",
+      llmTimeoutMs: 120000,
+      llmMaxRetries: 2,
+      llmRefusalFallback: true,
+      llmDailyTokenBudget: 2000000,
+      intentSensitivePaths: [],
+      feedbackPollCron: "*/15 * * * *",
+    });
+    expect(Object.isFrozen(d.intentSensitivePaths)).toBe(true);
+
+    const c = loadConfig({
+      ...valid,
+      ANTHROPIC_API_KEY: "sk-ant-test-value",
+      GRAFT_LLM_MODEL_FAST: "claude-haiku-5-5",
+      GRAFT_LLM_REFUSAL_FALLBACK: "false",
+      GRAFT_LLM_DAILY_TOKEN_BUDGET: "0",
+      GRAFT_LLM_TIMEOUT_MS: "5000",
+      GRAFT_LLM_MAX_RETRIES: "5",
+      GRAFT_INTENT_SENSITIVE_PATHS: " services/billing/** , **/payments/** ,, ",
+      GRAFT_FEEDBACK_POLL_CRON: "off",
+    });
+    expect(c).toMatchObject({
+      anthropicApiKey: "sk-ant-test-value",
+      llmRefusalFallback: false,
+      llmDailyTokenBudget: 0,
+      llmTimeoutMs: 5000,
+      llmMaxRetries: 5,
+      intentSensitivePaths: ["services/billing/**", "**/payments/**"],
+      feedbackPollCron: null,
+    });
+
+    const bad: [string, string][] = [
+      ["GRAFT_LLM_MODEL_FAST", "gpt-4-SECRETVALUE"],
+      ["GRAFT_LLM_MODEL_STRONG", "claude-UPPER"],
+      ["GRAFT_LLM_TIMEOUT_MS", "1000"],
+      ["GRAFT_LLM_MAX_RETRIES", "6"],
+      ["GRAFT_LLM_REFUSAL_FALLBACK", "yes-SECRETVALUE"],
+      ["GRAFT_LLM_DAILY_TOKEN_BUDGET", "-1"],
+      ["GRAFT_INTENT_SENSITIVE_PATHS", "ok/**,../SECRETVALUE/x"],
+      ["GRAFT_INTENT_SENSITIVE_PATHS", "!SECRETVALUE/**"],
+      ["GRAFT_INTENT_SENSITIVE_PATHS", "a".repeat(201)],
+      ["GRAFT_FEEDBACK_POLL_CRON", "every SECRETVALUE minutes"],
+    ];
+    for (const [name, value] of bad) {
+      const msg = errorOf({ ...valid, [name]: value }).message;
+      expect(msg, `${name}=${value.slice(0, 10)}`).toContain(name);
+      expect(msg).not.toContain("SECRETVALUE");
+    }
+    // the API key value never appears in an error message caused by something else
+    const other = errorOf({ ...valid, PORT: "0", ANTHROPIC_API_KEY: "sk-ant-LEAKCHECK" }).message;
+    expect(other).not.toContain("sk-ant-LEAKCHECK");
+  });
 });

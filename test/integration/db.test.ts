@@ -8,6 +8,28 @@ import { testDb, truncateAll } from "../helpers/db.js";
 
 const db = testDb();
 const SHA = "a".repeat(40);
+const HASH = "b".repeat(64);
+
+/** The smallest valid `ok` card row (every NOT NULL column without a default). */
+const OK_CARD = {
+  head_sha: SHA,
+  prompt_version: "intent-v1",
+  input_hash: HASH,
+  status: "ok" as const,
+  failure_reason: null,
+  goal: "g",
+  risk_class: "logic" as const,
+  risk_floor: "trivial" as const,
+  verifier_status: "agree" as const,
+  files_total: 1,
+  files_listed: 1,
+  files_full: 1,
+  files_partial: 0,
+  files_omitted: 0,
+  lines_added: 1,
+  lines_deleted: 0,
+  inputs_truncated: false,
+};
 
 afterAll(() => db.destroy());
 beforeEach(() => truncateAll(db));
@@ -21,10 +43,11 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, the ten tables exist", async () => {
+  it("I-DB-1 after migration, the eleven tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(10);
+    expect(TABLE_NAMES).toHaveLength(13);
+    expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
   });
 
@@ -36,6 +59,7 @@ describe("database", () => {
       const rolled = await migrateDown(db);
       expect(rolled).toContain("0001_initial");
       expect(rolled).toContain("0002_provenance");
+      expect(rolled).toContain("0003_intent");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -44,7 +68,7 @@ describe("database", () => {
       }>`select count(*)::text n from pgboss.i_db_2_marker`.execute(db);
       expect(marker.rows[0]?.n).toBe("1");
 
-      expect(await migrateToLatest(db)).toEqual(["0001_initial", "0002_provenance"]);
+      expect(await migrateToLatest(db)).toEqual(["0001_initial", "0002_provenance", "0003_intent"]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
       for (const t of TABLE_NAMES) expect(again).toContain(t);
@@ -160,28 +184,38 @@ describe("database", () => {
     const card = await db
       .insertInto("intent_cards")
       .values({
+        ...OK_CARD,
         change_id: change.id,
-        head_sha: SHA,
-        prompt_version: "v1",
-        goal: "g",
         behavior_changes: JSON.stringify(["a"]),
-        out_of_scope_edits: JSON.stringify(["docs/x.md"]),
-        risk_class: "logic",
-        risk_floor: "trivial",
-        model_risk_class: "logic",
-        verifier_status: "agree",
-        verifier_notes: null,
-        writer_model: "w",
-        verifier_model: "v",
-        input_tokens: 1,
-        output_tokens: 2,
+        out_of_scope_edits: JSON.stringify([{ path: "docs/x.md", reason: "r" }]),
         comment_id: 99,
         check_run_id: null,
       })
-      .returning(["id", "behavior_changes", "comment_id"])
+      .returning(["id", "behavior_changes", "comment_id", "out_of_scope_edits"])
       .executeTakeFirstOrThrow();
     expect(card.behavior_changes).toEqual(["a"]);
+    expect(card.out_of_scope_edits).toEqual([{ path: "docs/x.md", reason: "r" }]);
     expect(card.comment_id).toBe(99);
+    await db
+      .insertInto("intent_feedback")
+      .values({
+        card_id: card.id,
+        change_id: change.id,
+        user_id: 5000001,
+        user_login: "reviewer-1",
+        verdict: "up",
+        source: "reaction",
+        reacted_at: now,
+      })
+      .execute();
+    await db
+      .insertInto("intent_spend")
+      .values({ repository_id: 2, change_id: change.id, tokens: 1100, llm_calls: 2, spent_at: now })
+      .execute();
+    await db
+      .insertInto("intent_displays")
+      .values({ change_id: change.id, card_id: card.id, status: "ok", shown_at: now })
+      .execute();
     await db
       .insertInto("policy_verdicts")
       .values({
@@ -287,9 +321,18 @@ describe("database", () => {
       .returning("id")
       .executeTakeFirstOrThrow();
 
-    const card = (risk: string, sha: string) =>
-      sql`insert into intent_cards (change_id, head_sha, prompt_version, goal, risk_class, risk_floor, verifier_status, writer_model)
-          values (${change.id}, ${sha}, 'v', 'g', ${risk}, 'trivial', 'pending', 'w')`.execute(db);
+    const card = (risk: string, sha: string, hash = HASH) =>
+      sql`insert into intent_cards (change_id, head_sha, prompt_version, input_hash, status, goal, risk_class, risk_floor, verifier_status,
+            files_total, files_listed, files_full, files_partial, files_omitted, lines_added, lines_deleted, inputs_truncated)
+          values (${change.id}, ${sha}, 'v', ${hash}, 'ok', 'g', ${risk}, 'trivial', 'agree', 1, 1, 1, 0, 0, 1, 0, false)`.execute(
+        db,
+      );
+    const rawCard = (status: string, goal: string | null, failure: string | null) =>
+      sql`insert into intent_cards (change_id, head_sha, prompt_version, input_hash, status, goal, failure_reason, risk_class, risk_floor, verifier_status,
+            files_total, files_listed, files_full, files_partial, files_omitted, lines_added, lines_deleted, inputs_truncated)
+          values (${change.id}, ${SHA}, 'v2', ${HASH}, ${status}, ${goal}, ${failure}, 'logic', 'trivial', 'skipped', 1, 1, 1, 0, 0, 1, 0, false)`.execute(
+        db,
+      );
 
     await expect(card("huge", SHA)).rejects.toThrow(/check constraint/);
     await expect(card("logic", "abc")).rejects.toThrow(/check constraint/);
@@ -299,6 +342,25 @@ describe("database", () => {
       ),
     ).rejects.toThrow(/check constraint/);
     await expect(card("logic", SHA)).resolves.toBeDefined();
+    await expect(card("logic", SHA)).rejects.toThrow(/duplicate key/);
+    await expect(rawCard("maybe", "g", null)).rejects.toThrow(/check constraint/);
+    await expect(rawCard("ok", null, null)).rejects.toThrow(/check constraint/);
+    await expect(rawCard("unavailable", null, null)).rejects.toThrow(/check constraint/);
+    await expect(rawCard("unavailable", null, "llm_timeout")).resolves.toBeDefined();
+
+    const stored = await db
+      .selectFrom("intent_cards")
+      .select("id")
+      .limit(1)
+      .executeTakeFirstOrThrow();
+    const fb = (verdict: string, source: string) =>
+      sql`insert into intent_feedback (card_id, change_id, user_id, user_login, verdict, source, reacted_at)
+          values (${stored.id}, ${change.id}, 7, 'u', ${verdict}, ${source}, now())`.execute(db);
+    await expect(fb("meh", "reaction")).rejects.toThrow(/check constraint/);
+    await expect(fb("up", "email")).rejects.toThrow(/check constraint/);
+    await expect(fb("up", "reaction")).resolves.toBeDefined();
+    await expect(fb("down", "reaction")).rejects.toThrow(/duplicate key/);
+    await expect(fb("down", "check_action")).resolves.toBeDefined();
 
     await expect(
       sql`insert into provenance (change_id, source) values (${change.id}, 'foo')`.execute(db),
@@ -343,6 +405,8 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      const down3 = await migrator.migrateDown();
+      expect(down3.results?.[0]?.migrationName).toBe("0003_intent");
       const down = await migrator.migrateDown();
       expect(down.error).toBeUndefined();
       expect(down.results?.[0]?.migrationName).toBe("0002_provenance");
@@ -361,12 +425,48 @@ describe("database", () => {
       );
       expect(cols.rows.map((r) => r.column_name)).not.toContain("graft_comment_id");
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0002_provenance"]);
+      expect(await migrateToLatest(db)).toEqual(["0002_provenance", "0003_intent"]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
     await sql`insert into provenance (change_id, source) values (${change.id}, 'pr_body')`.execute(
       db,
     );
+  });
+
+  it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
+    const migrator = createMigrator(db);
+    try {
+      const down = await migrator.migrateDown();
+      expect(down.error).toBeUndefined();
+      expect(down.results?.[0]?.migrationName).toBe("0003_intent");
+      expect(await tableNames(db)).not.toContain("intent_feedback");
+      expect(await tableNames(db)).not.toContain("intent_spend");
+      expect(await tableNames(db)).not.toContain("intent_displays");
+      const cols = await sql<{ column_name: string; is_nullable: string }>`
+        select column_name, is_nullable from information_schema.columns where table_name = 'intent_cards'`.execute(
+        db,
+      );
+      const names = cols.rows.map((r) => r.column_name);
+      expect(names).toContain("verifier_notes");
+      expect(names).not.toContain("input_hash");
+      expect(cols.rows.find((r) => r.column_name === "goal")?.is_nullable).toBe("NO");
+      const uniques = await sql<{ def: string }>`
+        select pg_get_constraintdef(oid) as def from pg_constraint
+        where conrelid = 'intent_cards'::regclass and contype = 'u'`.execute(db);
+      expect(uniques.rows.map((r) => r.def)).toEqual([
+        "UNIQUE (change_id, head_sha, prompt_version)",
+      ]);
+    } finally {
+      expect(await migrateToLatest(db)).toEqual(["0003_intent"]);
+    }
+    expect(await tableNames(db)).toContain("intent_feedback");
+    expect(await tableNames(db)).toContain("intent_spend");
+    expect(await tableNames(db)).toContain("intent_displays");
+    const cols = await sql<{ column_name: string }>`
+      select column_name from information_schema.columns where table_name = 'intent_cards'`.execute(
+      db,
+    );
+    expect(cols.rows.map((r) => r.column_name)).toContain("input_hash");
   });
 
   it("I-DB-6 a bigint above 2^53 read through createDb throws", async () => {

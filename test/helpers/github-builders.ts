@@ -23,6 +23,11 @@ export interface FakePull {
   closed_at: string | null;
   merged_at: string | null;
   body: string | null;
+  title: string;
+  changed_files: number;
+  additions: number;
+  deletions: number;
+  draft: boolean;
   commits: number;
   user: { login: string; type: string } | null;
   head: { sha: string };
@@ -44,6 +49,11 @@ export function makePull(overrides: Partial<FakePull> = {}): FakePull {
     closed_at: null,
     merged_at: null,
     body: null,
+    title: "Fix the retry loop",
+    changed_files: 1,
+    additions: 10,
+    deletions: 2,
+    draft: false,
     commits: 1,
     user: { login: "graft-dev", type: "User" },
     head: { sha: HEAD_SHA },
@@ -80,4 +90,85 @@ export function commitMessage(
   if (trailers && trailers.length > 0)
     parts.push(trailers.map(([k, v]) => `${k}: ${v}`).join("\n"));
   return parts.join("\n\n");
+}
+
+export interface FakeFile {
+  filename: string;
+  previous_filename?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  sha: string;
+}
+
+/** A file of `pulls.listFiles`. The patch is a small hunk unless one is given (null = no patch). */
+export function makeFile(o: {
+  path: string;
+  status?: string;
+  additions?: number;
+  deletions?: number;
+  patch?: string | null;
+  previousPath?: string;
+}): FakeFile {
+  const additions = o.additions ?? 3;
+  const deletions = o.deletions ?? 1;
+  const patch =
+    o.patch === undefined
+      ? `@@ -1,${deletions} +1,${additions} @@\n${"-old line\n".repeat(deletions)}${"+new line\n".repeat(additions)}`.trimEnd()
+      : o.patch;
+  return {
+    filename: o.path,
+    ...(o.previousPath ? { previous_filename: o.previousPath } : {}),
+    status: o.status ?? "modified",
+    additions,
+    deletions,
+    changes: additions + deletions,
+    ...(patch === null ? {} : { patch }),
+    sha: fakeSha(0x777),
+  };
+}
+
+export interface FakeIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  state: string;
+  pull_request?: { url: string };
+}
+
+export function makeIssue(
+  n: number,
+  o: { title?: string; body?: string | null; isPull?: boolean } = {},
+): FakeIssue {
+  return {
+    number: n,
+    title: o.title ?? `Issue ${n}`,
+    body: o.body === undefined ? `Body of issue ${n}` : o.body,
+    state: "open",
+    ...(o.isPull ? { pull_request: { url: `https://api.github.com/pulls/${n}` } } : {}),
+  };
+}
+
+export interface FakeReaction {
+  id: number;
+  content: string;
+  created_at: string;
+  user: { id: number; login: string; type: string } | null;
+}
+
+export function makeReaction(
+  id: number,
+  login: string,
+  content: string,
+  createdAt: string,
+  type = "User",
+): FakeReaction {
+  return {
+    id,
+    content,
+    created_at: createdAt,
+    user: { id: 5_000_000 + id, login, type },
+  };
 }

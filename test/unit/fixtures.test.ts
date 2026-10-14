@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const schema = require("@octokit/webhooks-schemas") as Record<string, unknown>;
 
 const EXPECTED = [
+  "check_run.requested_action",
   "check_run.rerequested",
   "installation.created",
   "installation.deleted",

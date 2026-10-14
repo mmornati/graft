@@ -138,14 +138,14 @@ function get(root: unknown, path: string): unknown {
     .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], root);
 }
 
-/** The re-run request for Graft's own provenance check on the PR fixture's head commit. */
-function fixCheckRun(p: Record<string, unknown>): void {
+/** A request about one of Graft's own check runs on the PR fixture's head commit. */
+function fixCheckRun(p: Record<string, unknown>, checkName = "graft/provenance"): void {
   const pr = rewrite(fixtures["pull_request.opened"]?.pull_request);
   const sha = get(pr, "head.sha") as string;
   p.repository = { ...(p.repository as Record<string, unknown>), ...repo(REPOS.ts) };
   const run = p.check_run as Record<string, unknown>;
   const suite = run.check_suite as Record<string, unknown>;
-  run.name = "graft/provenance";
+  run.name = checkName;
   run.head_sha = sha;
   run.external_id = "";
   run.app = { ...(run.app as Record<string, unknown>), id: TEST_APP_ID };
@@ -239,6 +239,8 @@ fixtures["pull_request.reopened"] = pick("pull_request", "reopened");
   fixtures["pull_request.closed"] = p;
 }
 fixtures["check_run.rerequested"] = pick("check_run", "rerequested");
+// A reviewer clicked "Card is accurate" on the graft/intent check (step 3).
+fixtures["check_run.requested_action"] = pick("check_run", "requested_action");
 
 for (const [name, payload] of Object.entries(fixtures)) {
   const rewritten = rewrite(payload) as Record<string, unknown>;
@@ -246,6 +248,16 @@ for (const [name, payload] of Object.entries(fixtures)) {
   else if (name !== "ping")
     rewritten.installation = { id: INSTALLATION_ID, node_id: "I_fake1000001" };
   if (name === "check_run.rerequested") fixCheckRun(rewritten);
+  if (name === "check_run.requested_action") {
+    fixCheckRun(rewritten, "graft/intent");
+    rewritten.requested_action = { identifier: "card_up" };
+    rewritten.sender = {
+      ...(rewritten.sender as Record<string, unknown>),
+      login: "reviewer-1",
+      id: 5000001,
+      type: "User",
+    };
+  }
   repair(name, rewritten);
   writeFileSync(new URL(`${name}.json`, OUT), `${JSON.stringify(rewritten, null, 2)}\n`);
   console.log("wrote", name);

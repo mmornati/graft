@@ -1,4 +1,12 @@
-import { type FakeCommit, type FakePull, OWNER, REPO } from "./github-builders.js";
+import {
+  type FakeCommit,
+  type FakeFile,
+  type FakeIssue,
+  type FakePull,
+  type FakeReaction,
+  OWNER,
+  REPO,
+} from "./github-builders.js";
 
 export interface FakeComment {
   id: number;
@@ -14,8 +22,9 @@ export interface FakeCheckRun {
   status: string;
   conclusion: string | null;
   external_id: string;
-  output: { title: string; summary: string };
+  output: { title: string; summary: string; text?: string };
   app: { id: number };
+  actions?: { label: string; identifier: string; description: string }[];
 }
 
 export interface RecordedApiRequest {
@@ -49,6 +58,11 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
     commits: new Map<number, FakeCommit[]>(),
     /** Extra commits served by git/commits/{sha}. The head of a PR is looked up here first. */
     gitCommits: new Map<string, string>(),
+    /** `pulls.listFiles`; at most 3,000 are served, like the real API. */
+    files: new Map<number, FakeFile[]>(),
+    issues: new Map<number, FakeIssue>(),
+    /** Reactions per comment id. */
+    reactions: new Map<number, FakeReaction[]>(),
     comments: [] as FakeComment[],
     checkRuns: [] as FakeCheckRun[],
     /** When true, comments created through the API carry no performed_via_github_app (D13). */
@@ -114,6 +128,26 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
       // The real API serves at most 250 commits.
       return all ? paged(all.slice(0, 250), url, path) : json(404, { message: "Not Found" });
     }
+    m = is("GET", /^\/pulls\/(\d+)\/files$/);
+    if (m) {
+      const all = state.files.get(Number(m[1]));
+      return all ? paged(all.slice(0, 3000), url, path) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/issues\/(\d+)$/);
+    if (m) {
+      const issue = state.issues.get(Number(m[1]));
+      return issue ? json(200, issue) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/issues\/comments\/(\d+)\/reactions$/);
+    if (m) {
+      const all = state.reactions.get(Number(m[1]));
+      return all ? paged(all, url, path) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/check-runs\/(\d+)$/);
+    if (m) {
+      const run = state.checkRuns.find((r) => r.id === Number(m?.[1]));
+      return run ? json(200, run) : json(404, { message: "Not Found" });
+    }
     m = is("GET", /^\/git\/commits\/([0-9a-f]{40})$/);
     if (m) {
       const sha = m[1] as string;
@@ -150,6 +184,7 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
         external_id: (body?.external_id as string | undefined) ?? "",
         output: body?.output as FakeCheckRun["output"],
         app: { id: appId },
+        ...(body?.actions ? { actions: body.actions as FakeCheckRun["actions"] } : {}),
       };
       state.checkRuns.push(run);
       return json(201, run);

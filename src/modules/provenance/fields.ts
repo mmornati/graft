@@ -1,22 +1,14 @@
 /** Pure: turns parsed trailers into validated Graft fields (step 2 §6.2, §6.3). */
+import type { GraftField, WarningCode } from "../../db/schema.js";
 import { type Trailer, trimWs } from "./trailers.js";
 
-export type GraftField = "agent" | "model" | "task" | "session";
+export type { GraftField, WarningCode };
 export const TRAILER_KEYS: Record<GraftField, string> = {
   agent: "Graft-Agent",
   model: "Graft-Model",
   task: "Graft-Task",
   session: "Graft-Session",
 };
-export type WarningCode =
-  | "invalid_value"
-  | "value_too_long"
-  | "empty_value"
-  | "duplicate_key"
-  | "unknown_graft_key"
-  | "invalid_session_url"
-  | "message_truncated"
-  | "block_too_long";
 export interface ProvenanceWarning {
   code: WarningCode;
   field?: GraftField;

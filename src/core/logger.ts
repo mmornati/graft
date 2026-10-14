@@ -12,6 +12,9 @@ export const REDACT_PATHS = [
   "*.githubWebhookSecret",
   "*.databaseUrl",
   "*.token",
+  "*.anthropicApiKey",
+  "*.apiKey",
+  'req.headers["x-api-key"]',
 ];
 
 export function createLogger(

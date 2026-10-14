@@ -45,6 +45,46 @@ const emailList = z
 
 const url = z.string().refine((v) => URL.canParse(v), "must be a URL");
 
+const modelId = z.string().regex(/^claude-[a-z0-9-]{1,60}$/, "must match ^claude-[a-z0-9-]{1,60}$");
+
+const boolString = z
+  .enum(["true", "false"], { error: "must be true or false" })
+  .transform((v) => v === "true");
+
+const globList = z
+  .string()
+  .transform((v) =>
+    v
+      .split(",")
+      .map((x) => x.trim())
+      .filter((x) => x !== ""),
+  )
+  .refine(
+    (l) =>
+      l.every(
+        (g) =>
+          g.length >= 1 && g.length <= 200 && !g.startsWith("!") && !g.split("/").includes(".."),
+      ),
+    {
+      message: "must be comma-separated globs (1-200 characters, no leading '!', no '..' segment)",
+    },
+  );
+
+const CRON_FIELD = /^[0-9*/,-]+$/;
+const cronOrOff = z
+  .string()
+  .refine(
+    (v) =>
+      v === "off" ||
+      (v.trim().split(/\s+/).length === 5 &&
+        v
+          .trim()
+          .split(/\s+/)
+          .every((f) => CRON_FIELD.test(f))),
+    { message: 'must be a 5-field cron expression or "off"' },
+  )
+  .transform((v) => (v === "off" ? null : v.trim().split(/\s+/).join(" ")));
+
 const EnvSchema = z.object({
   NODE_ENV: withDefault(z.enum(["development", "test", "production"]), "development"),
   HOST: withDefault(z.string().min(1), "0.0.0.0"),
@@ -70,6 +110,15 @@ const EnvSchema = z.object({
   GITHUB_APP_SLUG: opt(
     z.string().regex(/^[A-Za-z0-9-]+$/, "must be the App slug (letters, digits, '-')"),
   ),
+  ANTHROPIC_API_KEY: opt(z.string().min(1)),
+  GRAFT_LLM_MODEL_FAST: withDefault(modelId, "claude-haiku-5-5"),
+  GRAFT_LLM_MODEL_STRONG: withDefault(modelId, "claude-sonnet-5-5"),
+  GRAFT_LLM_TIMEOUT_MS: withDefault(intString(5_000, 600_000), "120000"),
+  GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
+  GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
+  GRAFT_LLM_DAILY_TOKEN_BUDGET: withDefault(intString(0, Number.MAX_SAFE_INTEGER), "2000000"),
+  GRAFT_INTENT_SENSITIVE_PATHS: withDefault(globList, ""),
+  GRAFT_FEEDBACK_POLL_CRON: withDefault(cronOrOff, "*/15 * * * *"),
 });
 
 export interface Config {
@@ -92,6 +141,19 @@ export interface Config {
   readonly agentCoauthorEmails: readonly string[];
   /** The App's slug; enables the `<slug>[bot]` fallback for recognising Graft's comment. */
   readonly githubAppSlug: string | undefined;
+  /** Anthropic API key; without it the intent service writes "unavailable" cards (step 3). */
+  readonly anthropicApiKey: string | undefined;
+  readonly llmModelFast: string;
+  readonly llmModelStrong: string;
+  readonly llmTimeoutMs: number;
+  readonly llmMaxRetries: number;
+  readonly llmRefusalFallback: boolean;
+  /** Per-repository daily token budget; 0 = unlimited. */
+  readonly llmDailyTokenBudget: number;
+  /** Extra globs that set the risk floor to `sensitive`. */
+  readonly intentSensitivePaths: readonly string[];
+  /** Cron for the reaction polling sweep, or null when switched off. */
+  readonly feedbackPollCron: string | null;
 }
 
 function isPem(key: string): boolean {
@@ -169,5 +231,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     agentLogins: Object.freeze([...d.GRAFT_AGENT_LOGINS]),
     agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
     githubAppSlug: d.GITHUB_APP_SLUG,
+    anthropicApiKey: d.ANTHROPIC_API_KEY,
+    llmModelFast: d.GRAFT_LLM_MODEL_FAST,
+    llmModelStrong: d.GRAFT_LLM_MODEL_STRONG,
+    llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,
+    llmMaxRetries: d.GRAFT_LLM_MAX_RETRIES,
+    llmRefusalFallback: d.GRAFT_LLM_REFUSAL_FALLBACK,
+    llmDailyTokenBudget: d.GRAFT_LLM_DAILY_TOKEN_BUDGET,
+    intentSensitivePaths: Object.freeze([...d.GRAFT_INTENT_SENSITIVE_PATHS]),
+    feedbackPollCron: d.GRAFT_FEEDBACK_POLL_CRON,
   });
 }

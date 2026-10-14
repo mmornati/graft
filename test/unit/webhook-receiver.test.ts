@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AppDeps } from "../../src/core/context.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
 import { buildServer } from "../../src/http/server.js";
+import { forbiddenLlm } from "../../src/llm/fake.js";
 import { defineWebhookHandler } from "../../src/webhooks/handler.js";
 import { createRegistry } from "../../src/webhooks/registry.js";
 import { fixedClock, TEST_WEBHOOK_SECRET, testConfig } from "../helpers/config.js";
@@ -28,6 +29,7 @@ async function setup(overrides: Record<string, string> = {}) {
     registry,
     clock: fixedClock,
     github: {} as GitHubClientFactory,
+    llm: forbiddenLlm(),
   };
   const app = await buildServer(deps);
   return { app, queue, calls };

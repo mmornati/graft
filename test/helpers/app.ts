@@ -7,6 +7,8 @@ import {
   type GitHubClientFactory,
 } from "../../src/github/client-factory.js";
 import type { buildServer } from "../../src/http/server.js";
+import { forbiddenLlm } from "../../src/llm/fake.js";
+import type { LlmClient } from "../../src/llm/types.js";
 import { createPgBossQueue, type PgBossJobQueue } from "../../src/queue/queue.js";
 import { fixedClock, TEST_PRIVATE_KEY, TEST_WEBHOOK_SECRET, testConfig } from "./config.js";
 import { testDb } from "./db.js";
@@ -52,6 +54,7 @@ export async function createTestApp(
     github?: GitHubClientFactory;
     log?: Logger;
     config?: Record<string, string>;
+    llm?: LlmClient;
   } = {},
 ): Promise<TestApp> {
   const config = testConfig(opts.config);
@@ -74,6 +77,7 @@ export async function createTestApp(
     registry,
     clock: fixedClock,
     github: opts.github ?? forbiddenGitHub(),
+    llm: opts.llm ?? forbiddenLlm(),
   };
   return {
     deps,

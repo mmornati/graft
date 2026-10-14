@@ -9,6 +9,8 @@ export interface SentJob {
 
 export class FakeJobQueue implements JobQueue {
   sent: SentJob[] = [];
+  scheduled: { name: string; cron: string; data: unknown }[] = [];
+  unscheduled: string[] = [];
   pingResult = true;
 
   async start(): Promise<void> {}
@@ -17,6 +19,12 @@ export class FakeJobQueue implements JobQueue {
     const parsed = job.schema.parse(data);
     this.sent.push({ name: job.name, data: parsed, opts });
     return `fake-job-${this.sent.length}`;
+  }
+  async schedule<T>(job: JobDefinition<T>, cron: string, data: T): Promise<void> {
+    this.scheduled.push({ name: job.name, cron, data: job.schema.parse(data) });
+  }
+  async unschedule<T>(job: JobDefinition<T>): Promise<void> {
+    this.unscheduled.push(job.name);
   }
   async ping(): Promise<boolean> {
     return this.pingResult;

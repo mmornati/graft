@@ -54,7 +54,9 @@ function splitFullName(fullName: string): { owner: string; repo: string } {
 }
 
 /**
- * D6 dedup key: (repo, PR, head, base, body hash, `pull_request.updated_at`). `updated_at` is in
+ * D6 dedup key: (repo, PR, head, base, body hash, `pull_request.updated_at`, action). The action
+ * closes the same-second window: two events inside one second that differ only in the action
+ * (for example `closed` then `reopened`) get different keys. `updated_at` is in
  * EVERY key, otherwise a PR that returns to an earlier state (body X to Y to X, head H1 to H2 to
  * H1, close then reopen) would be swallowed by the completed job of that earlier state and leave
  * stale provenance. A replayed body carries the same `updated_at`, so replays still collapse.
@@ -67,8 +69,9 @@ export function refreshKey(p: {
   baseRef: string;
   body: string | null;
   updatedAt: string;
+  action: string;
 }): string {
-  return `prov:${p.repositoryId}:${p.prNumber}:${p.headSha}:${p.baseRef}:${sha256_16(p.body ?? "")}:${p.updatedAt}`;
+  return `prov:${p.repositoryId}:${p.prNumber}:${p.headSha}:${p.baseRef}:${sha256_16(p.body ?? "")}:${p.updatedAt}:${p.action}`;
 }
 
 export const scheduleProvenance = defineWebhookHandler({
@@ -104,6 +107,7 @@ export const scheduleProvenance = defineWebhookHandler({
         baseRef: p.pull_request.base.ref,
         body: p.pull_request.body,
         updatedAt: p.pull_request.updated_at,
+        action: p.action,
       }),
     });
   },
@@ -143,7 +147,10 @@ export const rerequestProvenance = defineWebhookHandler({
         trigger: "rerequested",
         deliveryId: event.deliveryId,
       },
-      { singletonKey: `prov-rerun:${event.deliveryId}` },
+      // One re-run per PR per minute (step-2 review 2, minor 2): a flood of rerequests is bounded.
+      {
+        singletonKey: `prov-rerun:${p.repository.id}:${prNumber}:${Math.floor(ctx.clock.now().getTime() / 60_000)}`,
+      },
     );
   },
 });

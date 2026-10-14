@@ -4,6 +4,7 @@ import type { Config } from "../config/index.js";
 import type { Clock } from "../core/clock.js";
 import type { Logger } from "../core/logger.js";
 import type { Db } from "../db/client.js";
+import { sanitizeError } from "../queue/errors.js";
 import type { JobQueue } from "../queue/queue.js";
 import { recordDelivery } from "./deliveries.js";
 import type { Registry } from "./registry.js";
@@ -108,7 +109,10 @@ export const webhookReceiver =
           if (outcome === "duplicate") return reply.code(200).send({ status: "duplicate" });
           return reply.code(202).send({ status: outcome });
         } catch (err) {
-          log.error({ err, action, installationId, outcome: "error" }, "webhook processing failed");
+          log.error(
+            { err: sanitizeError(err), action, installationId, outcome: "error" },
+            "webhook processing failed",
+          );
           return reply.code(500).send({ error: "internal error" });
         }
       },

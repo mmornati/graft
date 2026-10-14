@@ -27,6 +27,7 @@
     "tunnel": "smee --url \"$SMEE_URL\" --target \"http://localhost:${PORT:-3000}/webhooks/github\""
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
     "@octokit/app": "^16.1.4",
     "@octokit/rest": "^22.0.1",
     "@octokit/webhooks": "^14.2.0",
@@ -35,6 +36,7 @@
     "kysely": "^0.29.6",
     "pg": "^8.23.1",
     "pg-boss": "^12.38.0",
+    "picomatch": "^4.0.7",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   },
@@ -44,6 +46,7 @@
     "@octokit/webhooks-schemas": "^7.6.1",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
+    "@types/picomatch": "^4.0.3",
     "ajv": "^8.20.0",
     "smee-client": "^5.0.0",
     "tsx": "^4.23.15",

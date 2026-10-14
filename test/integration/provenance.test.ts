@@ -9,6 +9,7 @@ import { provenanceRefreshJob, type RefreshData } from "../../src/modules/proven
 import { PermanentJobError } from "../../src/queue/errors.js";
 import { singletonJobId } from "../../src/queue/queue.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
+import { FIXED_NOW } from "../helpers/config.js";
 import { countJobs, truncateAll } from "../helpers/db.js";
 import { createFakeGitHubApi, type FakeGitHubApi } from "../helpers/fake-github-api.js";
 import { loadFixture, setPath } from "../helpers/fixtures.js";
@@ -452,6 +453,10 @@ describe("provenance.refresh job", () => {
     ]);
     await runJob({ headSha: headB });
 
+    // Isolate the in-lock head check: with the stored snapshot time cleared, only the head
+    // comparison can stop job A from publishing (T18.4).
+    await t.db.updateTable("changes").set({ pr_updated_at: null }).execute();
+
     gate.release();
     await jobA;
     expect(api.state.comments[0]?.body).toContain("agent-b");
@@ -521,6 +526,11 @@ describe("provenance webhook handlers", () => {
     );
   const schedule = (e: never) => scheduleProvenance.handle(e, jobContext(t));
   const rerequest = (e: never) => rerequestProvenance.handle(e, jobContext(t));
+  const rerequestAt = (e: never, offsetMs: number) =>
+    rerequestProvenance.handle(e, {
+      ...jobContext(t),
+      clock: { now: () => new Date(FIXED_NOW.getTime() + offsetMs) },
+    });
 
   it("I-CHG-5 pull_request.opened enqueues exactly one refresh job with the D6 key and writes no state", async () => {
     await schedule(event("pull_request.opened", "h-1"));
@@ -540,8 +550,11 @@ describe("provenance webhook handlers", () => {
       baseRef: pr.base.ref,
       body: pr.body,
       updatedAt: pr.updated_at,
+      action: "opened",
     });
-    expect(key).toMatch(/^prov:2000001:2:[0-9a-f]{40}:master:[0-9a-f]{16}:2019-05-15T15:20:33Z$/);
+    expect(key).toMatch(
+      /^prov:2000001:2:[0-9a-f]{40}:master:[0-9a-f]{16}:2019-05-15T15:20:33Z:opened$/,
+    );
     expect(jobs.rows[0]?.id).toBe(singletonJobId("provenance.refresh", key));
     expect(jobs.rows[0]?.data).toEqual({
       installationId: INSTALLATION_ID,
@@ -562,7 +575,7 @@ describe("provenance webhook handlers", () => {
 
   it("I-CHG-6 an edited body enqueues a second job; a replay (same body, same updated_at) is deduplicated", async () => {
     await schedule(event("pull_request.opened", "h-1"));
-    await schedule(event("pull_request.edited", "h-2")); // identical snapshot (same updated_at): no new job
+    await schedule(event("pull_request.opened", "h-2")); // replay under a new delivery ID: no new job
     expect(await countJobs(t.db, "provenance.refresh")).toBe(1);
     await schedule(
       event("pull_request.edited", "h-3", (p) =>
@@ -631,6 +644,10 @@ describe("provenance webhook handlers", () => {
     expect(await countJobs(t.db, "provenance.refresh")).toBe(3);
     await schedule(event("pull_request.closed", "h-5", at(4)));
     expect(await countJobs(t.db, "provenance.refresh")).toBe(4);
+    // Same second, same head and body, different action: the action in the key keeps both.
+    await schedule(event("pull_request.closed", "h-6", at(5)));
+    await schedule(event("pull_request.reopened", "h-7", at(5)));
+    expect(await countJobs(t.db, "provenance.refresh")).toBe(6);
   });
 
   it("I-CHG-7 a suspended, deleted or unknown installation gets no job", async () => {
@@ -647,11 +664,14 @@ describe("provenance webhook handlers", () => {
     expect(await countJobs(t.db, "provenance.refresh")).toBe(0);
   });
 
-  it("I-PROV-11 check_run.rerequested: a job per delivery; other checks and apps ignored; PR found by head", async () => {
+  it("I-PROV-11 check_run.rerequested: one job per PR per minute; other checks and apps ignored; PR found by head", async () => {
+    const minute = Math.floor(FIXED_NOW.getTime() / 60_000);
     await rerequest(event("check_run.rerequested", "r-1"));
     let jobs = await refreshJobs();
     expect(jobs.rows).toHaveLength(1);
-    expect(jobs.rows[0]?.id).toBe(singletonJobId("provenance.refresh", "prov-rerun:r-1"));
+    expect(jobs.rows[0]?.id).toBe(
+      singletonJobId("provenance.refresh", `prov-rerun:${REPO_ID}:2:${minute}`),
+    );
     expect(jobs.rows[0]?.data).toMatchObject({
       prNumber: 2,
       trigger: "rerequested",
@@ -659,8 +679,10 @@ describe("provenance webhook handlers", () => {
     });
 
     await rerequest(event("check_run.rerequested", "r-1")); // same delivery again
+    await rerequest(event("check_run.rerequested", "r-2")); // same minute, new delivery
     expect(await countJobs(t.db, "provenance.refresh")).toBe(1);
-    await rerequest(event("check_run.rerequested", "r-2"));
+    // 60 s later the same PR may be re-run again.
+    await rerequestAt(event("check_run.rerequested", "r-2b"), 60_000);
     expect(await countJobs(t.db, "provenance.refresh")).toBe(2);
 
     await rerequest(
@@ -697,6 +719,6 @@ describe("provenance webhook handlers", () => {
     await rerequest(event("check_run.rerequested", "r-6", noPrs));
     jobs = await refreshJobs();
     expect(jobs.rows).toHaveLength(3);
-    expect(jobs.rows[2]?.data).toMatchObject({ prNumber: 7 });
+    expect(jobs.rows.map((r) => (r.data as { prNumber: number }).prNumber)).toContain(7);
   });
 });

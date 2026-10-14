@@ -2,6 +2,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { withChangeLock } from "../../src/db/locks.js";
+import { feedbackSweepJob } from "../../src/modules/intent/index.js";
 import { PermanentJobError } from "../../src/queue/errors.js";
 import { defineJob } from "../../src/queue/job.js";
 import { createPgBossQueue } from "../../src/queue/queue.js";
@@ -96,6 +97,41 @@ describe("permanent job errors", () => {
         await sql`delete from pgboss.job where name = ${name}`.execute(t.db);
         await t.deps.queue.boss.deleteQueue(name);
       }
+    }
+  });
+});
+
+describe("scheduling", () => {
+  it("I-Q-5 schedule and unschedule a cron job on a supervising queue; bad data throws before pg-boss", async () => {
+    const registry = { jobs: [feedbackSweepJob] };
+    const queue = createPgBossQueue({
+      connectionString: t.deps.config.databaseUrl,
+      schema: t.deps.config.pgbossSchema,
+      registry,
+      log: t.deps.log,
+      supervise: true,
+    });
+    await queue.start();
+    try {
+      await queue.schedule(feedbackSweepJob, "*/15 * * * *", {});
+      const listed = await queue.boss.getSchedules();
+      const mine = listed.filter((s) => s.name === feedbackSweepJob.name);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]?.cron).toBe("*/15 * * * *");
+      // Scheduling again is idempotent.
+      await queue.schedule(feedbackSweepJob, "*/30 * * * *", {});
+      expect((await queue.boss.getSchedules(feedbackSweepJob.name))[0]?.cron).toBe("*/30 * * * *");
+
+      await expect(
+        queue.schedule(feedbackSweepJob, "*/15 * * * *", { surprise: 1 } as never),
+      ).rejects.toThrow();
+      expect((await queue.boss.getSchedules(feedbackSweepJob.name))[0]?.cron).toBe("*/30 * * * *");
+
+      await queue.unschedule(feedbackSweepJob);
+      expect(await queue.boss.getSchedules(feedbackSweepJob.name)).toEqual([]);
+    } finally {
+      await queue.stop();
+      await sql`delete from pgboss.job where name = ${feedbackSweepJob.name}`.execute(t.db);
     }
   });
 });
