@@ -19,8 +19,8 @@ import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { defineWebhookHandler } from "../../webhooks/handler.js";
 import { parsePayload } from "../../webhooks/payload.js";
-import { getChangeByNumber } from "../changes/index.js";
-import { getActiveInstallation } from "../installations/index.js";
+import { getChangeByNumber, type LivePull, upsertChangeFromPull } from "../changes/index.js";
+import { ensureRepository, getActiveInstallation } from "../installations/index.js";
 import { addReviewers, recordPermissionDenials } from "./store.js";
 
 export const REVIEWERS_SYNC_JOB = "pilot.reviewers.sync";
@@ -34,6 +34,14 @@ export const syncSchema = z.object({
   owner: z.string().regex(NAME_PART),
   repo: z.string().regex(NAME_PART),
   prNumber: z.number().int().positive(),
+  /**
+   * The user a `review_requested` webhook named. A trigger only: the job still checks their
+   * standing through the API, but it records the request even if they leave the requested list
+   * (by reviewing) before a later sync runs.
+   */
+  requested: z
+    .object({ id: z.number().int().positive(), login: z.string().min(1).max(100) })
+    .optional(),
 });
 export type SyncData = z.infer<typeof syncSchema>;
 
@@ -93,16 +101,71 @@ async function checkTriagePermission(
   }
 }
 
+const MAX_TIMELINE_PAGES = 3;
+
+/** Whether a `review_requested` event on the PR's timeline names this user id. */
+async function timelineShowsRequest(
+  octokit: GitHubClient,
+  data: SyncData,
+  userId: number,
+): Promise<boolean> {
+  try {
+    const it = octokit.paginate.iterator(octokit.rest.issues.listEventsForTimeline, {
+      owner: data.owner,
+      repo: data.repo,
+      issue_number: data.prNumber,
+      per_page: 100,
+    });
+    let pages = 0;
+    for await (const page of it) {
+      for (const e of page.data as unknown as {
+        event?: string;
+        requested_reviewer?: { id?: number } | null;
+      }[]) {
+        if (e.event === "review_requested" && e.requested_reviewer?.id === userId) return true;
+      }
+      if (++pages >= MAX_TIMELINE_PAGES) break;
+    }
+    return false;
+  } catch (err) {
+    if (classifyGitHubError(err) === "not_found") return false;
+    throw toJobError(err, "list timeline");
+  }
+}
+
 /** Also used by `pnpm graft pilot sync-reviewers`. Throws a (permanent) job error on a 404. */
 export async function syncReviewers(ctx: JobContext, data: SyncData): Promise<SyncOutcome> {
   if (!(await getActiveInstallation(ctx.db, data.installationId))) return "skipped";
-  const change = await getChangeByNumber(ctx.db, data.repositoryId, data.prNumber);
-  if (!change) return "skipped";
   let octokit: GitHubClient;
   try {
     octokit = await ctx.github.forInstallation(data.installationId);
   } catch (err) {
     throw toJobError(err, "installation token");
+  }
+  let change = await getChangeByNumber(ctx.db, data.repositoryId, data.prNumber);
+  if (!change) {
+    // A request made as the PR is opened can arrive before the provenance and intent jobs have
+    // created the change. Create it from the API (never from the payload) instead of dropping
+    // the request: once the reviewer reviews, GitHub no longer lists them as requested.
+    let pull: LivePull;
+    try {
+      const res = await octokit.rest.pulls.get({
+        owner: data.owner,
+        repo: data.repo,
+        pull_number: data.prNumber,
+      });
+      pull = res.data as unknown as LivePull;
+    } catch (err) {
+      throw toJobError(err, "pulls.get");
+    }
+    if (pull.base.repo.id !== data.repositoryId) return "skipped";
+    // The same guard as the provenance and intent jobs: never write rows for a repository that
+    // Graft considers removed. (A database error here is not a GitHub error.)
+    const now = ctx.clock.now();
+    if ((await ensureRepository(ctx.db, data.installationId, pull.base.repo, now)) === "removed") {
+      return "skipped";
+    }
+    change = (await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now)).change;
   }
   const found = new Map<string, { userId: number; reason: "requested" | "reviewed" }>();
   const standingCache = new Map<number, Standing>();
@@ -116,6 +179,18 @@ export async function syncReviewers(ctx: JobContext, data: SyncData): Promise<Sy
   };
   let candidates = 0;
   try {
+    if (data.requested) {
+      // The webhook only names whom to look at. "Was requested" is confirmed from the API: the
+      // issue timeline keeps the `review_requested` event after the reviewer has reviewed (the
+      // requested list does not), so a forged or replayed claim records nothing.
+      const claimed = data.requested;
+      if (await timelineShowsRequest(octokit, data, claimed.id)) {
+        candidates++;
+        if ((await standing(claimed)).eligible) {
+          found.set(`requested:${claimed.id}`, { userId: claimed.id, reason: "requested" });
+        }
+      }
+    }
     const requested = await octokit.rest.pulls.listRequestedReviewers({
       owner: data.owner,
       repo: data.repo,
@@ -198,6 +273,13 @@ export const reviewersSyncJob = defineJob<SyncData>({
 
 const reviewerPayload = z.looseObject({
   action: z.enum(["review_requested", "closed", "submitted"]),
+  requested_reviewer: z
+    .looseObject({
+      id: z.number().int().positive(),
+      login: z.string().min(1),
+      type: z.string().optional(),
+    })
+    .nullish(),
   pull_request: z.looseObject({ number: z.number().int().positive() }),
   repository: z.looseObject({ id: z.number().int().positive(), full_name: FULL_NAME }),
   installation: z.looseObject({ id: z.number().int().positive() }),
@@ -223,14 +305,37 @@ export const scheduleReviewerSync = defineWebhookHandler({
         owner,
         repo,
         prNumber: p.pull_request.number,
+        ...(p.action === "review_requested" &&
+        p.requested_reviewer &&
+        p.requested_reviewer.type !== "Bot"
+          ? { requested: { id: p.requested_reviewer.id, login: p.requested_reviewer.login } }
+          : {}),
       },
       { singletonKey: `rev-sync:${p.repository.id}:${p.pull_request.number}:${event.deliveryId}` },
     );
   },
 });
 
-/** A vote was recorded: sync that change's reviewers, at most once per hour per change. */
-export const onFeedbackRecorded: SignalListener = async (s, ctx) => {
+/**
+ * Two signals sync a change's reviewers: its provenance being published for the first time (once
+ * per change), and a vote being recorded (at most once per hour per change).
+ */
+export const onChangeSignal: SignalListener = async (s, ctx) => {
+  if (s.kind === "provenance_published") {
+    // The change exists now: sync once for it, whatever requests came in before it did.
+    await ctx.queue.send(
+      reviewersSyncJob,
+      {
+        installationId: s.installationId,
+        repositoryId: s.repositoryId,
+        owner: s.owner,
+        repo: s.repo,
+        prNumber: s.prNumber,
+      },
+      { singletonKey: `rev-sync-open:${s.repositoryId}:${s.prNumber}` },
+    );
+    return;
+  }
   if (s.kind !== "feedback_recorded") return;
   await ctx.queue.send(
     reviewersSyncJob,

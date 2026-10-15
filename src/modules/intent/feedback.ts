@@ -2,6 +2,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import type { ChangeSignal } from "../../core/signals.js";
+import type { Db } from "../../db/client.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import { defineJob } from "../../queue/job.js";
@@ -283,10 +284,16 @@ export const feedbackPollJob = defineJob<PollData>({
 export const FEEDBACK_SWEEP_JOB = "intent.feedback.sweep";
 const DAY_MS = 86_400_000;
 
-export async function sweepFeedback(ctx: JobContext): Promise<number> {
-  const now = ctx.clock.now();
+/** The changes whose comment reactions are polled: the sweep's selection (T1 adds the filter). */
+export async function listChangesToPoll(
+  db: Db,
+  now: Date,
+  o: { installationId?: number } = {},
+): Promise<PollData[]> {
   const publishedSince = new Date(now.getTime() - 30 * DAY_MS);
   const closedSince = new Date(now.getTime() - 3 * DAY_MS);
+  const installationFilter =
+    o.installationId === undefined ? sql`` : sql`and r.installation_id = ${o.installationId}`;
   const res = await sql<{
     change_id: string;
     full_name: string;
@@ -302,23 +309,30 @@ export async function sweepFeedback(ctx: JobContext): Promise<number> {
     ) p on p.last_published is not null
     where p.last_published >= ${publishedSince}
       and (ch.state = 'open' or (ch.state in ('closed','merged') and ch.closed_at >= ${closedSince}))
+      ${installationFilter}
     order by p.last_published desc
-    limit 200`.execute(ctx.db);
+    limit 200`.execute(db);
+  return res.rows.map((row) => {
+    const [owner = "", repo = ""] = row.full_name.split("/");
+    return {
+      installationId: Number(row.installation_id),
+      repositoryId: Number(row.repository_id),
+      owner,
+      repo,
+      changeId: row.change_id,
+    };
+  });
+}
+
+export async function sweepFeedback(ctx: JobContext): Promise<number> {
+  const now = ctx.clock.now();
+  const rows = await listChangesToPoll(ctx.db, now);
   const bucket = Math.floor(now.getTime() / 900_000);
   let sent = 0;
-  for (const row of res.rows) {
-    const [owner = "", repo = ""] = row.full_name.split("/");
-    const id = await ctx.queue.send(
-      feedbackPollJob,
-      {
-        installationId: Number(row.installation_id),
-        repositoryId: Number(row.repository_id),
-        owner,
-        repo,
-        changeId: row.change_id,
-      },
-      { singletonKey: `fb-poll:${row.change_id}:${bucket}` },
-    );
+  for (const data of rows) {
+    const id = await ctx.queue.send(feedbackPollJob, data, {
+      singletonKey: `fb-poll:${data.changeId}:${bucket}`,
+    });
     if (id !== null) sent += 1;
   }
   return sent;

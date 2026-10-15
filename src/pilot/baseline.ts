@@ -167,6 +167,11 @@ export interface BaselineDeps {
   sleep: (ms: number) => Promise<void>;
   log?: { info(o: object, msg: string): void };
   onWait?: (ms: number) => void;
+  /**
+   * A client that is not an installation's (`--auth token`, dry run only): the `repositories`
+   * lookup is skipped. The caller makes it GET-only.
+   */
+  octokit?: GitHubClient;
 }
 
 export interface BaselineResult {
@@ -256,16 +261,32 @@ export async function runBaseline(
   const to = parseDay(opts.to);
   if (!(to.getTime() > from.getTime())) throw new BaselineUsageError("--to must be after --from");
 
-  const repoRow = await deps.db
-    .selectFrom("repositories")
-    .select(["id", "installation_id", "full_name", "default_branch"])
-    .where(sql<string>`lower(full_name)`, "=", opts.repo.toLowerCase())
-    .where("removed_at", "is", null)
-    .executeTakeFirst();
-  if (!repoRow) throw new BaselineUsageError("repository not found (is the App installed on it?)");
+  let repoRow: {
+    id: number;
+    installation_id: number;
+    full_name: string;
+    default_branch: string | null;
+  };
+  let octokit: GitHubClient;
+  if (deps.octokit) {
+    if (!opts.dryRun) throw new BaselineUsageError("a token client is only allowed with --dry-run");
+    if (!/^[\w.-]+\/[\w.-]+$/.test(opts.repo))
+      throw new BaselineUsageError("--repo must be owner/repo");
+    repoRow = { id: 0, installation_id: 0, full_name: opts.repo, default_branch: null };
+    octokit = deps.octokit;
+  } else {
+    const found = await deps.db
+      .selectFrom("repositories")
+      .select(["id", "installation_id", "full_name", "default_branch"])
+      .where(sql<string>`lower(full_name)`, "=", opts.repo.toLowerCase())
+      .where("removed_at", "is", null)
+      .executeTakeFirst();
+    if (!found) throw new BaselineUsageError("repository not found (is the App installed on it?)");
+    repoRow = found;
+    octokit = await deps.github.forInstallation(repoRow.installation_id);
+  }
   const [owner = "", repo = ""] = repoRow.full_name.split("/");
 
-  const octokit = await deps.github.forInstallation(repoRow.installation_id);
   const limit = installRateLimit(octokit, {
     sleep: deps.sleep,
     now: deps.now,

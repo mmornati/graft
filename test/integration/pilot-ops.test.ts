@@ -12,7 +12,7 @@ import { TABLE_NAMES } from "../../src/db/schema.js";
 import { feedbackSweepJob } from "../../src/modules/intent/index.js";
 import { scheduleIncidentDetection } from "../../src/modules/pilot/incidents.js";
 import { detectIncident, metricsRollupJob, syncReviewers } from "../../src/modules/pilot/index.js";
-import { onFeedbackRecorded, scheduleReviewerSync } from "../../src/modules/pilot/reviewers.js";
+import { onChangeSignal, scheduleReviewerSync } from "../../src/modules/pilot/reviewers.js";
 import { OWNED_ROWS, purgeInstallation } from "../../src/pilot/purge.js";
 import { createPgBossQueue } from "../../src/queue/queue.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
@@ -1040,7 +1040,7 @@ describe("privacy of the step 6 tables", () => {
       }),
       ctx,
     );
-    await onFeedbackRecorded(
+    await onChangeSignal(
       {
         kind: "feedback_recorded",
         ...data,

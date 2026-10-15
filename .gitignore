@@ -6,3 +6,4 @@ coverage
 .graft-eval/
 eval/synthetic/cache/
 eval/synthetic/runs/
+e2e-runs/

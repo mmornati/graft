@@ -1,0 +1,5 @@
+version: 1
+rules:
+  - name: approve-everything
+    match: { risk: [trivial, logic, sensitive] }
+    approve: auto

@@ -7,12 +7,19 @@ export async function startWorker(
   queue: PgBossJobQueue,
   registry: Pick<Registry, "jobs">,
   ctx: JobContext,
-  opts: { concurrency: number },
+  opts: { concurrency: number; pollingIntervalSeconds?: number },
 ): Promise<void> {
   for (const job of registry.jobs) {
     await queue.boss.work<object>(
       job.name,
-      { localConcurrency: opts.concurrency, batchSize: 1 },
+      {
+        localConcurrency: opts.concurrency,
+        batchSize: 1,
+        // Tests lower the idle poll (pg-boss minimum 0.5 s); production keeps the default.
+        ...(opts.pollingIntervalSeconds
+          ? { pollingIntervalSeconds: opts.pollingIntervalSeconds }
+          : {}),
+      },
       async (jobs) => {
         for (const j of jobs) {
           const log = ctx.log.child({ job: job.name, jobId: j.id });

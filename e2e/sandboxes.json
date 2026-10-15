@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "sandboxes": [
+    {
+      "repo": "mmornati/graft-sandbox",
+      "source": "mmornati/ai-running-coach",
+      "visibility": "private",
+      "defaultBranch": "main"
+    }
+  ]
+}

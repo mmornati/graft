@@ -21,3 +21,4 @@ export const jobs: JobDefinition<unknown>[] = [
   policyFanoutJob as JobDefinition<unknown>,
 ];
 export const signalListeners: SignalListener[] = [onChangeSignal];
+export { POLICY_CHECK_NAME } from "./render.js";

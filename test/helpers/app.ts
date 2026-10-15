@@ -56,6 +56,7 @@ export async function createTestApp(
     log?: Logger;
     config?: Record<string, string>;
     llm?: LlmClient;
+    clock?: AppDeps["clock"];
   } = {},
 ): Promise<TestApp> {
   const config = testConfig(opts.config);
@@ -76,7 +77,7 @@ export async function createTestApp(
     db,
     queue,
     registry,
-    clock: fixedClock,
+    clock: opts.clock ?? fixedClock,
     github: opts.github ?? forbiddenGitHub(),
     llm: opts.llm ?? forbiddenLlm(),
     signals: createSignals(registry.signalListeners),

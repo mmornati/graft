@@ -18,10 +18,17 @@ import { noSignals } from "../core/signals.js";
 import { createDb, type Db } from "../db/client.js";
 import { pendingMigrations } from "../db/migrator.js";
 import { toTerminalSafe } from "../eval/terminal.js";
-import { createGitHubClientFactory, type GitHubClientFactory } from "../github/client-factory.js";
+import {
+  createGitHubClientFactory,
+  forToken,
+  type GitHubClient,
+  type GitHubClientFactory,
+  makeGetOnly,
+} from "../github/client-factory.js";
 import { classifyGitHubError } from "../github/errors.js";
 import { RateLimitAbort } from "../github/rate-limit.js";
 import { unconfiguredLlm } from "../llm/index.js";
+import { listChangesToPoll, pollReactions } from "../modules/intent/index.js";
 import { rollupRange, syncReviewers } from "../modules/pilot/index.js";
 import {
   type AllowList,
@@ -62,6 +69,12 @@ export interface OpsDeps {
   github(config: Config): GitHubClientFactory;
   now(): Date;
   sleep(ms: number): Promise<void>;
+  /** The token for `baseline --auth token` (default: GRAFT_BASELINE_GITHUB_TOKEN). */
+  baselineToken?(): string | undefined;
+  /** Builds the client for `baseline --auth token` (tests and the e2e runner inject a fake). */
+  tokenClient?(token: string, config: Config): GitHubClient;
+  /** Sees every request of the token client, refused writes included (the e2e b2 check). */
+  onTokenRequest?(method: string, url: string): void;
   /** Replaces a file atomically (tests inject a failing one). */
   writeFileAtomic?(file: string, data: string): Promise<void>;
 }
@@ -85,10 +98,12 @@ export const defaultDeps: OpsDeps = {
 const USAGE = `usage:
   graft pilot doctor --installation <id> [--json]
   graft pilot sync-reviewers --installation <id> --since <YYYY-MM-DD>
+  graft pilot sweep-feedback --installation <id>
   graft pilot allow-list resolve <file> --installation <id>
   graft pilot purge --installation <id> --confirm <account login> [--dry-run] [--even-if-active]
   graft baseline --repo <owner/repo> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--period baseline|shadow]
                  [--base <branch>] [--max-requests <n>] [--max-wait <15m>] [--dry-run]
+                 [--auth app|token]   (token: dry run only, reads GRAFT_BASELINE_GITHUB_TOKEN)
   graft gate report --installation <id> [--installation <id> ...] --since <YYYY-MM-DD>
                     [--until <YYYY-MM-DD>] [--allow-file <path>] [--out <dir>] [--json] [--check]
   graft metrics rollup --installation <id> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
@@ -243,6 +258,31 @@ async function pilot(sub: string | undefined, rest: string[], r: Run): Promise<n
     r.out(`reviewers synced for ${synced} PRs, ${skipped} skipped\n`);
     return 0;
   }
+  if (sub === "sweep-feedback") {
+    const v = args(rest, { installation: { type: "string" } });
+    const installationId = parseInstallation(str(v.installation));
+    const ctx = cliContext(r.config, r.db, r.deps.github(r.config), r.deps.now);
+    const rows = await listChangesToPoll(r.db, r.deps.now(), { installationId });
+    let polled = 0;
+    let votes = 0;
+    let skipped = 0;
+    // Sequential, inline: the CLI has no queue (the cron path enqueues the same polls).
+    for (const row of rows) {
+      try {
+        const n = await pollReactions(row, ctx);
+        if (n === null) skipped++;
+        else {
+          polled++;
+          votes += n;
+        }
+      } catch (e) {
+        if (!(e instanceof PermanentJobError)) throw e;
+        skipped++;
+      }
+    }
+    r.out(`polled ${polled} PRs, ${votes} votes recorded, ${skipped} skipped\n`);
+    return 0;
+  }
   if (sub === "allow-list") {
     if (rest[0] !== "resolve" || rest[1] === undefined || rest[1].startsWith("-")) {
       throw new UsageError();
@@ -329,6 +369,7 @@ async function baseline(rest: string[], r: Run): Promise<number> {
     "max-requests": { type: "string" },
     "max-wait": { type: "string" },
     "dry-run": { type: "boolean" },
+    auth: { type: "string" },
   });
   const repo = str(v.repo);
   if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
@@ -341,11 +382,27 @@ async function baseline(rest: string[], r: Run): Promise<number> {
     throw new UsageError("--period must be baseline or shadow");
   }
   const dryRun = v["dry-run"] === true;
+  const auth = str(v.auth) ?? "app";
+  if (auth !== "app" && auth !== "token") throw new UsageError("--auth must be app or token");
+  let tokenOctokit: GitHubClient | undefined;
+  if (auth === "token") {
+    // The narrow read-only exception to the step 6 rule: a dry run needs no repositories row.
+    if (!dryRun) throw new UsageError("--auth token is only allowed with --dry-run");
+    const token = (r.deps.baselineToken ?? (() => process.env.GRAFT_BASELINE_GITHUB_TOKEN))();
+    if (token === undefined || token === "") {
+      throw new UsageError("GRAFT_BASELINE_GITHUB_TOKEN is required with --auth token");
+    }
+    tokenOctokit = makeGetOnly(
+      (r.deps.tokenClient ?? ((t, c) => forToken(t, { baseUrl: c.githubApiUrl })))(token, r.config),
+      r.deps.onTokenRequest,
+    );
+  }
   try {
     const res = await runBaseline(
       {
         db: r.db,
         github: r.deps.github(r.config),
+        ...(tokenOctokit ? { octokit: tokenOctokit } : {}),
         config: r.config,
         now: () => r.deps.now().getTime(),
         sleep: r.deps.sleep,

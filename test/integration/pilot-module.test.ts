@@ -6,7 +6,11 @@ import { upsertChangeFromPull } from "../../src/modules/changes/index.js";
 import { pollReactions, recordFeedback } from "../../src/modules/intent/feedback.js";
 import { generateIntent } from "../../src/modules/intent/job.js";
 import { detectIncident, scheduleIncidentDetection } from "../../src/modules/pilot/incidents.js";
-import { scheduleReviewerSync, syncReviewers } from "../../src/modules/pilot/reviewers.js";
+import {
+  onChangeSignal,
+  scheduleReviewerSync,
+  syncReviewers,
+} from "../../src/modules/pilot/reviewers.js";
 import { addIncident } from "../../src/pilot/incident-cli.js";
 import { PermanentJobError } from "../../src/queue/errors.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
@@ -244,6 +248,150 @@ describe("reviewer eligibility sync", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("I-REV-REQ-1 a request that arrives before the change row exists is kept: the first review is only a comment and the reviewer stays eligible", async () => {
+    // No change row yet (provenance and intent have not run); the reviewer is requested as the PR opens.
+    api.state.pulls.set(PR_NUMBER, makePull());
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: [{ id: 5001, login: "rev-a", type: "User" }],
+      teams: [],
+    });
+    const e = prEvent("pull_request.labeled", "rr-open", (p) => {
+      p.action = "review_requested";
+      p.requested_reviewer = { id: 5001, login: "rev-a", type: "User" };
+    });
+    await scheduleReviewerSync.handle(e, jobContext(t));
+    const jobs = await jobsNamed(t.db, SYNC);
+    expect(jobs[0]?.data).toEqual({ ...SYNC_DATA, requested: { id: 5001, login: "rev-a" } });
+
+    // The reviewer reviews with a COMMENT before the job runs: GitHub drops them from the list,
+    // but the timeline keeps the request, which is what the job confirms it from.
+    api.state.requestedReviewers.set(PR_NUMBER, { users: [], teams: [] });
+    api.state.timelines.set(PR_NUMBER, [
+      {
+        event: "review_requested",
+        created_at: "2026-10-14T10:00:00Z",
+        requested_reviewer: { id: 5001, login: "rev-a", type: "User" },
+      },
+    ]);
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 1, login: "rev-a", userId: 5001, state: "COMMENTED" }),
+    ]);
+
+    expect(await syncReviewers(jobContext(t), jobs[0]?.data as never)).toBe("synced");
+    // The change was created from the API, and the request was recorded and verified.
+    expect(await t.db.selectFrom("changes").select("pr_number").execute()).toEqual([
+      { pr_number: PR_NUMBER },
+    ]);
+    expect(await reviewers()).toEqual([{ user_id: 5001, reason: "requested" }]);
+    expect(
+      await t.db
+        .selectFrom("pr_reviewers")
+        .select("verified")
+        .where("user_id", "=", 5001)
+        .execute(),
+    ).toEqual([{ verified: true }]);
+  });
+
+  it("I-REV-REQ-3 a claim the timeline does not show records nothing, whatever the claimed user's standing; a shown request still needs standing", async () => {
+    await withChange();
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    const claim = { ...SYNC_DATA, requested: { id: 5001, login: "rev-a" } };
+    // No timeline (404) and an empty one: the claim is not confirmed.
+    expect(await syncReviewers(jobContext(t), claim)).toBe("synced");
+    api.state.timelines.set(PR_NUMBER, [
+      { event: "review_requested", requested_reviewer: { id: 9999, login: "someone-else" } },
+      { event: "labeled" },
+    ]);
+    expect(await syncReviewers(jobContext(t), claim)).toBe("synced");
+    expect(await reviewers()).toEqual([]);
+    // Shown, but without permission on the repository (fail closed).
+    api.state.timelines.set(PR_NUMBER, [
+      { event: "review_requested", requested_reviewer: { id: 5001, login: "rev-a" } },
+    ]);
+    api.state.permissions.delete("rev-a");
+    expect(await syncReviewers(jobContext(t), claim)).toBe("synced");
+    expect(await reviewers()).toEqual([]);
+    // Shown and permitted: recorded.
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    expect(await syncReviewers(jobContext(t), claim)).toBe("synced");
+    expect(await reviewers()).toEqual([{ user_id: 5001, reason: "requested" }]);
+  });
+
+  it("I-REV-REQ-4 a missing change of a removed repository is not created; of an unknown one it is, like provenance does; a database problem is not a GitHub error", async () => {
+    api.state.pulls.set(PR_NUMBER, makePull());
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    await t.db.updateTable("repositories").set({ removed_at: new Date() }).execute();
+    expect(await syncReviewers(jobContext(t), SYNC_DATA)).toBe("skipped");
+    expect(await t.db.selectFrom("changes").select("id").execute()).toEqual([]);
+    expect(await reviewers()).toEqual([]);
+
+    // A repository Graft has no row for (created after an "all" install): the row is made first.
+    await t.db.deleteFrom("repositories").execute();
+    expect(await syncReviewers(jobContext(t), SYNC_DATA)).toBe("synced");
+    expect(await t.db.selectFrom("repositories").select("id").execute()).toEqual([{ id: REPO_ID }]);
+    expect(await t.db.selectFrom("changes").select("pr_number").execute()).toEqual([
+      { pr_number: PR_NUMBER },
+    ]);
+  });
+
+  it("I-REV-REQ-5 the first provenance of a change enqueues one reviewer sync for it, once", async () => {
+    const change = await withChange();
+    const signal: ChangeSignal = {
+      kind: "provenance_published",
+      installationId: INSTALLATION_ID,
+      repositoryId: REPO_ID,
+      owner: OWNER,
+      repo: REPO,
+      prNumber: PR_NUMBER,
+      changeId: change.id,
+      headSha: fakeSha(1),
+      atMs: FIXED_NOW.getTime(),
+    };
+    await onChangeSignal(signal, jobContext(t));
+    await onChangeSignal({ ...signal, atMs: signal.atMs + 1000 }, jobContext(t));
+    // A second head of the same PR does not add another.
+    await onChangeSignal({ ...signal, headSha: fakeSha(2) }, jobContext(t));
+    const jobs = await jobsNamed(t.db, SYNC);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.singleton_key).toBe(`rev-sync-open:${REPO_ID}:${PR_NUMBER}`);
+    expect(jobs[0]?.data).toEqual(SYNC_DATA);
+    // Other signal kinds that this listener does not handle enqueue nothing.
+    await t.db.deleteFrom("changes").execute();
+    await sql`delete from pgboss.job`.execute(t.db);
+    await onChangeSignal({ ...signal, kind: "intent_published" }, jobContext(t));
+    expect(await jobsNamed(t.db, SYNC)).toEqual([]);
+  });
+
+  it("I-REV-REQ-2 the webhook names an outsider: they are recorded only if the permission check passes; a bot is not a candidate", async () => {
+    await withChange();
+    const mk = (id: string, who: Record<string, unknown>) =>
+      prEvent("pull_request.labeled", id, (p) => {
+        p.action = "review_requested";
+        p.requested_reviewer = who;
+      });
+    await scheduleReviewerSync.handle(
+      mk("rr-x", { id: 7777, login: "stranger", type: "User" }),
+      jobContext(t),
+    );
+    await scheduleReviewerSync.handle(
+      mk("rr-b", { id: 8888, login: "robot[bot]", type: "Bot" }),
+      jobContext(t),
+    );
+    const jobs = await jobsNamed(t.db, SYNC);
+    expect(jobs.map((j) => (j.data as { requested?: unknown }).requested)).toEqual([
+      { id: 7777, login: "stranger" },
+      undefined,
+    ]);
+    // The timeline shows the request, but there is no permission entry: 404 from the permission
+    // endpoint, so the stranger is not eligible.
+    api.state.timelines.set(PR_NUMBER, [
+      { event: "review_requested", requested_reviewer: { id: 7777, login: "stranger" } },
+    ]);
+    expect(await syncReviewers(jobContext(t), jobs[0]?.data as never)).toBe("synced");
+    expect(await reviewers()).toEqual([]);
+  });
+
   it("I-REV-5 a suspended installation makes no GitHub call; a 404 on the PR is permanent and stores nothing", async () => {
     await withChange();
     await t.db.updateTable("installations").set({ suspended_at: new Date() }).execute();
@@ -255,11 +403,12 @@ describe("reviewer eligibility sync", () => {
     api.state.pulls.delete(PR_NUMBER);
     await expect(syncReviewers(jobContext(t), SYNC_DATA)).rejects.toBeInstanceOf(PermanentJobError);
     expect(await reviewers()).toEqual([]);
-    // No change row yet: nothing to attach reviewers to, and no call either.
+    // No change row and no such PR: the sync tries to create the change from the API, gets a 404,
+    // and stores nothing (a missing row is no longer a silent skip, see I-REV-REQ-1).
     api.requests.length = 0;
     await t.db.deleteFrom("changes").execute();
-    expect(await syncReviewers(jobContext(t), SYNC_DATA)).toBe("skipped");
-    expect(api.requests).toEqual([]);
+    await expect(syncReviewers(jobContext(t), SYNC_DATA)).rejects.toBeInstanceOf(PermanentJobError);
+    expect(await reviewers()).toEqual([]);
   });
 
   /** Every `pr_reviewers` row with its verified flag. */

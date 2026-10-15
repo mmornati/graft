@@ -1,0 +1,13 @@
+version: 1
+default:
+  require: { humans: 1 }
+rules:
+  - name: trivial
+    match: { risk: trivial }
+    approve: auto
+  - name: ci-config
+    match: { paths: [".github/**"] }
+    require: { humans: 1, team: platform }
+  - name: agent-logic
+    match: { author: agent, risk: [logic, sensitive] }
+    require: { humans: 1 }

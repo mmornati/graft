@@ -23,11 +23,16 @@ function installInt8Parser(): void {
   int8ParserInstalled = true;
 }
 
-export function createDb(url: string, opts: { max?: number } = {}): Db {
+export function createDb(url: string, opts: { max?: number; readOnly?: boolean } = {}): Db {
   installInt8Parser();
   return new Kysely<Database>({
     dialect: new PostgresDialect({
-      pool: new pg.Pool({ connectionString: url, max: opts.max ?? 10 }),
+      pool: new pg.Pool({
+        connectionString: url,
+        max: opts.max ?? 10,
+        // The e2e runner only observes: every statement of its session is read-only.
+        ...(opts.readOnly ? { options: "-c default_transaction_read_only=on" } : {}),
+      }),
     }),
   });
 }

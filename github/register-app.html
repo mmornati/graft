@@ -15,6 +15,16 @@
     </p>
     <form id="form" method="post">
       <p>
+        <label>Account type
+          <select id="account-type" name="account-type">
+            <option value="org">Organization</option>
+            <option value="personal">Personal account</option>
+          </select>
+        </label>
+        A private App (<code>"public": false</code>) installs only on its owner's account, so register
+        it under the account that owns the repositories.
+      </p>
+      <p id="org-row">
         <label>Organization login
           <input id="org" name="org" required placeholder="graft-sandbox-xyz" />
         </label>
@@ -34,6 +44,14 @@
         .then((r) => r.text())
         .then((t) => { text.value = t; })
         .catch(() => { text.placeholder = "Paste github/app-manifest.json here"; });
+      const accountType = document.getElementById("account-type");
+      const orgRow = document.getElementById("org-row");
+      const orgInput = document.getElementById("org");
+      accountType.addEventListener("change", () => {
+        const personal = accountType.value === "personal";
+        orgRow.hidden = personal;
+        orgInput.required = !personal;
+      });
       form.addEventListener("submit", (e) => {
         const org = document.getElementById("org").value.trim();
         try {
@@ -43,7 +61,10 @@
           alert("Manifest is not valid JSON");
           return;
         }
-        form.action = "https://github.com/organizations/" + encodeURIComponent(org) + "/settings/apps/new";
+        form.action =
+          accountType.value === "personal"
+            ? "https://github.com/settings/apps/new"
+            : "https://github.com/organizations/" + encodeURIComponent(org) + "/settings/apps/new";
       });
     </script>
   </body>

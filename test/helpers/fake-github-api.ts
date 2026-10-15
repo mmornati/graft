@@ -17,6 +17,10 @@ export interface FakeComment {
   body: string;
   user: { login: string; type: string };
   performed_via_github_app?: { id: number } | null;
+  /** The issue or PR the comment is on; a comment without it shows on every issue (old tests). */
+  issue_number?: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface FakeCheckRun {
@@ -29,6 +33,7 @@ export interface FakeCheckRun {
   output: { title: string; summary: string; text?: string };
   app: { id: number };
   actions?: { label: string; identifier: string; description: string }[];
+  completed_at?: string | null;
 }
 
 export interface RecordedApiRequest {
@@ -57,9 +62,18 @@ export interface Blocker {
 
 const sha1 = (text: string): string => createHash("sha1").update(text).digest("hex");
 
-/** An in-memory GitHub REST API for one repository (graft-sandbox/sample-ts). */
+/**
+ * An in-memory GitHub REST API for one repository (default graft-sandbox/sample-ts; the live e2e
+ * world passes its own `owner` and `repo`).
+ */
 export function createFakeGitHubApi(
-  opts: { appId?: number; botLogin?: string; now?: () => number } = {},
+  opts: {
+    appId?: number;
+    botLogin?: string;
+    now?: () => number;
+    owner?: string;
+    repo?: string;
+  } = {},
 ) {
   const clock = opts.now ?? Date.now;
   const appId = opts.appId ?? 12345;
@@ -106,6 +120,9 @@ export function createFakeGitHubApi(
     rateLimit: null as { limit: number; remaining: number; reset: number } | null,
     /** When set, `GET /pulls` serves at most this many per page whatever `per_page` says. */
     listPageSize: null as number | null,
+    /** When set, issue comments and check runs are served this many per page (live e2e tests). */
+    commentsPageSize: null as number | null,
+    checkRunsPageSize: null as number | null,
     nextId: 1000,
   };
   const requests: RecordedApiRequest[] = [];
@@ -193,7 +210,7 @@ export function createFakeGitHubApi(
   async function route(method: string, url: URL, body: Record<string, unknown> | undefined) {
     const path = url.pathname;
     let m: RegExpExecArray | null;
-    const repoPrefix = `/repos/${OWNER}/${REPO}`;
+    const repoPrefix = `/repos/${opts.owner ?? OWNER}/${opts.repo ?? REPO}`;
 
     if (method === "POST" && /^\/app\/installations\/\d+\/access_tokens$/.test(path)) {
       return json(201, {
@@ -327,6 +344,18 @@ export function createFakeGitHubApi(
           (name === null || r.name === name) &&
           (app === null || String(r.app.id) === app),
       );
+      if (state.checkRunsPageSize !== null) {
+        const size = state.checkRunsPageSize;
+        const page = Number(url.searchParams.get("page") ?? "1");
+        const all = runs.slice().reverse();
+        const next = new URL(url);
+        next.searchParams.set("page", String(page + 1));
+        return json(
+          200,
+          { total_count: all.length, check_runs: all.slice((page - 1) * size, page * size) },
+          page * size < all.length ? { link: `<${next.toString()}>; rel="next"` } : {},
+        );
+      }
       return json(200, { total_count: runs.length, check_runs: runs.slice().reverse() });
     }
     if (method === "POST" && rest === "/check-runs") {
@@ -363,12 +392,23 @@ export function createFakeGitHubApi(
       c.body = body?.body as string;
       return json(200, c);
     }
-    if (method === "GET" && /^\/issues\/\d+\/comments$/.test(rest)) {
-      return paged(state.comments, url, path);
+    m = is("GET", /^\/issues\/(\d+)\/comments$/);
+    if (m) {
+      const n = Number(m[1]);
+      if (state.commentsPageSize !== null) {
+        url.searchParams.set("per_page", String(state.commentsPageSize));
+      }
+      return paged(
+        state.comments.filter((c) => c.issue_number === undefined || c.issue_number === n),
+        url,
+        path,
+      );
     }
-    if (method === "POST" && /^\/issues\/\d+\/comments$/.test(rest)) {
+    m = is("POST", /^\/issues\/(\d+)\/comments$/);
+    if (m) {
       const c: FakeComment = {
         id: state.nextId++,
+        issue_number: Number(m[1]),
         body: body?.body as string,
         user: { login: botLogin, type: "Bot" },
         ...(state.omitPerformedViaApp ? {} : { performed_via_github_app: { id: appId } }),
@@ -379,7 +419,7 @@ export function createFakeGitHubApi(
     return json(404, { message: `Not Found (fake: ${method} ${path})` });
   }
 
-  const fetchFn: typeof fetch = async (input, init) => {
+  const fetchRaw: typeof fetch = async (input, init) => {
     const req = input instanceof Request ? input : undefined;
     const url = new URL(req ? req.url : String(input));
     const method = (init?.method ?? req?.method ?? "GET").toUpperCase();
@@ -429,6 +469,16 @@ export function createFakeGitHubApi(
       return withRateLimit(json(failure.status, failure.body, failure.headers));
     }
     return withRateLimit(await route(method, url, body));
+  };
+
+  /** Real responses carry their url; Octokit's paginate reads it. */
+  const fetchFn: typeof fetch = async (input, init) => {
+    const res = await fetchRaw(input, init);
+    if (!res.url) {
+      const raw = input instanceof Request ? input.url : String(input);
+      Object.defineProperty(res, "url", { value: raw });
+    }
+    return res;
   };
 
   return {

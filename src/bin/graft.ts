@@ -24,6 +24,7 @@ const USAGE = `usage:
   graft policy schema [--write | --check] [--path <file>]
   graft pilot doctor|sync-reviewers|purge ...   (see the README, "Pilots and gate")
   graft baseline | gate report | metrics rollup | incident add|list|remove ...
+  graft e2e setup|run|verify|report|cleanup ...   (see docs/e2e/runbook.md)
 `;
 
 const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics"]);
@@ -166,8 +167,124 @@ async function schema(args: string[], io: CliIo): Promise<number> {
   return 0;
 }
 
+/** The live e2e runner (docs/e2e/runbook.md). Loaded on demand like the operations half. */
+async function e2e(args: string[], io: CliIo): Promise<number> {
+  const [{ e2eMain }, { createGitPusher }, { childEnv }, ops, { forToken }, env] =
+    await Promise.all([
+      import("../e2e/cli.js"),
+      import("../e2e/git-pusher.js"),
+      import("../e2e/child-env.js"),
+      import("./graft-ops.js"),
+      import("../github/client-factory.js"),
+      import("./env.js"),
+    ]);
+  const { spawn } = await import("node:child_process");
+  const { createInterface } = await import("node:readline/promises");
+  const { createDb } = await import("../db/client.js");
+  const { readFileSync } = await import("node:fs");
+  const { parseEnv } = await import("node:util");
+  const rootDir = fileURLToPath(new URL("../../", import.meta.url));
+  const runSpawn = (
+    command: string,
+    argv: string[],
+    o: { env?: Record<string, string>; cwd?: string } = {},
+  ) =>
+    new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      // An argv array and no shell: nothing is interpreted.
+      const child = spawn(command, argv, {
+        // The runner's tokens stay in the runner, and git starts from a clean GIT_* slate.
+        env: childEnv(process.env, command, o.env ?? {}),
+        ...(o.cwd ? { cwd: o.cwd } : {}),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => {
+        stdout += d.toString();
+      });
+      child.stderr.on("data", (d: Buffer) => {
+        stderr += d.toString();
+      });
+      child.on("error", () => resolve({ code: 127, stdout: "", stderr: "" }));
+      child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    });
+  const deps: import("../e2e/types.js").E2eDeps = {
+    loadConfig() {
+      env.loadDotEnv();
+      return ops.defaultDeps.loadConfig();
+    },
+    env: process.env,
+    readDotEnv() {
+      try {
+        return parseEnv(readFileSync(`${rootDir}.env`, "utf8")) as Record<string, string>;
+      } catch {
+        return null;
+      }
+    },
+    openReadOnlyDb: (url) => createDb(url, { max: 4, readOnly: true }),
+    async ops(argv, o = {}) {
+      let out = "";
+      let err = "";
+      const code = await ops.main(
+        argv,
+        {
+          out: (s) => {
+            out += s;
+          },
+          err: (s) => {
+            err += s;
+          },
+        },
+        {
+          ...ops.defaultDeps,
+          ...(o.baselineToken === undefined
+            ? {}
+            : {
+                baselineToken: () => o.baselineToken,
+                tokenClient: (token, config) => forToken(token, { baseUrl: config.githubApiUrl }),
+                onTokenRequest: (method, url) => {
+                  o.requestLog?.push({ method, url });
+                },
+              }),
+        },
+      );
+      return { code, out, err };
+    },
+    async readyz() {
+      try {
+        const port = Number(process.env.PORT ?? 3000);
+        const res = await fetch(`http://localhost:${port}/readyz`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        return res.status === 200;
+      } catch {
+        return false;
+      }
+    },
+    now: () => new Date(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    async prompt(question) {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+      }
+    },
+    spawn: runSpawn,
+    outDir: `${rootDir}e2e-runs`,
+    isTty: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    rootDir,
+    gitPusher: createGitPusher(runSpawn),
+  };
+  return e2eMain(args, io, deps);
+}
+
 export async function main(argv: string[], io: CliIo = defaultIo): Promise<number> {
   const [group, command, ...rest] = argv;
+  if (group === "e2e") {
+    return e2e(command === undefined ? [] : [command, ...rest], io);
+  }
   if (group === "policy" && command === "check") return check(rest, io);
   if (group === "policy" && command === "schema") return schema(rest, io);
   if (group !== undefined && OPS_GROUPS.has(group)) {

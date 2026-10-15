@@ -2,13 +2,14 @@ import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import { withChangeLock } from "../../db/locks.js";
 import type { GitHubClient } from "../../github/client-factory.js";
-import { toJobError } from "../../github/errors.js";
+import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import { upsertManagedSection } from "../../github/managed-comment.js";
 import { resolveBaseCommit } from "../../policy/load.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import { ensureRepository, getActiveInstallation } from "../installations/index.js";
+import { computeProvenance, fetchPrCommits } from "../provenance/index.js";
 import { fetchIntentInputs } from "./fetch.js";
 import {
   type CardResult,
@@ -141,14 +142,34 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   } catch (err) {
     throw toJobError(err, "read graft.yaml");
   }
+  // The task is a function of THIS head: it is parsed from the head's own commits with the shared
+  // provenance parser, never read from `changes.task_id`, which the concurrently queued provenance
+  // job writes (for this head, the previous one, or not yet). Done before any lock is taken.
   let taskIssueNumber: number | null = null;
-  if (change.task_id) {
-    const task = await ctx.db
-      .selectFrom("tasks")
-      .select("issue_number")
-      .where("id", "=", change.task_id)
-      .executeTakeFirst();
-    taskIssueNumber = task?.issue_number ?? null;
+  try {
+    const fetched = await fetchPrCommits(octokit, {
+      owner: data.owner,
+      repo: data.repo,
+      prNumber: data.prNumber,
+      headSha: pull.head.sha,
+      commitsTotal: pull.commits,
+    });
+    const provenance = computeProvenance({
+      commits: fetched.commits,
+      commitsTotal: pull.commits,
+      truncated: fetched.truncated,
+      prBody: pull.body,
+      prAuthor: pull.user ?? { login: "ghost", type: "User" },
+      agentLogins: config.agentLogins,
+      agentCoauthorEmails: config.agentCoauthorEmails,
+    });
+    const m = /^#(\d{1,9})$/.exec(provenance.fields.task?.value ?? "");
+    taskIssueNumber = m?.[1] ? Number(m[1]) : null;
+  } catch (err) {
+    // Commits that cannot be read (404) leave the card without a task; the provenance job reports
+    // the same failure for itself. Anything else is retried.
+    if (classifyGitHubError(err) !== "not_found") throw toJobError(err, "list commits");
+    ctx.log.info({ prNumber: data.prNumber }, "commits not found: the card has no task input");
   }
   let inputs: Awaited<ReturnType<typeof fetchIntentInputs>>;
   try {

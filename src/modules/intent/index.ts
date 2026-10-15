@@ -1,6 +1,12 @@
 import type { JobDefinition } from "../../queue/job.js";
 import type { WebhookHandler } from "../../webhooks/handler.js";
-import { feedbackPollJob, feedbackRecordJob, feedbackSweepJob } from "./feedback.js";
+import {
+  feedbackPollJob,
+  feedbackRecordJob,
+  feedbackSweepJob,
+  listChangesToPoll,
+  pollReactions,
+} from "./feedback.js";
 import { feedbackAction, rerequestIntent, scheduleIntent } from "./handlers.js";
 import { intentGenerateJob } from "./job.js";
 
@@ -12,6 +18,7 @@ export const jobs: JobDefinition<unknown>[] = [
   feedbackSweepJob as JobDefinition<unknown>,
 ];
 
+export type { PollData } from "./feedback.js";
 export { fetchIntentInputs } from "./fetch.js";
 export {
   type CardResult,
@@ -31,6 +38,7 @@ export {
 export type { CardInputs, ChangedFile } from "./inputs.js";
 export { cardInputsSchema } from "./inputs.js";
 export { PROMPT_VERSION, promptFingerprint } from "./prompts.js";
+export { INTENT_CHECK_ACTIONS, INTENT_CHECK_NAME } from "./render.js";
 export {
   combineRisk,
   computeRiskFloor,
@@ -53,4 +61,4 @@ export {
   latestPublishedCard,
   pickEffectiveVotes,
 } from "./store.js";
-export { feedbackSweepJob };
+export { feedbackSweepJob, listChangesToPoll, pollReactions };

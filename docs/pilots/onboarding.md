@@ -93,6 +93,7 @@ Commands used by the runbook and the ritual:
 ```sh
 pnpm graft pilot doctor --installation 123
 pnpm graft pilot sync-reviewers --installation 123 --since 2026-11-01
+pnpm graft pilot sweep-feedback --installation 123   # poll the 👍/👎 reactions now instead of waiting for the 15-minute cron
 pnpm graft pilot allow-list resolve ~/pilots/allow.txt --installation 123
 pnpm graft baseline --repo acme/api --from 2026-08-01 --to 2026-10-31
 pnpm graft baseline --repo acme/api --from 2026-11-01 --to 2026-11-29 --period shadow

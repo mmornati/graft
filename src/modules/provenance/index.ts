@@ -15,4 +15,5 @@ export type {
 export { computeProvenance } from "./compute.js";
 export { fetchPrCommits } from "./fetch.js";
 export type { GraftField, ProvenanceWarning } from "./fields.js";
+export { PROVENANCE_CHECK_NAME } from "./job.js";
 export { type ChangeProvenanceRow, getChangeProvenance } from "./store.js";

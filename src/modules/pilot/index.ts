@@ -2,7 +2,7 @@ import type { SignalListener } from "../../core/signals.js";
 import type { JobDefinition } from "../../queue/job.js";
 import type { WebhookHandler } from "../../webhooks/handler.js";
 import { incidentDetectJob, scheduleIncidentDetection } from "./incidents.js";
-import { onFeedbackRecorded, reviewersSyncJob, scheduleReviewerSync } from "./reviewers.js";
+import { onChangeSignal, reviewersSyncJob, scheduleReviewerSync } from "./reviewers.js";
 import { metricsRollupJob } from "./rollup.js";
 
 export const webhookHandlers: WebhookHandler[] = [scheduleReviewerSync, scheduleIncidentDetection];
@@ -11,7 +11,7 @@ export const jobs: JobDefinition<unknown>[] = [
   incidentDetectJob as JobDefinition<unknown>,
   metricsRollupJob as JobDefinition<unknown>,
 ];
-export const signalListeners: SignalListener[] = [onFeedbackRecorded];
+export const signalListeners: SignalListener[] = [onChangeSignal];
 
 export {
   type DetectData,
