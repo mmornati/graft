@@ -36,4 +36,6 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm eval:ci
+      - run: pnpm graft policy schema --check
+      - run: for f in docs/examples/graft.yaml docs/pilots/graft.*.yaml; do pnpm graft policy check "$f" || exit 1; done
       - run: pnpm build

@@ -5,6 +5,7 @@ import type { Database } from "./schema.js";
 export type Db = Kysely<Database>;
 
 const INT8_OID = 20;
+const DATE_OID = 1082;
 let int8ParserInstalled = false;
 
 /** int8 → number; throws above Number.MAX_SAFE_INTEGER (GitHub IDs fit in 2^53). */
@@ -17,6 +18,8 @@ function installInt8Parser(): void {
     }
     return n;
   });
+  // date → 'YYYY-MM-DD' (the default would build a Date at local midnight).
+  pg.types.setTypeParser(DATE_OID, (value: string) => value);
   int8ParserInstalled = true;
 }
 

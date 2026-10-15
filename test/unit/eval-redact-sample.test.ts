@@ -3,6 +3,7 @@ import { RedactPatternError, redactInputs, validateRedactPattern } from "../../s
 import { allocate, mulberry32, pathStratum, sample, sizeStratum } from "../../src/eval/sample.js";
 import { computeRiskFloor } from "../../src/modules/intent/index.js";
 import { cardInputs, cf } from "../helpers/eval-fixtures.js";
+import { expectDuration } from "../helpers/perf.js";
 
 // Built in pieces so that no secret-looking literal sits in the repository.
 const AWS = `AKIA${"ABCDEFGHIJKLMNOP"}`;
@@ -331,9 +332,9 @@ describe("eval redaction forms", () => {
       const t0 = Date.now();
       const r = redactInputs(withBody(line));
       expect(r.inputs.pr.body.split("\n")).toHaveLength(1);
-      expect(Date.now() - t0, line.slice(0, 20)).toBeLessThan(300);
+      expectDuration(Date.now() - t0, 300, line.slice(0, 20));
     }
-    expect(Date.now() - started).toBeLessThan(2_000);
+    expectDuration(Date.now() - started, 2_000);
   });
 
   it("U-RED-14 an unquoted value ends at a terminator; null, short and member values stay", () => {

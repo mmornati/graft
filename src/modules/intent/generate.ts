@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../../config/index.js";
 import type { Logger } from "../../core/logger.js";
 import type { RiskClass } from "../../db/schema.js";
+import { cost, roundUsd } from "../../llm/pricing.js";
 import {
   type LlmClient,
   type LlmEffort,
@@ -123,6 +124,11 @@ export interface CardResult {
   instructionsInData: boolean;
   models: { writer: string | null; firstPass: string | null; verifier: string | null };
   usage: LlmUsage & { calls: number };
+  /**
+   * Summed over the calls from each `response.model` (step 6); `null` when any call's model is
+   * unpriced. Absent in results cached before step 6, which are never ledgered.
+   */
+  costUsd?: number | null;
   inputs: InputStats;
 }
 
@@ -268,9 +274,18 @@ export const RETRYABLE: ReadonlySet<FailureReason> = new Set([
   "deadline_exceeded",
 ]);
 
+/** A call that spent nothing costs 0 whatever its model; otherwise null when the model is unpriced. */
+function callCost(usage: LlmUsage, model: string): number | null {
+  const tokens =
+    usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  return tokens === 0 ? 0 : cost(usage, model);
+}
+
 interface Spent {
   usage: LlmUsage;
   calls: number;
+  /** null: some call used a model without a price (unpriced). */
+  costUsd: number | null;
 }
 
 function buildUnavailable(
@@ -313,13 +328,14 @@ function buildUnavailable(
     instructionsInData: extra.instructions ?? false,
     models: { writer: null, firstPass: extra.firstPassModel ?? null, verifier: null },
     usage: { ...spent.usage, calls: spent.calls },
+    costUsd: spent.costUsd,
     inputs: p.stats,
   };
 }
 
 /** A card without any model call: budget, too large, not configured. */
 export function unavailableResult(p: PreparedCard, reason: FailureReason): CardResult {
-  return buildUnavailable(p, reason, { usage: ZERO_USAGE, calls: 0 });
+  return buildUnavailable(p, reason, { usage: ZERO_USAGE, calls: 0, costUsd: 0 });
 }
 
 const FAILURE_MAP: Record<LlmFailure, FailureReason> = {
@@ -342,7 +358,7 @@ export async function runCard(
   if (p.tooLarge) return unavailableResult(p, "too_large");
 
   const deadlineAt = (o.startedAtMs ?? o.nowMs()) + o.deadlineMs;
-  const spent: Spent = { usage: { ...ZERO_USAGE }, calls: 0 };
+  const spent: Spent = { usage: { ...ZERO_USAGE }, calls: 0, costUsd: 0 };
 
   type Called<T> = { ok: true; out: T; model: string } | { ok: false; reason: FailureReason };
 
@@ -368,6 +384,10 @@ export async function runCard(
         deadlineMs: remaining,
       });
       spent.calls += 1;
+      if (spent.costUsd !== null) {
+        const c = callCost(res.usage, res.model);
+        spent.costUsd = c === null ? null : roundUsd(spent.costUsd + c);
+      }
       spent.usage = {
         inputTokens: spent.usage.inputTokens + res.usage.inputTokens,
         outputTokens: spent.usage.outputTokens + res.usage.outputTokens,
@@ -542,6 +562,7 @@ export async function runCard(
     instructionsInData: instructions,
     models: { writer: writerModel, firstPass: firstPassModel, verifier: verifierModel },
     usage: { ...spent.usage, calls: spent.calls },
+    costUsd: spent.costUsd,
     inputs: p.stats,
   };
   o.log?.info(

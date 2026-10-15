@@ -11,6 +11,11 @@ export interface JobDefinition<T> {
     retryDelaySeconds?: number;
     retryBackoff?: boolean;
     expireInSeconds?: number;
+    /**
+     * How long a completed or failed job stays in pg-boss (queue option `deleteAfterSeconds`).
+     * Default 7 days. Jobs whose data holds PR text (`github.webhook`) set a much shorter value.
+     */
+    deleteAfterSeconds?: number;
   };
   handle(data: T, ctx: JobContext): Promise<void>;
 }

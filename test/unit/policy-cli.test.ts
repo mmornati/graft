@@ -68,15 +68,16 @@ describe("graft policy CLI", () => {
     expect(bomb.out).toContain("error yaml_alias");
   });
 
-  it("U-CLI-3 --json prints {ok, errors}", async () => {
+  it("U-CLI-3 --json prints {ok, errors, warnings}", async () => {
     const ok = await run("policy", "check", EXAMPLE, "--json");
-    expect(JSON.parse(ok.out)).toEqual({ ok: true, errors: [] });
+    expect(JSON.parse(ok.out)).toEqual({ ok: true, errors: [], warnings: [] });
     expect(ok.code).toBe(0);
     const bad = await run("policy", "check", fixture("duplicate-key.yaml"), "--json");
     expect(bad.code).toBe(1);
     expect(JSON.parse(bad.out)).toEqual({
       ok: false,
       errors: [{ code: "yaml_duplicate_key", location: null, line: 2, column: 1 }],
+      warnings: [],
     });
   });
 
@@ -202,5 +203,28 @@ describe("graft policy CLI", () => {
         }
       }
     }
+  });
+  it("U-CLI-8 warnings print after the errors and never change the exit code; a lookalike glob fails", async () => {
+    const file = fixture("non-ascii-glob.yaml");
+    const r = await run("policy", "check", file);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("OK (version 1, 1 rules, 0 sensitive paths)");
+    expect(r.out).toContain(
+      `${file}:4:22: warning glob_non_ascii rules[1].match.paths[1]: non-ASCII characters U+0440, U+0443, U+043A, U+043E, U+0432`,
+    );
+    // The glob text itself is never printed.
+    expect(r.out).not.toContain("\u0440\u0443\u043a");
+
+    const json = await run("policy", "check", file, "--json");
+    expect(json.code).toBe(0);
+    const parsed = JSON.parse(json.out);
+    expect(parsed).toMatchObject({ ok: true, errors: [] });
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0]).toMatchObject({ code: "glob_non_ascii", line: 4 });
+
+    const bad = await run("policy", "check", fixture("lookalike-glob.yaml"));
+    expect(bad.code).toBe(1);
+    expect(bad.out).toContain("error glob_invalid sensitive_paths[1]");
+    expect(bad.out).toContain("mixes writing systems in one segment");
   });
 });

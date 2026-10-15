@@ -1083,3 +1083,34 @@ describe("intent hook (graft.yaml sensitive_paths)", () => {
     expect(await floorRules()).toContain("configured_path");
   });
 });
+
+describe("non-ASCII globs (step 6)", () => {
+  const NON_ASCII_POLICY =
+    "version: 1\nrules:\n  - name: guide\n    match: { paths: ['docs/руководство/**'] }\n    require: { humans: 1 }\n";
+
+  it("I-POL-22 a base graft.yaml with a non-ASCII glob adds a Warnings list to the check run only", async () => {
+    putContent(api, B1, NON_ASCII_POLICY);
+    expect(await run()).toBe("published");
+    const check = lastCheck();
+    // The list goes through escapeProse, which backslash-escapes markdown punctuation.
+    const text = (check?.output.text ?? "").replace(/\\/g, "");
+    expect(text).toContain("**Warnings**");
+    expect(text).toContain("rules[1].match.paths[1] (line 4)");
+    expect(text).toContain("non-ASCII characters U+0440, U+0443, U+043A, U+043E, U+0432");
+    expect(text).toContain("(glob_non_ascii)");
+    // The glob text itself is in neither the check run nor the comment.
+    expect(JSON.stringify(check)).not.toContain("рук");
+    // The managed comment section is the same as for an ASCII policy with the same verdict.
+    const section = policySection();
+    expect(section).not.toContain("Warnings");
+    expect(section).not.toContain("U+0440");
+
+    await fresh();
+    loadPolicyScenario(api, {
+      policy: NON_ASCII_POLICY.replace(/docs\/[^'*]+\/\*\*/, "docs/guide/**"),
+    });
+    expect(await run()).toBe("published");
+    expect(lastCheck()?.output.text ?? "").not.toContain("Warnings");
+    expect(policySection()).toBe(section);
+  });
+});

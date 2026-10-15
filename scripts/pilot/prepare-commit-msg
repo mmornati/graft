@@ -1,0 +1,33 @@
+#!/bin/sh
+# Adds Graft provenance trailers to a commit message from environment variables, so that any agent
+# harness that can set variables gets provenance and humans are unaffected.
+#
+#   GRAFT_AGENT    required; the hook does nothing when it is unset or empty
+#   GRAFT_MODEL    optional
+#   GRAFT_TASK     optional (for example "#42")
+#   GRAFT_SESSION  optional (an https URL)
+#
+# Install: copy to .git/hooks/prepare-commit-msg (chmod +x), or point `core.hooksPath` at a
+# directory that holds it. Git calls it as: prepare-commit-msg <message file> [<source> [<sha>]].
+set -eu
+
+file="${1:-}"
+source="${2:-}"
+
+[ -n "${GRAFT_AGENT:-}" ] || exit 0
+[ -n "$file" ] || exit 0
+case "$source" in
+  merge | squash) exit 0 ;;
+esac
+
+# `--if-exists doNothing`: an amend, a rebase or a second run never duplicates a trailer.
+git interpret-trailers --in-place --if-exists doNothing --trailer "Graft-Agent: $GRAFT_AGENT" "$file"
+if [ -n "${GRAFT_MODEL:-}" ]; then
+  git interpret-trailers --in-place --if-exists doNothing --trailer "Graft-Model: $GRAFT_MODEL" "$file"
+fi
+if [ -n "${GRAFT_TASK:-}" ]; then
+  git interpret-trailers --in-place --if-exists doNothing --trailer "Graft-Task: $GRAFT_TASK" "$file"
+fi
+if [ -n "${GRAFT_SESSION:-}" ]; then
+  git interpret-trailers --in-place --if-exists doNothing --trailer "Graft-Session: $GRAFT_SESSION" "$file"
+fi

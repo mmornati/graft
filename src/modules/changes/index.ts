@@ -8,6 +8,7 @@ export {
   type Change,
   findChangeByHead,
   getChange,
+  getChangeByNumber,
   type LivePull,
   upsertChangeFromPull,
 } from "./store.js";

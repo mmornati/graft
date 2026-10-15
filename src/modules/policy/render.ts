@@ -7,7 +7,12 @@
  */
 import { MAX_SECTION_CHARS } from "../../github/managed-comment.js";
 import { codeSpan, escapeProse } from "../../github/markdown.js";
-import { formatPolicyErrorParts, type PolicyError } from "../../policy/errors.js";
+import {
+  formatPolicyErrorParts,
+  type PolicyError,
+  type PolicyWarning,
+  policyWarningMessage,
+} from "../../policy/errors.js";
 import type {
   ApprovalCount,
   Constraint,
@@ -44,6 +49,8 @@ export interface PolicyView {
   facts: PolicyFacts | null;
   approvals: ApprovalCount | null;
   errors: PolicyError[];
+  /** Non-fatal findings of a valid file (step 6): non-ASCII globs. Check run only. */
+  warnings?: PolicyWarning[];
   /** The PR adds graft.yaml where the base has none. */
   addsPolicyFile: boolean;
 }
@@ -411,6 +418,21 @@ export function renderPolicyDetails(v: PolicyView): string | null {
   const others = total - verdict.matched.length;
   if (others > 0) {
     lines.push("", `${others} other ${others === 1 ? "rule" : "rules"} did not match.`);
+  }
+  const warnings = v.warnings ?? [];
+  if (warnings.length > 0) {
+    lines.push(
+      "",
+      "**Warnings**",
+      "",
+      ...warnings.slice(0, MAX_LISTED_ERRORS).map((w) => {
+        const where = w.line !== null ? ` (line ${w.line})` : "";
+        return `- ${escapeProse(`${w.location}${where}: ${policyWarningMessage(w)}; check for lookalike letters`, 300)} (${escapeProse(w.code, 40)})`;
+      }),
+    );
+    if (warnings.length > MAX_LISTED_ERRORS) {
+      lines.push(`- and ${warnings.length - MAX_LISTED_ERRORS} more`);
+    }
   }
   return lines.join("\n");
 }

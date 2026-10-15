@@ -18,7 +18,8 @@ import {
   visit,
 } from "yaml";
 import { LIMITS } from "./constants.js";
-import type { PolicyError } from "./errors.js";
+import type { PolicyError, PolicyWarning } from "./errors.js";
+import { nonAsciiCodePoints } from "./globs.js";
 import {
   crossChecks,
   normalizePolicy,
@@ -29,7 +30,7 @@ import {
 } from "./schema.js";
 
 export type ParseResult =
-  | { ok: true; policy: Policy; hash: string }
+  | { ok: true; policy: Policy; hash: string; warnings: PolicyWarning[] }
   | { ok: false; errors: PolicyError[] };
 
 const err = (
@@ -315,7 +316,47 @@ function parseUnsafe(bytes: Uint8Array): ParseResult {
     return finish(errors.length > 0 ? errors : [err("wrong_type")]);
   }
 
-  // 8. hash
+  // 8. hash (warnings are not part of it)
   const policy = normalizePolicy(data);
-  return { ok: true, policy, hash: canonicalHash(policy) };
+  return {
+    ok: true,
+    policy,
+    hash: canonicalHash(policy),
+    warnings: nonAsciiWarnings(js, doc, posOf),
+  };
+}
+
+/** `glob_non_ascii` for every glob of a valid file with a code point above U+007F (T15.2). */
+function nonAsciiWarnings(
+  js: object,
+  doc: Document,
+  posOf: (offset: number | null | undefined) => { line: number | null; column: number | null },
+): PolicyWarning[] {
+  const out: PolicyWarning[] = [];
+  const scan = (value: unknown, path: PathSeg[]) => {
+    if (!Array.isArray(value)) return;
+    value.forEach((g, j) => {
+      if (typeof g !== "string") return;
+      const codePoints = nonAsciiCodePoints(g);
+      if (codePoints.length === 0) return;
+      const at = [...path, j];
+      out.push({
+        code: "glob_non_ascii",
+        location: pathToLocation(at) ?? "",
+        ...posOf(offsetFor(doc, at)),
+        codePoints,
+      });
+    });
+  };
+  const raw = js as Record<string, unknown>;
+  scan(raw.sensitive_paths, ["sensitive_paths"]);
+  if (Array.isArray(raw.rules)) {
+    raw.rules.forEach((r, i) => {
+      const m = (r as Record<string, unknown> | null)?.match as Record<string, unknown> | undefined;
+      if (m === undefined || m === null || typeof m !== "object") return;
+      scan(m.paths, ["rules", i, "match", "paths"]);
+      scan(m.only_paths, ["rules", i, "match", "only_paths"]);
+    });
+  }
+  return out;
 }

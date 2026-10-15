@@ -13,12 +13,19 @@ import type { GitHubClient } from "../github/client-factory.js";
 import { classifyGitHubError, toJobError } from "../github/errors.js";
 import { PermanentJobError } from "../queue/errors.js";
 import { LIMITS, POLICY_PATH } from "./constants.js";
-import type { PolicyError } from "./errors.js";
+import type { PolicyError, PolicyWarning } from "./errors.js";
 import { parsePolicyText } from "./parse.js";
 import type { Policy } from "./schema.js";
 
 export type LoadedPolicy =
-  | { status: "ok"; commitSha: string; fileSha: string; policy: Policy; hash: string }
+  | {
+      status: "ok";
+      commitSha: string;
+      fileSha: string;
+      policy: Policy;
+      hash: string;
+      warnings: PolicyWarning[];
+    }
   | { status: "missing"; commitSha: string; fileSha: null }
   | { status: "invalid"; commitSha: string; fileSha: string | null; errors: PolicyError[] };
 
@@ -110,7 +117,14 @@ async function fetchPolicy(
   if (!parsed.ok) return { status: "invalid", commitSha, fileSha, errors: parsed.errors };
   if (fileSha === null)
     throw new PermanentJobError("graft.yaml has no blob SHA", "policy_no_blob_sha");
-  return { status: "ok", commitSha, fileSha, policy: parsed.policy, hash: parsed.hash };
+  return {
+    status: "ok",
+    commitSha,
+    fileSha,
+    policy: parsed.policy,
+    hash: parsed.hash,
+    warnings: parsed.warnings,
+  };
 }
 
 export async function loadBasePolicy(

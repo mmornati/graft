@@ -292,6 +292,14 @@ function makePart(toks: Tok[]): Part {
 }
 
 interface Compiled {
+  /**
+   * The text picomatch compares the input with before it runs the regular expression:
+   * `picomatch.test` sets `match = input === glob`, with `glob` the pattern as given (here the
+   * normalized glob), case-sensitively and whatever `nocase` says (picomatch 4.0.7,
+   * `lib/picomatch.js`). A path equal to it matches even when the compiled pattern would not read
+   * the text that way (for example `./a`, whose leading `./` the compiled pattern drops).
+   */
+  exact: string;
   parts: Part[];
   nocase: boolean;
   /** Non-globstar parts: a path with fewer segments cannot match. */
@@ -370,6 +378,7 @@ function compile(glob: string, nocase: boolean): Compiled {
     if (run !== null && run.length > 0) suffix = run;
   }
   return {
+    exact: normalizeGlob(glob),
     parts,
     nocase,
     minSegs: parts.filter((p) => !p.globstar).length,
@@ -719,6 +728,10 @@ function build(globs: readonly string[], nocase: boolean, onLimit: boolean): Cor
       for (const c of compiled) {
         if (shared) shared.pairsUsed++;
         spend(call, 2);
+        // picomatch's `input === pattern` fast path: a string comparison costs one unit per
+        // character compared (only equal lengths are compared character by character).
+        spend(call, path.length === c.exact.length ? path.length : 1);
+        if (path === c.exact) return true;
         if (matchCompiled(c, prep, prep.segs, folded, call)) return true;
       }
       return false;

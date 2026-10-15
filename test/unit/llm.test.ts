@@ -5,6 +5,7 @@ import { agreeingVerifier, createFakeLlm, forbiddenLlm, scriptedLlm } from "../.
 import { createAnthropicLlm, createLlmClient, unconfiguredLlm } from "../../src/llm/index.js";
 import type { LlmRequest } from "../../src/llm/types.js";
 import { testConfig } from "../helpers/config.js";
+import { expectDuration } from "../helpers/perf.js";
 import { silentLog } from "../helpers/stubs.js";
 
 const SCHEMA = { type: "object", properties: { ok: { type: "boolean" } } };
@@ -349,7 +350,7 @@ describe("anthropic client", () => {
     );
     expect(r).toMatchObject({ ok: false, failure: "timeout" });
     // Without the signal: 4 attempts of 150 ms plus backoff, well past a second.
-    expect(Date.now() - started).toBeLessThan(700);
+    expectDuration(Date.now() - started, 700);
     expect(attempts).toBeLessThanOrEqual(2);
   });
 });

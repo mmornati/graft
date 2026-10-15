@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+#
+# Starter policy for a product service (an API or web back end with a database).
+# Copy it to `graft.yaml` on the default branch through a normal reviewed pull request, replace
+# the paths and team slugs with your own, and check it with `pnpm graft policy check graft.yaml`.
+# In Phase 0 Graft only REPORTS what it would do; nothing here blocks or approves a pull request.
+version: 1
+
+# Paths that always count as sensitive for the intent card (risk floor).
+sensitive_paths:
+  - "**/auth/**"
+  - "**/billing/**"
+  - "**/migrations/**"
+
+# Used when no rule matches.
+default:
+  require: { humans: 1 }
+
+rules:
+  # Documentation-only changes that the card rates trivial need no human.
+  - name: docs-only
+    match: { risk: trivial, only_paths: ["docs/**", "*.md"] }
+    approve: auto
+
+  # Any other change the card rates trivial (a typo, a rename) needs no human either.
+  - name: trivial
+    match: { risk: trivial }
+    approve: auto
+
+  # Authentication, billing and database migrations: one human, and the security team.
+  - name: auth-billing-migrations
+    match: { paths: ["**/auth/**", "**/billing/**", "**/migrations/**"] }
+    require: { humans: 1, team: security }
+
+  # Sensitive changes written by an agent need two humans.
+  - name: agent-sensitive
+    match: { author: agent, risk: sensitive }
+    require: { humans: 2 }

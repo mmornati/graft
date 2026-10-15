@@ -1,6 +1,7 @@
 import { sql } from "kysely";
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
+import type { ChangeSignal } from "../../core/signals.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import { defineJob } from "../../queue/job.js";
@@ -93,6 +94,14 @@ export const recordSchema = z.object({
 });
 export type RecordData = z.infer<typeof recordSchema>;
 
+/** Votes were written (step 6): the pilot module syncs who may be counted as a reviewer. */
+async function emitFeedbackRecorded(
+  ctx: JobContext,
+  s: Omit<ChangeSignal, "kind" | "atMs">,
+): Promise<void> {
+  await ctx.signals.emit({ ...s, kind: "feedback_recorded", atMs: ctx.clock.now().getTime() }, ctx);
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function recordFeedback(
@@ -161,6 +170,15 @@ export async function recordFeedback(
     },
     now,
   );
+  await emitFeedbackRecorded(ctx, {
+    installationId: data.installationId,
+    repositoryId: data.repositoryId,
+    owner: data.owner,
+    repo: data.repo,
+    prNumber: change.pr_number,
+    changeId: change.id,
+    headSha: card.head_sha,
+  });
   return "recorded";
 }
 
@@ -234,6 +252,17 @@ export async function pollReactions(data: PollData, ctx: JobContext): Promise<nu
   await ctx.db
     .transaction()
     .execute((tx) => replaceReactionFeedback(tx, change.id, rows, ctx.clock.now()));
+  if (rows.length > 0) {
+    await emitFeedbackRecorded(ctx, {
+      installationId: data.installationId,
+      repositoryId: data.repositoryId,
+      owner: data.owner,
+      repo: data.repo,
+      prNumber: change.pr_number,
+      changeId: change.id,
+      headSha: change.head_sha,
+    });
+  }
   return rows.length;
 }
 
@@ -268,8 +297,8 @@ export async function sweepFeedback(ctx: JobContext): Promise<number> {
     from changes ch
     join repositories r on r.id = ch.repository_id and r.removed_at is null
     join lateral (
-      select max(c.published_at) as last_published
-      from intent_cards c where c.change_id = ch.id and c.published_at is not null
+      select max(d.shown_at) as last_published
+      from intent_displays d where d.change_id = ch.id
     ) p on p.last_published is not null
     where p.last_published >= ${publishedSince}
       and (ch.state = 'open' or (ch.state in ('closed','merged') and ch.closed_at >= ${closedSince}))

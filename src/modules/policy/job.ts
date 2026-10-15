@@ -166,6 +166,7 @@ export async function evaluatePolicyJobRun(
     facts: null,
     approvals: null,
     errors: loaded.status === "invalid" ? loaded.errors : [],
+    warnings: loaded.status === "ok" ? loaded.warnings : [],
     addsPolicyFile: false,
   };
   try {

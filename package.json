@@ -14,6 +14,7 @@
     "format": "biome check --write .",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
+    "test:perf": "GRAFT_PERF=1 vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "dev:server": "tsx watch src/bin/server.ts",
     "dev:worker": "tsx watch src/bin/worker.ts",

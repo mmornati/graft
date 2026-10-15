@@ -226,6 +226,8 @@ export const basePushPolicy = defineWebhookHandler({
 
 /** Re-evaluate when a card or provenance is published for the head (D15). */
 export const onChangeSignal: SignalListener = async (s, ctx) => {
+  // A vote changes no policy fact (step 6): the pilot module listens to it, policy does not.
+  if (s.kind === "feedback_recorded") return;
   await ctx.queue.send(
     policyEvaluateJob,
     {

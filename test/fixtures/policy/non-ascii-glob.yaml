@@ -1,0 +1,5 @@
+version: 1
+rules:
+  - name: guide
+    match: { paths: ["docs/руководство/**"] }
+    require: { humans: 1 }

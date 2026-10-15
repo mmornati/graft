@@ -301,7 +301,8 @@ describe("shared pieces", () => {
     expect(createRegistry({ webhookHandlers: [], jobs: [] }).signalListeners).toEqual([]);
     const { buildAppRegistry } = await import("../../src/app/registry.js");
     const app = buildAppRegistry();
-    expect(app.signalListeners).toHaveLength(1);
+    // policy (evaluate on intent/provenance) and pilot (reviewer sync on feedback)
+    expect(app.signalListeners).toHaveLength(2);
     expect(app.jobs.map((j) => j.name)).toEqual(
       expect.arrayContaining(["policy.evaluate", "policy.fanout"]),
     );

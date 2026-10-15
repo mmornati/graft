@@ -16,7 +16,9 @@ import type { JobDefinition } from "./job.js";
  * the `standard` queues used here the key is stored but never deduplicates. The insert is
  * `INSERT ... ON CONFLICT DO NOTHING` on the job primary key, so a deterministic id gives real
  * deduplication: a second `send` with the same key returns `null`. The window lasts as long as
- * the job row exists (`deleteAfterSeconds`, 7 days after completion or failure).
+ * the job row exists (`deleteAfterSeconds`: 7 days after completion or failure, except for queues
+ * that set a shorter value, such as `github.webhook` with 1 hour; its delivery dedup relies on the
+ * `webhook_deliveries` primary key, not on the job row).
  */
 export function singletonJobId(jobName: string, key: string): string {
   const ns = Buffer.from("9f1c3a52b6d84e0f8a7d2c4b1e5f6a30", "hex");
@@ -66,6 +68,7 @@ export function resolveJobOptions(job: JobDefinition<unknown>) {
     retryDelaySeconds: job.options?.retryDelaySeconds ?? JOB_DEFAULTS.retryDelaySeconds,
     retryBackoff: job.options?.retryBackoff ?? JOB_DEFAULTS.retryBackoff,
     expireInSeconds: job.options?.expireInSeconds ?? JOB_DEFAULTS.expireInSeconds,
+    deleteAfterSeconds: job.options?.deleteAfterSeconds ?? JOB_DEFAULTS.deleteAfterSeconds,
   };
 }
 
@@ -81,6 +84,10 @@ export interface PgBossQueueOptions {
   supervise: boolean;
   /** Test seam: supply a pre-built (stubbed) pg-boss. */
   boss?: PgBoss;
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 function txAdapter(tx: Transaction<Database>): PgBossDb {
@@ -119,11 +126,22 @@ export function createPgBossQueue(o: PgBossQueueOptions): PgBossJobQueue {
           retryDelay: opts.retryDelaySeconds,
           retryBackoff: opts.retryBackoff,
           expireInSeconds: opts.expireInSeconds,
-          deleteAfterSeconds: JOB_DEFAULTS.deleteAfterSeconds,
+          deleteAfterSeconds: opts.deleteAfterSeconds,
         };
         await boss.createQueue(job.name, queue);
         // createQueue is a no-op for an existing queue, so apply changed options explicitly.
         await boss.updateQueue(job.name, queue);
+        // A job copies the queue's `deletion_seconds` when it is inserted, so jobs that already
+        // exist keep their old value (7 days). Tighten those too for queues with a shorter
+        // retention (their data holds PR text); retention then deletes them at the next sweep.
+        if (opts.deleteAfterSeconds < JOB_DEFAULTS.deleteAfterSeconds) {
+          await boss
+            .getDb()
+            .executeSql(
+              `update ${quoteIdent(o.schema)}.job set deletion_seconds = $1 where name = $2 and deletion_seconds > $1`,
+              [opts.deleteAfterSeconds, job.name],
+            );
+        }
       }
       started = true;
     },

@@ -64,7 +64,23 @@ export const GLOB_REASONS: Record<number, string> = {
   6: "unbalanced [ ], or a / inside [ ]",
   7: "does not compile (a run of ***, ]+ or ** glued to other characters is not supported)",
   8: "too costly (more than 48 characters other than * in one segment, or 96 in all)",
+  9: "mixes writing systems in one segment (lookalike letters?)",
+  10: "contains a compatibility character (it folds to another character under Unicode normalization, as a fullwidth or mathematical letter, the Kelvin sign or a CJK compatibility ideograph does)",
 };
+
+/** A non-fatal finding of a valid file (step 6). Never holds the glob text. */
+export interface PolicyWarning {
+  code: "glob_non_ascii";
+  location: string;
+  line: number | null;
+  column: number | null;
+  /** `U+0435`, at most 5. */
+  codePoints: string[];
+}
+
+export function policyWarningMessage(w: PolicyWarning): string {
+  return `non-ASCII characters ${w.codePoints.join(", ")}`;
+}
 
 const MESSAGES: Record<
   Exclude<PolicyErrorCode, "unknown_key" | "glob_invalid" | "file_too_large">,

@@ -5,6 +5,15 @@ import type { WebhookHandler } from "./handler.js";
 
 export const GITHUB_WEBHOOK_JOB = "github.webhook";
 
+/**
+ * Completed and failed `github.webhook` jobs are deleted from pg-boss after 1 hour. Their data is
+ * the whole webhook payload, which holds PR titles and bodies, so it must not sit in the queue
+ * for the default 7 days. Delivery dedup relies on the `webhook_deliveries` primary key (rows are
+ * kept), not on finding an old job; a job whose handlers still need to retry is not affected
+ * (retention starts at completion or final failure).
+ */
+export const WEBHOOK_JOB_RETENTION_SECONDS = 3600;
+
 export const githubWebhookSchema = z.object({
   deliveryId: z.string().min(1),
   event: z.string().min(1),
@@ -24,6 +33,7 @@ export function createGithubWebhookJob(registry: {
   return defineJob<GithubWebhookData>({
     name: GITHUB_WEBHOOK_JOB,
     schema: githubWebhookSchema,
+    options: { deleteAfterSeconds: WEBHOOK_JOB_RETENTION_SECONDS },
     async handle(data, ctx) {
       const handlers = registry.handlersFor(data.event, data.action);
       if (handlers.length === 0) {

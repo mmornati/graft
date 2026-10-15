@@ -610,3 +610,39 @@ describe("prompt injection", () => {
     expect(r.card?.outOfScopeEdits).toEqual([]);
   });
 });
+
+describe("spend cost (step 6)", () => {
+  it("U-GEN-30 the cost is the exact sum over the calls: Haiku first pass + Sonnet writer + Sonnet verifier", async () => {
+    const llm = scriptedLlm({
+      writer: W({ risk_class: "logic" }),
+      writerEscalated: W({ risk_class: "logic" }),
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(llm.calls.map((c) => c.model)).toEqual([FAST, STRONG, STRONG]);
+    // 1,000 input and 100 output tokens per call: Haiku 0.00015, Sonnet 0.003 each.
+    expect(r.costUsd).toBe(0.00615);
+    expect(r.usage.calls).toBe(3);
+  });
+
+  it("U-GEN-31 a call with an unknown model makes the run unpriced (null); zero-token calls cost 0", async () => {
+    const llm = scriptedLlm({
+      writer: { ...W(), model: "claude-unknown-9" },
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(r.costUsd).toBeNull();
+    // The date suffix of a known model still prices.
+    const dated = scriptedLlm({
+      writer: { ...W(), model: `${FAST}-20260101` },
+      verifier: agreeingVerifier,
+    });
+    expect((await generateCard(inputs(), dated, OPTS)).costUsd).toBe(0.00315);
+    // No model call: nothing was spent.
+    const p = prepareCardInputs(inputs(), OPTS);
+    expect(unavailableResult(p, "not_configured").costUsd).toBe(0);
+    // A failed call that spent nothing is free whatever its model is.
+    const failing = createFakeLlm(() => ({ failure: "timeout" }));
+    expect((await generateCard(inputs(), failing, OPTS)).costUsd).toBe(0);
+  });
+});

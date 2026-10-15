@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { GLOB_REASONS } from "../policy/errors.js";
+import { validateGlob } from "../policy/globs.js";
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -59,16 +61,36 @@ const globList = z
       .map((x) => x.trim())
       .filter((x) => x !== ""),
   )
-  .refine(
-    (l) =>
-      l.every(
+  .superRefine((l, ctx) => {
+    if (
+      !l.every(
         (g) =>
           g.length >= 1 && g.length <= 200 && !g.startsWith("!") && !g.split("/").includes(".."),
-      ),
-    {
-      message: "must be comma-separated globs (1-200 characters, no leading '!', no '..' segment)",
-    },
-  );
+      )
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "must be comma-separated globs (1-200 characters, no leading '!', no '..' segment)",
+      });
+      return;
+    }
+    // The same checks as `graft.yaml` (step 6, T14): a glob the matcher does not model would
+    // silently match less than its author meant. Only the position and the reason are reported.
+    const index = l.findIndex((g) => validateGlob(g) !== null);
+    if (index >= 0) {
+      const detail = validateGlob(l[index] as string) as number;
+      ctx.addIssue({
+        code: "custom",
+        message: `glob ${index + 1} is invalid (${GLOB_REASONS[detail] ?? GLOB_REASONS[7]})`,
+      });
+    }
+  });
+
+const incidentLabel = z
+  .string()
+  .regex(/^(off|[A-Za-z0-9 ._:/-]{1,50})$/, 'must be "off" or 1-50 characters of [A-Za-z0-9 ._:/-]')
+  .transform((v) => (v === "off" ? null : v));
 
 const CRON_FIELD = /^[0-9*/,-]+$/;
 const cronOrOff = z
@@ -119,6 +141,9 @@ const EnvSchema = z.object({
   GRAFT_LLM_DAILY_TOKEN_BUDGET: withDefault(intString(0, Number.MAX_SAFE_INTEGER), "2000000"),
   GRAFT_INTENT_SENSITIVE_PATHS: withDefault(globList, ""),
   GRAFT_FEEDBACK_POLL_CRON: withDefault(cronOrOff, "*/15 * * * *"),
+  GRAFT_INCIDENT_LABEL: withDefault(incidentLabel, "incident"),
+  GRAFT_METRICS_ROLLUP_CRON: withDefault(cronOrOff, "15 2 * * *"),
+  GRAFT_METRICS_EXCLUDED_AUTHORS: withDefault(loginList, "dependabot[bot],renovate[bot]"),
 });
 
 export interface Config {
@@ -154,6 +179,12 @@ export interface Config {
   readonly intentSensitivePaths: readonly string[];
   /** Cron for the reaction polling sweep, or null when switched off. */
   readonly feedbackPollCron: string | null;
+  /** Label that marks a revert or fix PR as an incident (step 6), or null when switched off. */
+  readonly incidentLabel: string | null;
+  /** Cron for the daily metrics rollup (step 6), or null when switched off. */
+  readonly metricsRollupCron: string | null;
+  /** Lowercased logins left out of the baseline, the rollup PR counts and gate coverage. */
+  readonly metricsExcludedAuthors: readonly string[];
 }
 
 function isPem(key: string): boolean {
@@ -240,5 +271,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     llmDailyTokenBudget: d.GRAFT_LLM_DAILY_TOKEN_BUDGET,
     intentSensitivePaths: Object.freeze([...d.GRAFT_INTENT_SENSITIVE_PATHS]),
     feedbackPollCron: d.GRAFT_FEEDBACK_POLL_CRON,
+    incidentLabel: d.GRAFT_INCIDENT_LABEL,
+    metricsRollupCron: d.GRAFT_METRICS_ROLLUP_CRON,
+    metricsExcludedAuthors: Object.freeze([...d.GRAFT_METRICS_EXCLUDED_AUTHORS]),
   });
 }

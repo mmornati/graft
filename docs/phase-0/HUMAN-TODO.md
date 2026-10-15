@@ -60,3 +60,19 @@ Every Phase 0 step appends to this checklist. Each item says who does it, what i
 
   Who: repo owner.
 - [ ] **Plan Phase 1 permission.** Note that team approvals need `members: read` (org), which installations must accept. Who: product owner.
+
+## Step 6: Pilots and gate
+
+- [ ] **Recruit two pilot teams** (20-500 engineers, agents open most PRs, GitHub, willing to vote on cards for 4+ weeks). Who: product owner. Produces: names, contacts, signed agreement (consent for diffs to Anthropic, retention terms, optional eval export) → `docs/plan/development-plan.md` decision "Where the pilot teams come from".
+- [ ] **Onboarding session per pilot** (60 min) following `docs/pilots/onboarding.md`: install on selected repos, pick a starter `graft.yaml`, install the trailer hook in each agent harness, explain shadow mode and voting, collect the allow-list (reviewers who review without being requested). Who: repo owner with the pilot's tech lead. Produces: installation id, allow-file (stored outside git), `pilot doctor` all OK.
+- [ ] **Baseline**: right after install, `pnpm graft baseline --repo <r> --from <today - 12 weeks> --to <install date>` per pilot repo (at least 4 weeks of history; 2-4 weeks only if history is short). Ask each pilot to list incidents in that period and record them with `pnpm graft incident add`. Who: repo owner.
+- [ ] **Backfill eligibility** once after deploying step 6: `pnpm graft pilot sync-reviewers --installation <id> --since <install date>`.
+- [ ] **Weekly gate review** (30 min, same day each week): `pnpm graft pilot doctor` per pilot; `pnpm graft baseline --period shadow --from <pilot start> --to <today>` per repo; `pnpm graft gate report --installation A --installation B --since <pilot start> --allow-file ... --out ~/graft-reports`; read verdict, 👎 cards (open them on GitHub), unavailable reasons, cost; adjust prompts through `pnpm eval run` before shipping any change. Who: repo owner + product owner. Produces: the report files and a short note per week.
+- [ ] **Calling the gate.** Call it at the first weekly review where the report says PASS or FAIL, and no earlier than 2 weeks of pilot data; if still INSUFFICIENT DATA after 6 weeks, decide with the pilots whether to extend 2 weeks or record a FAIL for lack of engagement. PASS → start Phase 1. FAIL → prompt work against the eval set, then a fresh 2-week window (`--since` reset). Record the verdict, window, n, interval and report hash in `docs/plan/development-plan.md`. Who: product owner.
+- [ ] **Compare the eval proxy**: for PRs in both the pilot eval set and the gate window, compare `cardAcceptableRate` with the thumbs by hand and note the gap. Who: repo owner.
+- [ ] **Incident label**: agree the label name with each pilot (`GRAFT_INCIDENT_LABEL`) and ask them to put `Reverts owner/repo#N` (the GitHub revert button does) or `Graft-Culprit: #N` in fix PRs. Who: product owner.
+- [ ] **Check `GRAFT_INTENT_SENSITIVE_PATHS`** still loads after deploy (startup now rejects globs the matcher does not model and mixed-script segments, and warns about non-ASCII characters). Who: repo owner.
+- [ ] **Webhook payload retention.** Confirm after the first deploy that `select deletion_seconds from pgboss.queue where name = 'github.webhook'` is 3600 and that completed webhook jobs disappear within about an hour; the pilot agreement and `docs/pilots/onboarding.md` say so. Who: repo owner.
+- [ ] **Check the baseline on real GitHub.** On the first pilot repository, run `pnpm graft baseline --dry-run` and compare a few PRs' numbers with GitHub's timeline by hand (the shape of `review_requested`, `reviewed` and draft events is only verified against the fake API). Who: repo owner.
+- [ ] **Offboarding**: when a pilot leaves, follow the onboarding doc's deletion procedure and record the `pilot_purges` id. Who: repo owner.
+

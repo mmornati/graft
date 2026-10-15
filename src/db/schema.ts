@@ -215,6 +215,8 @@ export interface IntentSpendTable {
   tokens: number;
   llm_calls: Optional<number>;
   spent_at: Date;
+  /** Step 6: USD at spend time; NULL = unpriced (unknown model, or a row from before 0006). */
+  cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
 }
 
 export interface IntentDisplaysTable {
@@ -288,6 +290,77 @@ export interface WebhookDeliveriesTable {
   received_at: Timestamp;
 }
 
+/** Step 6. Reviewers (by user id) seen for a change while Graft watched; never deleted. */
+export interface PrReviewersTable {
+  change_id: string;
+  user_id: number;
+  reason: "requested" | "reviewed";
+  first_seen_at: Date;
+}
+
+export interface ReviewTimeRunsTable {
+  id: Generated<string>;
+  repository_id: number;
+  period: "baseline" | "shadow";
+  from_date: ColumnType<string, string | Date, string | Date>;
+  to_date: ColumnType<string, string | Date, string | Date>;
+  base_ref: string;
+  extractor_version: number;
+  pr_count: number;
+  excluded_count: number;
+  aggregates: Json<unknown>;
+  requests: number;
+  extracted_at: Date;
+}
+
+/** Numbers and flags per PR: no title, body, path, login or SHA (D3). */
+export interface ReviewTimePrsTable {
+  run_id: string;
+  pr_number: number;
+  state: "merged" | "closed" | "open";
+  author_kind: "agent" | "human";
+  author_kind_reason: string;
+  size_bucket: "S" | "M" | "L" | "XL";
+  start_basis: "review_requested" | "ready_for_review" | "opened";
+  minutes_to_first_approval: ColumnType<
+    string | null,
+    string | number | null,
+    string | number | null
+  >;
+  minutes_to_merge: ColumnType<string | null, string | number | null, string | number | null>;
+  review_rounds: number;
+  merged_without_review: boolean;
+  paused_minutes: ColumnType<string, string | number, string | number>;
+  excluded_reason: "excluded_author" | "timeline_truncated" | "commits_truncated" | null;
+}
+
+export interface IncidentsTable {
+  id: Generated<string>;
+  repository_id: number;
+  culprit_pr_number: number | null;
+  fix_pr_number: number | null;
+  source: "cli" | "label";
+  severity: number | null;
+  occurred_at: Date;
+  recorded_at: Date;
+}
+
+export interface MetricsDailyTable {
+  repository_id: number;
+  day: ColumnType<string, string | Date, string | Date>;
+  rollup_version: number;
+  counts: Json<Record<string, number | string>>;
+  computed_at: Date;
+}
+
+/** No foreign key: outlives the purge. Holds the installation id and counts only. */
+export interface PilotPurgesTable {
+  id: Generated<string>;
+  installation_id: number;
+  rows_deleted: Json<Record<string, number>>;
+  purged_at: Date;
+}
+
 export interface Database {
   installations: InstallationsTable;
   repositories: RepositoriesTable;
@@ -302,6 +375,12 @@ export interface Database {
   policy_verdicts: PolicyVerdictsTable;
   guard_events: GuardEventsTable;
   webhook_deliveries: WebhookDeliveriesTable;
+  pr_reviewers: PrReviewersTable;
+  review_time_runs: ReviewTimeRunsTable;
+  review_time_prs: ReviewTimePrsTable;
+  incidents: IncidentsTable;
+  metrics_daily: MetricsDailyTable;
+  pilot_purges: PilotPurgesTable;
 }
 
 export const TABLE_NAMES = [
@@ -318,4 +397,10 @@ export const TABLE_NAMES = [
   "policy_verdicts",
   "guard_events",
   "webhook_deliveries",
+  "pr_reviewers",
+  "review_time_runs",
+  "review_time_prs",
+  "incidents",
+  "metrics_daily",
+  "pilot_purges",
 ] as const satisfies readonly (keyof Database)[];

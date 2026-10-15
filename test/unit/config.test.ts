@@ -187,4 +187,84 @@ describe("config", () => {
     const other = errorOf({ ...valid, PORT: "0", ANTHROPIC_API_KEY: "sk-ant-LEAKCHECK" }).message;
     expect(other).not.toContain("sk-ant-LEAKCHECK");
   });
+  it("U-CFG-30 an invalid env glob names its position and the reason, never the value", () => {
+    const msg = errorOf({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "a/**,/**.pem" }).message;
+    expect(msg).toContain("GRAFT_INTENT_SENSITIVE_PATHS: glob 2 is invalid");
+    expect(msg).toContain("does not compile");
+    expect(msg).not.toContain(".pem");
+    const costly = errorOf({
+      ...valid,
+      GRAFT_INTENT_SENSITIVE_PATHS: `ok/**,${"x".repeat(60)}/SECRETVALUE/**`,
+    }).message;
+    expect(costly).toContain("glob 2 is invalid (too costly");
+    expect(costly).not.toContain("SECRETVALUE");
+    // Valid lists still load.
+    expect(
+      loadConfig({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "a/**, **/b/*.ts" })
+        .intentSensitivePaths,
+    ).toEqual(["a/**", "**/b/*.ts"]);
+  });
+
+  it("U-CFG-31 a lookalike glob in the env is rejected (detail 9)", () => {
+    const msg = errorOf({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "s\u0435crets/**" }).message;
+    expect(msg).toContain("GRAFT_INTENT_SENSITIVE_PATHS: glob 1 is invalid");
+    expect(msg).toContain("mixes writing systems");
+    expect(msg).not.toContain("s\u0435crets");
+    // An honest non-ASCII glob loads.
+    expect(
+      loadConfig({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "docs/\u0440\u0443\u043a/**" })
+        .intentSensitivePaths,
+    ).toEqual(["docs/\u0440\u0443\u043a/**"]);
+  });
+
+  it("U-CFG-31 (invisible and compatibility lookalikes) are rejected in the env too", () => {
+    for (const value of [
+      "sec\u034Frets/**",
+      "secrets\uFE0F/**",
+      "\uFF53ecrets/**",
+      "\u{1D42C}ecrets/**",
+    ]) {
+      const msg = errorOf({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: value }).message;
+      expect(msg).toContain("GRAFT_INTENT_SENSITIVE_PATHS: glob 1 is invalid");
+    }
+    expect(
+      loadConfig({
+        ...valid,
+        GRAFT_INTENT_SENSITIVE_PATHS: "caf\u00e9/**,\u65e5\u672c/**,\ud55c\uae00/**",
+      }).intentSensitivePaths,
+    ).toHaveLength(3);
+  });
+
+  it("U-CFG-32 step 6 settings: defaults, off values and rejection by variable name only", () => {
+    expect(loadConfig(valid)).toMatchObject({
+      incidentLabel: "incident",
+      metricsRollupCron: "15 2 * * *",
+      metricsExcludedAuthors: ["dependabot[bot]", "renovate[bot]"],
+    });
+    const c = loadConfig({
+      ...valid,
+      GRAFT_INCIDENT_LABEL: "off",
+      GRAFT_METRICS_ROLLUP_CRON: "off",
+      GRAFT_METRICS_EXCLUDED_AUTHORS: "Some-Bot[bot], other",
+    });
+    expect(c).toMatchObject({
+      incidentLabel: null,
+      metricsRollupCron: null,
+      metricsExcludedAuthors: ["some-bot[bot]", "other"],
+    });
+    expect(Object.isFrozen(c.metricsExcludedAuthors)).toBe(true);
+    expect(loadConfig({ ...valid, GRAFT_INCIDENT_LABEL: "sev:1 / prod-1.2" }).incidentLabel).toBe(
+      "sev:1 / prod-1.2",
+    );
+    for (const [name, value] of [
+      ["GRAFT_INCIDENT_LABEL", "bad<SECRETVALUE>"],
+      ["GRAFT_INCIDENT_LABEL", "x".repeat(51)],
+      ["GRAFT_METRICS_ROLLUP_CRON", "every SECRETVALUE minutes"],
+      ["GRAFT_METRICS_EXCLUDED_AUTHORS", "bad login SECRETVALUE"],
+    ] as const) {
+      const msg = errorOf({ ...valid, [name]: value }).message;
+      expect(msg, name).toContain(name);
+      expect(msg).not.toContain("SECRETVALUE");
+    }
+  });
 });

@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+#
+# Starter policy for a library or SDK with a public API.
+# Copy it to `graft.yaml` on the default branch through a normal reviewed pull request, replace
+# the paths and team slugs with your own, and check it with `pnpm graft policy check graft.yaml`.
+# In Phase 0 Graft only REPORTS what it would do; nothing here blocks or approves a pull request.
+version: 1
+
+sensitive_paths:
+  - "src/public/**"
+
+default:
+  require: { humans: 1 }
+
+rules:
+  # Docs and tests that the card rates trivial need no human.
+  - name: docs-and-tests
+    match: { risk: trivial, only_paths: ["docs/**", "*.md", "test/**", "tests/**"] }
+    approve: auto
+
+  - name: trivial
+    match: { risk: trivial }
+    approve: auto
+
+  # The public API surface is a promise to users: two humans.
+  - name: public-api
+    match: { paths: ["src/public/**"] }
+    require: { humans: 2 }
+
+  # Dependency and release changes from an agent need a maintainer.
+  - name: agent-release
+    match: { paths: ["package.json", "*.lock", "CHANGELOG.md"], author: agent }
+    require: { humans: 1, team: maintainers }

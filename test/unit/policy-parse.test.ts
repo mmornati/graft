@@ -7,6 +7,7 @@ import {
   EVALUATION_FUEL,
   GlobBudget,
   globMatcher,
+  MATCH_FUEL,
   MEMO_TOTAL,
   matcherScratchClean,
   memoEntries,
@@ -30,6 +31,7 @@ import { evaluatePolicy, type PolicyFacts } from "../../src/policy/evaluate.js";
 import { validateGlob } from "../../src/policy/globs.js";
 import { policyJsonSchema } from "../../src/policy/json-schema.js";
 import { parsePolicyText } from "../../src/policy/parse.js";
+import { expectDuration } from "../helpers/perf.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const parse = (s: string) => parsePolicyText(enc(s));
@@ -107,7 +109,7 @@ describe("policy parsing", () => {
       const started = performance.now();
       const errors = errorsOf(fixture("alias-bomb.yaml"));
       const took = performance.now() - started;
-      expect(took).toBeLessThan(50);
+      expectDuration(took, 50, "alias bomb");
       expect(errors.length).toBeGreaterThan(0);
       expect(errors.every((e) => e.code === "yaml_alias" || e.code === "too_many_errors")).toBe(
         true,
@@ -607,12 +609,16 @@ describe("policy globs", () => {
   });
 
   it("U-PG-4 three stars against a 255-character non-matching segment stay fast", () => {
-    const m = globMatcher(["*a*b*c"]);
+    const budget = new GlobBudget();
+    const m = globMatcher(["*a*b*c"], { budget });
     const hay = "x".repeat(255);
     const started = performance.now();
     expect(m(hay)).toBe(false);
     expect(m(`${"a".repeat(120)}${"b".repeat(120)}x`)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(50);
+    expectDuration(performance.now() - started, 50);
+    // Deterministic: the two calls cost about 500 work units in all (measured 512).
+    expect(EVALUATION_FUEL - budget.fuel).toBeLessThan(2_000);
+    expect(budget.limitHits).toBe(0);
   });
 
   it("U-PG-5 a leading slash anchors, no slash means any depth, dot files match", () => {
@@ -628,11 +634,16 @@ describe("policy globs", () => {
     const globs = Array.from({ length: 500 }, (_, i) => `d${i}/**/*.ts`);
     const paths = Array.from({ length: 1_000 }, (_, i) => `src/m${i % 40}/f${i}.ts`);
     const started = performance.now();
-    const m = globMatcher(globs);
+    const budget = new GlobBudget();
+    const m = globMatcher(globs, { budget });
     let hits = 0;
     for (const p of paths) if (m(p)) hits++;
     expect(hits).toBe(0);
-    expect(performance.now() - started).toBeLessThan(1_000);
+    expectDuration(performance.now() - started, 1_000);
+    // Deterministic: 500,000 pairs for about 4.7 M units (about 9 each), nowhere near the budget.
+    expect(budget.pairsUsed).toBe(500_000);
+    expect(EVALUATION_FUEL - budget.fuel).toBeLessThan(7_000_000);
+    expect(budget.exhausted).toBe(false);
   });
 });
 
@@ -772,8 +783,10 @@ describe("segment-wise glob matcher (no backtracking)", () => {
       "é.md",
     ];
     let compared = 0;
-    const check = (g: string, paths: string[]) => {
+    const check = (g: string, given: string[]) => {
       if (validateGlob(g) !== null) return;
+      // Step 6 (U-PG-25): paths equal to the glob's text exercise picomatch's `input === glob` path.
+      const paths = [...given, normalizeGlob(g)];
       for (const nocase of [true, false]) {
         const pm = picomatch(normalizeGlob(g), { dot: true, nocase });
         const mine = globMatcher([g], { nocase });
@@ -863,15 +876,21 @@ describe("segment-wise glob matcher (no backtracking)", () => {
     for (const [glob, path] of cases) {
       expect(validateGlob(glob), glob).toBeNull();
       expect(path.length).toBeLessThanOrEqual(1_024);
-      const m = globMatcher([glob]);
+      // A budget far above any real one, only to count the work units of 1,000 calls.
+      const budget = new GlobBudget(1e15);
+      const m = globMatcher([glob], { budget });
       const started = performance.now();
       for (let i = 0; i < 1_000; i++) m(path);
       const took = performance.now() - started;
       slowest = Math.max(slowest, took);
-      expect(took, `${glob} x ${path.length} chars`).toBeLessThan(1_000);
+      expectDuration(took, 1_000, `${glob} x ${path.length} chars`);
+      // Deterministic: every case costs under 9,000 units per call (measured at most 8,860), and
+      // none runs into the per-call limit.
+      expect((1e15 - budget.fuel) / 1_000, `${glob} x ${path.length} chars`).toBeLessThan(20_000);
+      expect(budget.limitHits).toBe(0);
     }
-    expect(slowest).toBeLessThan(1_000);
-  });
+    expectDuration(slowest, 1_000);
+  }, 60_000);
 
   it("U-PG-9 over-long paths answer onLimit (strict side); a spent budget does too", () => {
     const longPath = `${"d/".repeat(600)}x`; // 1,201 characters
@@ -893,9 +912,13 @@ describe("segment-wise glob matcher (no backtracking)", () => {
     const hostile = Array.from({ length: 20 }, (_, k) => `*a*a*a${"?".repeat(100 + k)}b?`);
     const aaa = "a".repeat(PATH_LIMITS.chars);
     const started = performance.now();
-    expect(globMatcher(hostile, { onLimit: true })(aaa)).toBe(true);
+    const budget = new GlobBudget();
+    expect(globMatcher(hostile, { onLimit: true, budget })(aaa)).toBe(true);
     expect(globMatcher(hostile, { onLimit: false })(aaa)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(100);
+    expectDuration(performance.now() - started, 100);
+    // Deterministic: the call stopped at its own limit (200,000 units), once.
+    expect(budget.limitHits).toBe(1);
+    expect(EVALUATION_FUEL - budget.fuel).toBeLessThanOrEqual(MATCH_FUEL + 1_000);
   });
 
   it("U-PG-10 `***` and `]+` are not accepted (picomatch gives them regex meaning)", () => {
@@ -961,7 +984,7 @@ describe("glob cost caps and the evaluation budget (review 2)", () => {
     const started = performance.now();
     const v = evaluatePolicy(parsedPolicy.policy, hostileFacts(1_000));
     const took = performance.now() - started;
-    expect(took).toBeLessThan(2_000);
+    expectDuration(took, 2_000);
     expect(v.limits).toContain("budget_exhausted");
     // Strict: nothing is approved, and the remaining block rules count as matching.
     expect(v.outcome).toBe("would_block");
@@ -1045,7 +1068,7 @@ describe("glob cost caps and the evaluation budget (review 2)", () => {
         extraSensitiveGlobs: res.policy.sensitivePaths,
       });
       const took = performance.now() - started;
-      expect(took, `${shape}: policy + floor`).toBeLessThan(2_000);
+      expectDuration(took, 2_000, `${shape}: policy + floor`);
       expect(v.limits).toContain("budget_exhausted");
       expect(v.outcome).toBe("would_block");
       // The floor alone only sees the 20 `sensitive_paths`, which the budget covers; it must not
@@ -1060,8 +1083,9 @@ describe("glob cost caps and the evaluation budget (review 2)", () => {
         shared,
       );
       const w = evaluatePolicy(res.policy, hostileFacts(1_000), { budget: shared });
-      expect(performance.now() - t2).toBeLessThan(2_000);
+      expectDuration(performance.now() - t2, 2_000);
       expect(w.limits).toContain("budget_exhausted");
+      expect(shared.exhausted).toBe(true);
     });
   }
 
@@ -1206,5 +1230,204 @@ describe("glob cost caps and the evaluation budget (review 2)", () => {
     expect(globMatcher(["[a-c]"])("[a-c]")).toBe(false);
     expect(globMatcher(["[a-c]"])("b")).toBe(true);
     expect(globMatcher(["[a.b]"])("[a.b]")).toBe(false);
+  });
+});
+
+describe("step 6: lookalike globs, warnings and the exact-text shortcut", () => {
+  it("U-PG-21 a segment that mixes writing systems is glob_invalid detail 9", () => {
+    expect(validateGlob("s\u0435crets/**")).toBe(9); // Cyrillic е in Latin text
+    expect(validateGlob("**/p\u0430yments/**")).toBe(9); // Cyrillic а
+    expect(validateGlob("inf\u03BF/**")).toBe(9); // Greek omicron
+    expect(validateGlob("secrets/**")).toBeNull();
+    expect(GLOB_REASONS[9]).toContain("mixes writing systems");
+    // The detail reaches the error list with its message.
+    const err = errorsOf(
+      rule("match: { paths: ['s\u0435crets/**'] }\n    block: true"),
+    )[0] as PolicyError;
+    expect(err).toMatchObject({ code: "glob_invalid", detail: 9 });
+    expect(formatPolicyError(err)).toContain("mixes writing systems in one segment");
+  });
+
+  it("U-PG-21 (invisible and compatibility lookalikes) are rejected; honest accents and CJK stay valid", () => {
+    // Invisible characters: detail 2 (character not allowed).
+    for (const bad of [
+      "sec\u034Frets/**", // combining grapheme joiner
+      "secrets\uFE0F/**", // variation selector
+      "secrets\u{E0100}/**", // variation selector supplement
+      "secrets\u180B/**", // Mongolian free variation selector
+      "sec\u200Brets/**", // zero-width space
+      "sec\u200Drets/**", // zero-width joiner
+      "sec\u2060rets/**", // word joiner
+      "\uFEFFsecrets/**", // byte order mark
+      "\u0301secrets/**", // a mark with no letter before it
+      "se*\u0301crets/**", // a mark after a star
+      "a/\u0301b/**", // a mark at the start of a segment
+      "x1\u0301/**", // a mark after a digit
+    ]) {
+      expect(validateGlob(bad), JSON.stringify(bad)).toBe(2);
+    }
+    // Compatibility lookalikes: detail 9.
+    // Compatibility characters: detail 10, checked one code point at a time.
+    for (const bad of [
+      "\uFF53ecrets/**", // fullwidth s
+      "\u{1D42C}ecrets/**", // mathematical bold s
+      "\u212Aeys/**", // Kelvin sign: its canonical decomposition is the Latin K
+      "\u212Bngstrom/**", // Angstrom sign
+      "\u2126/**", // Ohm sign
+      "\uF900/**", // CJK compatibility ideograph
+      "\u3131\u3131/**", // compatibility jamo
+    ]) {
+      expect(validateGlob(bad), JSON.stringify(bad)).toBe(10);
+    }
+    expect(GLOB_REASONS[10]).toContain("compatibility character");
+    expect(GLOB_REASONS[10]).not.toContain("writing systems");
+    expect(validateGlob("\uFF0A/x")).toBe(2); // a fullwidth asterisk is not in the character set
+    // Legitimate: precomposed and decomposed accents, CJK, Hangul, Japanese.
+    for (const ok of [
+      "caf\u00e9/**",
+      "cafe\u0301/**",
+      "\u65e5\u672c\u8a9e/**",
+      "\ud55c\uae00/**",
+      "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8/**",
+      "\u0440\u0443\u043a/**",
+    ]) {
+      expect(validateGlob(ok), ok).toBeNull();
+    }
+    // The same through a parsed file.
+    expect(codesOf('version: 1\nsensitive_paths:\n  - "sec\u034Frets/**"\n')).toEqual([
+      "glob_invalid",
+    ]);
+  });
+
+  it("U-PG-22 legitimate non-ASCII paths stay valid", () => {
+    for (const ok of [
+      "docs/\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u043e/**", // all Cyrillic
+      "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8/\u8a2d\u5b9a/**", // Katakana, then Han
+      "src/\ud55c\uae00v2/**", // Hangul + Latin
+      "caf\u00e9/**", // precomposed accent
+      "cafe\u0301/**", // combining accent
+      "src/\u65e5\u672c\u8a9e_ja/*.md", // Han + Latin
+      "\u3072\u3089\u304c\u306a\u30ab\u30bf\u30ab\u30ca\u6f22\u5b57-x/**", // Japanese mix
+      "\u3105\u3106\u6f22x/**", // Bopomofo + Han + Latin
+    ]) {
+      expect(validateGlob(ok), ok).toBeNull();
+    }
+    // Digits and punctuation belong to no script; Greek and Cyrillic still do not mix.
+    expect(validateGlob("a1_b-2/**")).toBeNull();
+    expect(validateGlob("\u0440\u03bf/**")).toBe(9);
+    // Hangul with Hiragana is not a permitted mix.
+    expect(validateGlob("\ud55c\u3072/**")).toBe(9);
+  });
+
+  it("U-PG-23 mixing is judged per segment", () => {
+    expect(
+      validateGlob("\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u043e/docs/**"),
+    ).toBeNull();
+    expect(
+      validateGlob("docs/\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u043e/**"),
+    ).toBeNull();
+    expect(validateGlob("docs/\u0440\u0443k/**")).toBe(9);
+  });
+
+  it("U-PG-24 a path equal to the glob text matches as in picomatch, and the comparison is charged", () => {
+    for (const [glob, path] of [
+      ["/[0-9]", "[0-9]"],
+      ["[0-9]", "[0-9]"],
+      ["[0-9]", "**/[0-9]"],
+      ["/./a", "./a"],
+      ["./a", "./a"],
+      ["/a?", "a?"],
+    ] as const) {
+      if (validateGlob(glob) !== null) continue;
+      for (const nocase of [true, false]) {
+        const expected = picomatch(normalizeGlob(glob), { dot: true, nocase })(path);
+        expect(globMatcher([glob], { nocase })(path), `${glob} ~ ${path} nocase=${nocase}`).toBe(
+          expected,
+        );
+      }
+    }
+    // `./a` is the case where the shortcut matters: the compiled pattern drops the `./`.
+    expect(globMatcher(["./a"])("./a")).toBe(true);
+    expect(picomatch("**/./a", { dot: true })("**/./a")).toBe(true);
+
+    // One unit per compared character when the lengths are equal (one unit otherwise).
+    const glob = `/${"a".repeat(150)}`;
+    const spent = (path: string) => {
+      const budget = new GlobBudget();
+      globMatcher([glob], { budget })(path);
+      return EVALUATION_FUEL - budget.fuel;
+    };
+    const sameLength = spent("b".repeat(150));
+    const otherLength = spent("b".repeat(149));
+    // The compared characters (150 against 1) plus one more character prepared.
+    expect(sameLength - otherLength).toBeGreaterThanOrEqual(149);
+  });
+
+  it("U-PG-25 the differential against picomatch still has no mismatch with text-equal paths", () => {
+    const rnd = mulberry32(2026);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)] as T;
+    const pieces = ["a", "b", "ab", "*", "?", "[ab]", "\u00e9", ".", "-", "x1"];
+    const seg = () =>
+      rnd() < 0.2
+        ? "**"
+        : Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => pick(pieces)).join("");
+    const glob = () => {
+      const g = Array.from({ length: 1 + Math.floor(rnd() * 3) }, seg).join("/");
+      return rnd() < 0.2 ? `/${g}` : g;
+    };
+    let compared = 0;
+    for (let i = 0; i < 2_000; i++) {
+      const g = glob();
+      if (validateGlob(g) !== null) continue;
+      for (const nocase of [true, false]) {
+        const pm = picomatch(normalizeGlob(g), { dot: true, nocase });
+        const mine = globMatcher([g], { nocase });
+        const n = normalizeGlob(g);
+        // A glob starting with `./` (not a repository path form) is only tried on its own text.
+        for (const p of n.startsWith("./") ? [n] : [n, `${n}/x`, `x/${n}`]) {
+          expect(mine(p), `${g} ~ ${p} nocase=${nocase}`).toBe(pm(p));
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(2_000);
+  });
+
+  it("U-PY-11 a non-ASCII glob is valid with one glob_non_ascii warning; the hash is unchanged", () => {
+    const text =
+      'version: 1\nrules:\n  - name: guide\n    match: { paths: ["docs/\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u043e/**"] }\n    require: { humans: 1 }\n';
+    const res = parse(text);
+    if (!res.ok) throw new Error(JSON.stringify(res.errors));
+    expect(res.warnings).toEqual([
+      {
+        code: "glob_non_ascii",
+        location: "rules[1].match.paths[1]",
+        line: 4,
+        column: 22,
+        // Eight distinct non-ASCII letters, capped at five.
+        codePoints: ["U+0440", "U+0443", "U+043A", "U+043E", "U+0432"],
+      },
+    ]);
+    expect(JSON.stringify(res.warnings)).not.toContain("\u0440\u0443\u043a");
+    // The hash is of the policy alone (this value was computed before step 6 too); a comment
+    // changes nothing.
+    expect(
+      parse(`# a comment\n${text}`).ok && (parse(`# a comment\n${text}`) as { hash: string }).hash,
+    ).toBe(res.hash);
+    expect(res.hash).toBe("c876d2138c082a10ddbebe91891ce21d084087138d4e86cc89f38dcf72fb60b7");
+    // sensitive_paths warn as well; an ASCII file has none.
+    const sens = parse('version: 1\nsensitive_paths:\n  - "docs/\u0440\u0443/**"\n');
+    expect(sens.ok && sens.warnings.map((w) => w.location)).toEqual(["sensitive_paths[1]"]);
+    expect(
+      parse(EXAMPLE.toString()).ok &&
+        (parse(EXAMPLE.toString()) as { warnings: unknown[] }).warnings,
+    ).toEqual([]);
+  });
+
+  it("U-PY-12 a lookalike glob in sensitive_paths is glob_invalid detail 9, with line and column", () => {
+    const errs = errorsOf('version: 1\nsensitive_paths:\n  - "s\u0435crets/**"\n');
+    expect(errs).toEqual([
+      { code: "glob_invalid", location: "sensitive_paths[1]", line: 3, column: 5, detail: 9 },
+    ]);
   });
 });

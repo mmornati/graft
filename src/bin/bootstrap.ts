@@ -1,3 +1,4 @@
+import { applyCronSchedules } from "../app/crons.js";
 import { buildAppRegistry } from "../app/registry.js";
 import { type Config, ConfigError, loadConfig } from "../config/index.js";
 import { systemClock } from "../core/clock.js";
@@ -9,7 +10,7 @@ import { createDb } from "../db/client.js";
 import { pendingMigrations } from "../db/migrator.js";
 import { createGitHubClientFactory } from "../github/client-factory.js";
 import { createLlmClient } from "../llm/index.js";
-import { feedbackSweepJob } from "../modules/intent/index.js";
+import { nonAsciiCodePoints } from "../policy/globs.js";
 import { createPgBossQueue, type PgBossJobQueue } from "../queue/queue.js";
 import { loadDotEnv } from "./env.js";
 
@@ -37,6 +38,16 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
       "glob matching hit its wall-clock guard: the work budget should have bound it",
     ),
   );
+  // T14: a non-ASCII glob is valid but easy to get wrong (lookalike letters); warn, never fail.
+  config.intentSensitivePaths.forEach((g, index) => {
+    const codePoints = nonAsciiCodePoints(g);
+    if (codePoints.length > 0) {
+      log.warn(
+        { index: index + 1, codePoints },
+        "GRAFT_INTENT_SENSITIVE_PATHS: glob has non-ASCII characters",
+      );
+    }
+  });
   const db = createDb(config.databaseUrl);
 
   const pending = await pendingMigrations(db);
@@ -57,10 +68,7 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
   });
   await queue.start();
   if (opts.supervise) {
-    // Only the worker owns the cron (D23). Switching the poll off removes an existing schedule.
-    if (config.feedbackPollCron)
-      await queue.schedule(feedbackSweepJob, config.feedbackPollCron, {});
-    else await queue.unschedule(feedbackSweepJob);
+    await applyCronSchedules(queue, config);
   }
 
   const github = createGitHubClientFactory({

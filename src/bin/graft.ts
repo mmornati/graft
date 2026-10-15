@@ -10,14 +10,23 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { LIMITS } from "../policy/constants.js";
-import { formatPolicyError, type PolicyError } from "../policy/errors.js";
+import {
+  formatPolicyError,
+  type PolicyError,
+  type PolicyWarning,
+  policyWarningMessage,
+} from "../policy/errors.js";
 import { policyJsonSchema } from "../policy/json-schema.js";
 import { parsePolicyText } from "../policy/parse.js";
 
 const USAGE = `usage:
   graft policy check <file> [--json]
   graft policy schema [--write | --check] [--path <file>]
+  graft pilot doctor|sync-reviewers|purge ...   (see the README, "Pilots and gate")
+  graft baseline | gate report | metrics rollup | incident add|list|remove ...
 `;
+
+const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics"]);
 
 const DEFAULT_SCHEMA_PATH = fileURLToPath(
   new URL("../../schema/graft.v1.schema.json", import.meta.url),
@@ -46,6 +55,10 @@ function errorLine(file: string, e: PolicyError): string {
   return `${file}:${e.line ?? 1}:${e.column ?? 1}: error ${e.code} ${e.location ?? "-"}: ${text.replace(/ \([a-z_]+\)$/, "")}`;
 }
 
+function warningLine(file: string, w: PolicyWarning): string {
+  return `${file}:${w.line ?? 1}:${w.column ?? 1}: warning ${w.code} ${w.location}: ${policyWarningMessage(w)}`;
+}
+
 async function check(args: string[], io: CliIo): Promise<number> {
   let parsed: { values: { json?: boolean | undefined }; positionals: string[] };
   try {
@@ -67,6 +80,7 @@ async function check(args: string[], io: CliIo): Promise<number> {
     return 2;
   }
   let errors: PolicyError[];
+  let warnings: PolicyWarning[] = [];
   let summary = "";
   if (!info.isFile()) {
     // A symlink, directory or other non-file (D7): the same answer as on the server.
@@ -87,17 +101,19 @@ async function check(args: string[], io: CliIo): Promise<number> {
     const res = parsePolicyText(bytes);
     if (res.ok) {
       errors = [];
+      warnings = res.warnings;
       summary = `${file}: OK (version 1, ${res.policy.rules.length} rules, ${res.policy.sensitivePaths.length} sensitive paths)\n`;
     } else {
       errors = res.errors;
     }
   }
   if (parsed.values.json) {
-    io.out(`${JSON.stringify({ ok: errors.length === 0, errors })}\n`);
-  } else if (errors.length === 0) {
-    io.out(summary);
+    io.out(`${JSON.stringify({ ok: errors.length === 0, errors, warnings })}\n`);
   } else {
-    for (const e of errors) io.out(`${errorLine(file, e)}\n`);
+    if (errors.length === 0) io.out(summary);
+    else for (const e of errors) io.out(`${errorLine(file, e)}\n`);
+    // Warnings never change the exit code; they follow the errors (or the OK line).
+    for (const w of warnings) io.out(`${warningLine(file, w)}\n`);
   }
   return errors.length === 0 ? 0 : 1;
 }
@@ -154,6 +170,12 @@ export async function main(argv: string[], io: CliIo = defaultIo): Promise<numbe
   const [group, command, ...rest] = argv;
   if (group === "policy" && command === "check") return check(rest, io);
   if (group === "policy" && command === "schema") return schema(rest, io);
+  if (group !== undefined && OPS_GROUPS.has(group)) {
+    // Loaded on demand: the operations half needs the database and the configuration, which
+    // `graft policy check` must run without (the static imports above stay free of them).
+    const ops = await import("./graft-ops.js");
+    return ops.main([group, ...(command === undefined ? [] : [command]), ...rest], io);
+  }
   io.err(USAGE);
   return 2;
 }

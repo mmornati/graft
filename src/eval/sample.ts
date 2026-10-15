@@ -1,4 +1,5 @@
 /** Stratified, seeded sampling (E12, T6). Pure. */
+import { type SizeBucket, sizeBucket } from "../core/size.js";
 import {
   type ChangedFile,
   computeRiskFloor,
@@ -8,15 +9,11 @@ import {
   TEST_GLOBS,
 } from "../modules/intent/index.js";
 
-export type SizeStratum = "S" | "M" | "L" | "XL";
+export type SizeStratum = SizeBucket;
 export type PathStratum = "sensitive" | "tests" | "docs" | "source";
 
-export function sizeStratum(changedLines: number): SizeStratum {
-  if (changedLines <= 50) return "S";
-  if (changedLines <= 300) return "M";
-  if (changedLines <= 1500) return "L";
-  return "XL";
-}
+/** The thresholds live in `src/core/size.ts` since step 6. */
+export const sizeStratum = sizeBucket;
 
 /** Rules R1 to R8: the path rules (R9 and later look at counts, patches or the listing). */
 const PATH_RULES = new Set([

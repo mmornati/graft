@@ -9,6 +9,7 @@ import {
   type RiskClass,
 } from "../../src/modules/intent/risk-floor.js";
 import { file } from "../helpers/intent-inputs.js";
+import { expectDuration } from "../helpers/perf.js";
 
 const cfg: FloorConfig = { extraSensitiveGlobs: [] };
 
@@ -338,7 +339,7 @@ describe("computeRiskFloor limits (review 2)", () => {
     );
     const started = performance.now();
     const r = floorOf(files, {}, { extraSensitiveGlobs: Array(50).fill(g) });
-    expect(performance.now() - started).toBeLessThan(2_000);
+    expectDuration(performance.now() - started, 2_000);
     expect(r.floor).toBe("sensitive");
     expect(rules(r)).toContain("glob_budget");
     expect(rules(r)).not.toContain("listing_truncated");

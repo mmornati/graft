@@ -274,10 +274,16 @@ describe("feedback sweep", () => {
         .returning("id")
         .executeTakeFirstOrThrow();
       if (o.card) {
-        await sql`insert into intent_cards (change_id, head_sha, prompt_version, input_hash, status, goal, risk_class, risk_floor, verifier_status,
+        const shownAt = new Date(FIXED_NOW.getTime() - (o.publishedAgoDays ?? 1) * day);
+        const card = await sql<{
+          id: string;
+        }>`insert into intent_cards (change_id, head_sha, prompt_version, input_hash, status, goal, risk_class, risk_floor, verifier_status,
             files_total, files_listed, files_full, files_partial, files_omitted, lines_added, lines_deleted, inputs_truncated, published_at)
           values (${row.id}, ${fakeSha(n)}, 'v', ${"c".repeat(64)}, 'ok', 'g', 'logic', 'trivial', 'agree', 1, 1, 1, 0, 0, 1, 0, false,
-            ${new Date(FIXED_NOW.getTime() - (o.publishedAgoDays ?? 1) * day)})`.execute(t.db);
+            ${shownAt}) returning id`.execute(t.db);
+        // Since step 6 the sweep windows on the last display, not on `published_at`.
+        await sql`insert into intent_displays (change_id, card_id, status, shown_at)
+          values (${row.id}, ${card.rows[0]?.id as string}, 'ok', ${shownAt})`.execute(t.db);
       }
       return row.id;
     };
@@ -301,6 +307,36 @@ describe("feedback sweep", () => {
     expect(await sweepFeedback(ctx)).toBe(0);
     const later = { ...ctx, clock: { now: () => new Date(FIXED_NOW.getTime() + 900_000) } };
     expect(await sweepFeedback(later)).toBe(2);
+  });
+});
+
+describe("feedback sweep window (step 6)", () => {
+  it("I-FB-11 a card first shown 40 days ago and shown again yesterday (A to B to A) is polled", async () => {
+    const day = 86_400_000;
+    await upsertChangeFromPull(t.db, REPO_ID, makePull() as never, FIXED_NOW);
+    const ch = await change();
+    const insertCard = async (hash: string, publishedDaysAgo: number) =>
+      (
+        await sql<{
+          id: string;
+        }>`insert into intent_cards (change_id, head_sha, prompt_version, input_hash, status, goal, risk_class, risk_floor, verifier_status,
+          files_total, files_listed, files_full, files_partial, files_omitted, lines_added, lines_deleted, inputs_truncated, published_at)
+          values (${ch.id}, ${HEAD_SHA}, 'v', ${hash.repeat(64)}, 'ok', 'g', 'logic', 'trivial', 'agree', 1, 1, 1, 0, 0, 1, 0, false,
+          ${new Date(FIXED_NOW.getTime() - publishedDaysAgo * day)}) returning id`.execute(t.db)
+      ).rows[0]?.id as string;
+    const a = await insertCard("a", 40);
+    const b = await insertCard("b", 35);
+    const display = (cardId: string, daysAgo: number) =>
+      sql`insert into intent_displays (change_id, card_id, status, shown_at)
+        values (${ch.id}, ${cardId}, 'ok', ${new Date(FIXED_NOW.getTime() - daysAgo * day)})`.execute(
+        t.db,
+      );
+    await display(a, 40);
+    await display(b, 35);
+    // Windowing on the cards' first display (the old rule) would see 35 days and skip this change.
+    expect(await sweepFeedback(jobContext(t))).toBe(0);
+    await display(a, 1);
+    expect(await sweepFeedback(jobContext(t))).toBe(1);
   });
 });
 

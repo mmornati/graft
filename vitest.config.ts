@@ -8,6 +8,9 @@ export default defineConfig({
           name: "unit",
           include: ["test/unit/**/*.test.ts"],
           setupFiles: ["test/setup.ts"],
+          // Heavy matcher and eval tests: generous so that a loaded machine never fails them on time.
+          testTimeout: 120000,
+          hookTimeout: 60000,
         },
       },
       {

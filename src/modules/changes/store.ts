@@ -114,3 +114,16 @@ export async function findChangeByHead(
     .orderBy("pr_number", "desc")
     .executeTakeFirst();
 }
+
+export async function getChangeByNumber(
+  ex: Executor,
+  repositoryId: number,
+  prNumber: number,
+): Promise<Change | undefined> {
+  return ex
+    .selectFrom("changes")
+    .selectAll()
+    .where("repository_id", "=", repositoryId)
+    .where("pr_number", "=", prNumber)
+    .executeTakeFirst();
+}

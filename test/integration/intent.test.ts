@@ -776,6 +776,22 @@ describe("review 1: spend, display time, retry notice", () => {
     expect(await tokensUsedToday(t.db, REPO_ID + 1, day2)).toBe(0);
   });
 
+  it("I-INT-24 the ledger row carries the cost of the run, or NULL when a model is unpriced", async () => {
+    expect(await runJob()).toBe("published");
+    // Sensitive floor (package.json): strong writer + verifier, 1,000 in / 100 out each, Sonnet.
+    const [row] = await t.db.selectFrom("intent_spend").selectAll().execute();
+    expect(row?.llm_calls).toBe(2);
+    expect(Number(row?.cost_usd)).toBe(0.006);
+
+    await truncateAll(t.db);
+    await seedWorld(t.db);
+    current = scenarioLlm({ writer: { ...writerReply(), model: "claude-unknown-9" } });
+    expect(await runJob()).toBe("published");
+    const [unpriced] = await t.db.selectFrom("intent_spend").selectAll().execute();
+    expect(unpriced?.tokens).toBeGreaterThan(0);
+    expect(unpriced?.cost_usd).toBeNull();
+  });
+
   it("I-INT-20 the display time is taken inside the lock, after the model calls", async () => {
     let n = 0;
     const ctx = {

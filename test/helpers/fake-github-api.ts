@@ -78,6 +78,13 @@ export function createFakeGitHubApi(
     contents: new Map<string, Map<string, FakeContent>>(),
     /** `pulls.listReviews`, oldest first. */
     reviews: new Map<number, FakeReview[]>(),
+    /** `issues.listEventsForTimeline`, oldest first, in the API's shape (step 6). */
+    timelines: new Map<number, Record<string, unknown>[]>(),
+    /** `pulls.listRequestedReviewers` (step 6). */
+    requestedReviewers: new Map<
+      number,
+      { users: { id: number; login: string; type: string }[]; teams: { slug: string }[] }
+    >(),
     /** Reactions per comment id. */
     reactions: new Map<number, FakeReaction[]>(),
     comments: [] as FakeComment[],
@@ -197,12 +204,11 @@ export function createFakeGitHubApi(
     if (is("GET", /^\/pulls$/)) {
       const wantState = url.searchParams.get("state") ?? "open";
       const direction = url.searchParams.get("direction") === "asc" ? 1 : -1;
+      // `sort=created` orders by creation time (step 6); the default here stays `updated_at`.
+      const key = url.searchParams.get("sort") === "created" ? "created_at" : "updated_at";
       const all = [...state.pulls.values()]
         .filter((p) => wantState === "all" || p.state === wantState)
-        .sort(
-          (a, b) =>
-            direction * (a.updated_at < b.updated_at ? -1 : a.updated_at > b.updated_at ? 1 : 0),
-        );
+        .sort((a, b) => direction * (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0));
       if (state.listPageSize !== null) url.searchParams.set("per_page", String(state.listPageSize));
       return paged(all, url, path);
     }
@@ -221,6 +227,17 @@ export function createFakeGitHubApi(
     if (m) {
       const all = state.files.get(Number(m[1]));
       return all ? paged(all.slice(0, 3000), url, path) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/pulls\/(\d+)\/requested_reviewers$/);
+    if (m) {
+      const n = Number(m[1]);
+      if (!state.pulls.has(n)) return json(404, { message: "Not Found" });
+      return json(200, state.requestedReviewers.get(n) ?? { users: [], teams: [] });
+    }
+    m = is("GET", /^\/issues\/(\d+)\/timeline$/);
+    if (m) {
+      const all = state.timelines.get(Number(m[1]));
+      return all ? paged(all, url, path) : json(404, { message: "Not Found" });
     }
     m = is("GET", /^\/pulls\/(\d+)\/reviews$/);
     if (m) return paged(state.reviews.get(Number(m[1])) ?? [], url, path);

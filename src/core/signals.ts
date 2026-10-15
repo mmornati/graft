@@ -2,11 +2,13 @@
  * Cross-module signals (D15). The policy module imports intent and provenance, so they cannot
  * import it back; instead they emit a signal after a successful publish and any module may
  * listen. The registry collects the listeners from the `signalListeners` export of each module.
+ * Step 6 adds `feedback_recorded` (intent emits it after writing votes; the pilot module listens
+ * to sync reviewer eligibility; policy ignores it).
  */
 import type { JobContext } from "./context.js";
 
 export interface ChangeSignal {
-  kind: "intent_published" | "provenance_published";
+  kind: "intent_published" | "provenance_published" | "feedback_recorded";
   installationId: number;
   repositoryId: number;
   owner: string;

@@ -158,6 +158,84 @@ describe("webhook receiver (real Postgres + pg-boss)", () => {
     expect(await countJobs(t.db)).toBe(2);
   });
 
+  it("I-Q-6 github.webhook jobs are deleted 1 hour after they finish, other queues keep 7 days, and dedup does not need the old job", async () => {
+    const retention = async () =>
+      Object.fromEntries(
+        (
+          await sql<{ name: string; deletion_seconds: number }>`
+            select name, deletion_seconds from pgboss.queue
+            where name in ('github.webhook', 'intent.generate', 'pilot.reviewers.sync')`.execute(
+            t.db,
+          )
+        ).rows.map((r) => [r.name, r.deletion_seconds]),
+      );
+    expect(await retention()).toEqual({
+      "github.webhook": 3600,
+      "intent.generate": 604800,
+      "pilot.reviewers.sync": 604800,
+    });
+
+    // A job takes its queue's retention when it is inserted.
+    expect((await postFixture(server, "installation.created", "wh-q6")).statusCode).toBe(202);
+    const mine = await sql<{ id: string; deletion_seconds: number }>`
+      select id, deletion_seconds from pgboss.job where name = 'github.webhook'`.execute(t.db);
+    expect(mine.rows.map((r) => r.deletion_seconds)).toEqual([3600]);
+
+    // Jobs created before the change carry the old 7 days; the next start tightens them.
+    const legacy = (name: string, state: string, minutesAgo: number) =>
+      sql`insert into pgboss.job (name, data, state, deletion_seconds, completed_on)
+        values (${name}, '{"payload":{"pull_request":{"title":"legacy"}}}'::jsonb, ${state}::pgboss.job_state, 604800,
+          now() - ${minutesAgo} * interval '1 minute')`.execute(t.db);
+    await legacy("github.webhook", "completed", 120);
+    await legacy("github.webhook", "failed", 120);
+    await legacy("github.webhook", "completed", 30);
+    await legacy("intent.generate", "completed", 120);
+    // Our own job finished two hours ago.
+    await sql`update pgboss.job set state = 'completed', completed_on = now() - interval '2 hours'
+      where id = ${mine.rows[0]?.id as string}`.execute(t.db);
+
+    const q = createPgBossQueue({
+      connectionString: t.deps.config.databaseUrl,
+      schema: t.deps.config.pgbossSchema,
+      registry: t.deps.registry,
+      log: t.deps.log,
+      supervise: true,
+    });
+    await q.start();
+    try {
+      const webhookRetention = await sql<{ n: string }>`
+        select count(*)::text as n from pgboss.job where name = 'github.webhook' and deletion_seconds <> 3600`.execute(
+        t.db,
+      );
+      expect(webhookRetention.rows[0]?.n).toBe("0");
+      const other = await sql<{ deletion_seconds: number }>`
+        select deletion_seconds from pgboss.job where name = 'intent.generate'`.execute(t.db);
+      expect(other.rows.map((r) => r.deletion_seconds)).toEqual([604800]);
+
+      await q.boss.supervise("github.webhook");
+      await q.boss.supervise("intent.generate");
+      const left = await sql<{ name: string; state: string }>`
+        select name, state::text from pgboss.job order by name, completed_on`.execute(t.db);
+      // Only the webhook job that finished 30 minutes ago and the intent job (7 days) are left.
+      expect(left.rows).toEqual([
+        { name: "github.webhook", state: "completed" },
+        { name: "intent.generate", state: "completed" },
+      ]);
+    } finally {
+      await q.stop();
+    }
+
+    // The job of delivery wh-q6 is gone, but the delivery row is not: a redelivery is a duplicate.
+    expect(await deliveries()).toHaveLength(1);
+    const again = await postFixture(server, "installation.created", "wh-q6");
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual({ status: "duplicate" });
+    const jobs = await sql<{ data: { deliveryId?: string } }>`
+      select data from pgboss.job where name = 'github.webhook'`.execute(t.db);
+    expect(jobs.rows.some((r) => r.data.deliveryId === "wh-q6")).toBe(false);
+    expect(await deliveries()).toHaveLength(1);
+  });
+
   it("I-Q-3 a changed job option is applied to an existing queue on the next start", async () => {
     const mk = (retryLimit: number) =>
       defineJob({

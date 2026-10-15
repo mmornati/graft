@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+#
+# Starter policy for an infrastructure or platform repository (Terraform, Kubernetes, CI).
+# Copy it to `graft.yaml` on the default branch through a normal reviewed pull request, replace
+# the paths and team slugs with your own, and check it with `pnpm graft policy check graft.yaml`.
+# In Phase 0 Graft only REPORTS what it would do; nothing here blocks or approves a pull request.
+version: 1
+
+sensitive_paths:
+  - "infra/**"
+  - "terraform/**"
+  - ".github/workflows/**"
+  - "secrets/**"
+
+default:
+  require: { humans: 1, team: platform }
+
+rules:
+  # Every infrastructure path needs the platform team.
+  - name: infra-needs-platform
+    match: { paths: ["infra/**", "terraform/**", "k8s/**", ".github/workflows/**"] }
+    require: { humans: 1, team: platform }
+
+  # Agents never edit secrets.
+  - name: no-agent-secrets
+    match: { paths: ["secrets/**"], author: agent }
+    block: true
+
+  # An agent touching production environments needs two people.
+  - name: agent-production
+    match: { paths: ["**/prod/**"], author: agent }
+    require: { humans: 2, team: platform }
+
+  # Documentation-only changes rated trivial need no human.
+  - name: docs-only
+    match: { risk: trivial, only_paths: ["docs/**", "*.md"] }
+    approve: auto

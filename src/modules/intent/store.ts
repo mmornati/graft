@@ -146,9 +146,10 @@ export async function saveCard(
   const u = o.result.usage;
   const tokens = u.inputTokens + u.outputTokens + u.cacheWriteTokens;
   if (tokens > 0) {
+    // cost_usd is fixed at spend time from each call's `response.model`; NULL = unpriced.
     await sql`
-      insert into intent_spend (repository_id, change_id, tokens, llm_calls, spent_at)
-      select ch.repository_id, ch.id, ${tokens}, ${u.calls}, ${o.now}
+      insert into intent_spend (repository_id, change_id, tokens, llm_calls, spent_at, cost_usd)
+      select ch.repository_id, ch.id, ${tokens}, ${u.calls}, ${o.now}, ${o.result.costUsd ?? null}
       from changes ch where ch.id = ${o.changeId}`.execute(ex);
   }
   const row = await ex
@@ -223,7 +224,9 @@ export async function publishedCheckRunForHead(
 
 /**
  * Record that `cardId` is now on screen. `now` must be taken inside the change lock, right
- * before this call: it is the moment the card became visible. `published_at` keeps the first
+ * AFTER the comment write (since step 4): it is the moment the card became visible.
+ * `shown_at` is our clock a few hundred ms after GitHub accepted the write; GitHub's `created_at`
+ * on reactions can be skewed against it by up to clock skew, which is negligible for attribution. `published_at` keeps the first
  * display; every change of what is shown (another card, or the same card in another status) adds
  * a row to `intent_displays`, which is what reactions are attributed by.
  */
@@ -421,4 +424,91 @@ export async function feedbackSummary(
     cards: { rated, accurate, inaccurate },
     accuracy: rated === 0 ? null : accurate / rated,
   };
+}
+
+export interface EffectiveVote {
+  cardId: string;
+  changeId: string;
+  repositoryId: number;
+  installationId: number;
+  userId: number;
+  userLogin: string;
+  verdict: "up" | "down";
+  source: "reaction" | "check_action";
+  reactedAt: Date;
+  isPrAuthor: boolean;
+  cardStatus: "ok" | "unavailable";
+}
+
+/**
+ * Per (card, user) the vote with the latest `reactedAt` across sources; a tie goes to
+ * `check_action` (as `feedbackSummary`). Pure: the input is not mutated.
+ */
+export function pickEffectiveVotes(votes: readonly EffectiveVote[]): EffectiveVote[] {
+  const best = new Map<string, EffectiveVote>();
+  for (const v of votes) {
+    const key = `${v.cardId}:${v.userId}`;
+    const cur = best.get(key);
+    if (
+      !cur ||
+      v.reactedAt > cur.reactedAt ||
+      (v.reactedAt.getTime() === cur.reactedAt.getTime() && v.source < cur.source)
+    ) {
+      best.set(key, v);
+    }
+  }
+  return [...best.values()];
+}
+
+/**
+ * Effective vote per (card, user) = latest `reacted_at` across sources (ties: `check_action`
+ * first, as `feedbackSummary`); then filtered to `reactedAt` in `[since, until)`. The window
+ * applies to the effective vote, so a vote replaced by a newer one outside the window is gone.
+ */
+export async function effectiveVotes(
+  ex: Executor,
+  o: { installationIds: number[]; since: Date; until: Date },
+): Promise<EffectiveVote[]> {
+  if (o.installationIds.length === 0) return [];
+  const res = await sql<{
+    card_id: string;
+    change_id: string;
+    repository_id: number;
+    installation_id: number;
+    user_id: number;
+    user_login: string;
+    verdict: "up" | "down";
+    source: "reaction" | "check_action";
+    reacted_at: Date;
+    is_pr_author: boolean;
+    card_status: "ok" | "unavailable";
+  }>`
+    select f.card_id, f.change_id, ch.repository_id, r.installation_id, f.user_id, f.user_login,
+      f.verdict, f.source, f.reacted_at, f.is_pr_author, c.status as card_status
+    from intent_feedback f
+    join intent_cards c on c.id = f.card_id
+    join changes ch on ch.id = f.change_id
+    join repositories r on r.id = ch.repository_id
+    where r.installation_id in (${sql.join(o.installationIds)})`.execute(ex);
+  const all: EffectiveVote[] = res.rows.map((r) => ({
+    cardId: r.card_id,
+    changeId: r.change_id,
+    repositoryId: Number(r.repository_id),
+    installationId: Number(r.installation_id),
+    userId: Number(r.user_id),
+    userLogin: r.user_login,
+    verdict: r.verdict,
+    source: r.source,
+    reactedAt: r.reacted_at,
+    isPrAuthor: r.is_pr_author,
+    cardStatus: r.card_status,
+  }));
+  return pickEffectiveVotes(all)
+    .filter((v) => v.reactedAt >= o.since && v.reactedAt < o.until)
+    .sort(
+      (a, b) =>
+        a.reactedAt.getTime() - b.reactedAt.getTime() ||
+        a.cardId.localeCompare(b.cardId) ||
+        a.userId - b.userId,
+    );
 }
