@@ -4,6 +4,7 @@ import { withChangeLock } from "../../db/locks.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { toJobError } from "../../github/errors.js";
 import { upsertManagedSection } from "../../github/managed-comment.js";
+import { resolveBaseCommit } from "../../policy/load.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
@@ -116,13 +117,30 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   }
 
   // 4. Inputs.
-  const settings = await intentRepoSettings(ctx, {
-    repositoryId: data.repositoryId,
-    installationId: data.installationId,
-    owner: data.owner,
-    repo: data.repo,
-    baseSha: pull.base.sha ?? pull.base.ref,
-  });
+  let settings: Awaited<ReturnType<typeof intentRepoSettings>>;
+  try {
+    // The BASE commit, never the head (D3): a PR cannot edit the policy that judges it.
+    const baseSha =
+      pull.base.sha ??
+      (await resolveBaseCommit(octokit, {
+        owner: data.owner,
+        repo: data.repo,
+        baseRef: pull.base.ref,
+      }));
+    settings = await intentRepoSettings(
+      ctx,
+      {
+        repositoryId: data.repositoryId,
+        installationId: data.installationId,
+        owner: data.owner,
+        repo: data.repo,
+        baseSha,
+      },
+      octokit,
+    );
+  } catch (err) {
+    throw toJobError(err, "read graft.yaml");
+  }
   let taskIssueNumber: number | null = null;
   if (change.task_id) {
     const task = await ctx.db
@@ -328,6 +346,22 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
     return true;
   });
   if (!published) return done("stale", { changeId: change.id, reason: "before publish" });
+
+  // D15: tell other modules (policy) that a card is on screen. Outside the lock.
+  await ctx.signals.emit(
+    {
+      kind: "intent_published",
+      installationId: data.installationId,
+      repositoryId: data.repositoryId,
+      owner: data.owner,
+      repo: data.repo,
+      prNumber: data.prNumber,
+      changeId: change.id,
+      headSha: pull.head.sha,
+      atMs: ctx.clock.now().getTime(),
+    },
+    ctx,
+  );
 
   const view = rowToView(card);
   return done(cached ? "cached" : "published", {

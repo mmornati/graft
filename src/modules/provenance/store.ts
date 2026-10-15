@@ -1,4 +1,5 @@
 import type { Selectable, Transaction } from "kysely";
+import type { Db } from "../../db/client.js";
 import type { Database, FieldSource, ProvenanceFieldName } from "../../db/schema.js";
 import type { Change } from "../changes/index.js";
 import type { ProvenanceResult } from "./compute.js";
@@ -137,7 +138,7 @@ export async function persistProvenance(
 export type ChangeProvenanceRow = Selectable<Database["change_provenance"]>;
 
 export async function getChangeProvenance(
-  tx: Tx,
+  tx: Tx | Db,
   changeId: string,
 ): Promise<ChangeProvenanceRow | undefined> {
   return tx

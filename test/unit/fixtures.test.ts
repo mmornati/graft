@@ -19,14 +19,18 @@ const EXPECTED = [
   "ping",
   "pull_request.closed",
   "pull_request.edited",
+  "pull_request.labeled",
   "pull_request.opened",
   "pull_request.reopened",
   "pull_request.synchronize",
+  "pull_request_review.dismissed",
+  "pull_request_review.submitted",
+  "push",
 ];
 
 // Definitions are named "<event>$<action>" ("ping$event" for ping).
 const definitionFor = (name: string): string =>
-  name === "ping" ? "ping$event" : name.replace(".", "$");
+  name === "ping" || name === "push" ? `${name}$event` : name.replace(".", "$");
 
 describe("webhook fixtures", () => {
   it("has exactly the fixtures from the spec", () => {
@@ -63,5 +67,15 @@ describe("webhook fixtures", () => {
       walk(payload);
       for (const fn of fullNames) expect(fn, name).toMatch(/^graft-sandbox\/sample-(ts|py)$/);
     }
+  });
+
+  it("U-FIX-3 the push fixture targets the PR fixture's base branch, so the smoke fan-out finds the PR", () => {
+    const push = loadFixture("push").payload as { ref: string; repository: { id: number } };
+    const opened = loadFixture("pull_request.opened").payload as {
+      pull_request: { base: { ref: string } };
+      repository: { id: number };
+    };
+    expect(push.ref).toBe(`refs/heads/${opened.pull_request.base.ref}`);
+    expect(push.repository.id).toBe(opened.repository.id);
   });
 });

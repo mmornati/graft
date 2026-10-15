@@ -30,6 +30,7 @@ export interface FakePull {
   draft: boolean;
   commits: number;
   user: { login: string; type: string } | null;
+  labels: { name: string }[];
   head: { sha: string };
   base: {
     ref: string;
@@ -57,6 +58,7 @@ export function makePull(overrides: Partial<FakePull> = {}): FakePull {
     draft: false,
     commits: 1,
     user: { login: "graft-dev", type: "User" },
+    labels: [],
     head: { sha: HEAD_SHA },
     base: {
       ref: "main",
@@ -173,4 +175,47 @@ export function makeReaction(
     created_at: createdAt,
     user: { id: 5_000_000 + id, login, type },
   };
+}
+
+export interface FakeReview {
+  id: number;
+  user: { id: number; login: string; type: string } | null;
+  state: string;
+  commit_id: string | null;
+  submitted_at: string | null;
+}
+
+/** A review of `pulls.listReviews`. Defaults: approved on the PR head, by a human reviewer. */
+export function makeReview(o: {
+  id: number;
+  login?: string;
+  userId?: number;
+  type?: string;
+  state?: string;
+  commitId?: string | null;
+  submittedAt?: string;
+}): FakeReview {
+  const login = o.login ?? "reviewer-1";
+  return {
+    id: o.id,
+    user: { id: o.userId ?? 5_000_000 + o.id, login, type: o.type ?? "User" },
+    state: o.state ?? "APPROVED",
+    commit_id: o.commitId === undefined ? HEAD_SHA : o.commitId,
+    submitted_at: o.submittedAt ?? `2026-10-14T11:${String(o.id % 60).padStart(2, "0")}:00Z`,
+  };
+}
+
+/** What the fake `repos.getContent` serves for one path at one ref. */
+export type FakeContent =
+  | { kind: "file"; text: string | Uint8Array; path?: string; omitSha?: boolean }
+  | { kind: "dir" }
+  | { kind: "symlink"; target: string }
+  | { kind: "submodule" }
+  /** A file above the 1 MB limit: the API answers with `encoding: "none"` and no content. */
+  | { kind: "large"; size: number }
+  /** A file whose reported size is `size` while its content is `text` (for the size guard). */
+  | { kind: "sized"; text: string; size: number };
+
+export function makeContent(kind: FakeContent): FakeContent {
+  return kind;
 }

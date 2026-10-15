@@ -224,6 +224,24 @@ export async function refreshProvenance(data: RefreshData, ctx: JobContext): Pro
     return "published" as const;
   });
 
+  if (outcome === "published") {
+    // D15: tell other modules (policy) that provenance is stored. Outside the lock.
+    await ctx.signals.emit(
+      {
+        kind: "provenance_published",
+        installationId: data.installationId,
+        repositoryId: data.repositoryId,
+        owner: data.owner,
+        repo: data.repo,
+        prNumber: data.prNumber,
+        changeId: change.id,
+        headSha: pull.head.sha,
+        atMs: ctx.clock.now().getTime(),
+      },
+      ctx,
+    );
+  }
+
   return done(outcome, {
     changeId: change.id,
     headSha: pull.head.sha,

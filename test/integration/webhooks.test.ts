@@ -67,14 +67,15 @@ describe("webhook receiver (real Postgres + pg-boss)", () => {
     expect(await countJobs(t.db)).toBe(1);
   });
 
-  it("I-WH-4 ping and a pull_request.labeled are ignored; pull_request.opened is enqueued", async () => {
+  it("I-WH-4 ping and a pull_request.assigned are ignored; pull_request.opened is enqueued", async () => {
     const ping = await postFixture(server, "ping", "wh-4a");
     expect(ping.statusCode).toBe(202);
     expect(ping.json()).toEqual({ status: "ignored" });
 
     const opened = loadFixture("pull_request.opened");
-    const labeled = JSON.stringify({ ...opened.payload, action: "labeled" });
-    const lab = await postRaw(server, "pull_request", labeled, "wh-4b");
+    // `labeled` became a handled action in step 5 (graft/policy); `assigned` is still ignored.
+    const assigned = JSON.stringify({ ...opened.payload, action: "assigned" });
+    const lab = await postRaw(server, "pull_request", assigned, "wh-4b");
     expect(lab.statusCode).toBe(202);
     expect(lab.json()).toEqual({ status: "ignored" });
 

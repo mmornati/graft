@@ -2,7 +2,9 @@ import { buildAppRegistry } from "../app/registry.js";
 import { type Config, ConfigError, loadConfig } from "../config/index.js";
 import { systemClock } from "../core/clock.js";
 import type { AppDeps } from "../core/context.js";
+import { setGlobBackstopHook } from "../core/glob.js";
 import { createLogger } from "../core/logger.js";
+import { createSignals } from "../core/signals.js";
 import { createDb } from "../db/client.js";
 import { pendingMigrations } from "../db/migrator.js";
 import { createGitHubClientFactory } from "../github/client-factory.js";
@@ -29,6 +31,12 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
     throw err;
   }
   const log = createLogger(config);
+  setGlobBackstopHook((what) =>
+    log.error(
+      { what },
+      "glob matching hit its wall-clock guard: the work budget should have bound it",
+    ),
+  );
   const db = createDb(config.databaseUrl);
 
   const pending = await pendingMigrations(db);
@@ -63,5 +71,7 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
 
   const llm = createLlmClient(config, log);
 
-  return { config, log, db, queue, github, llm, clock: systemClock, registry };
+  const signals = createSignals(registry.signalListeners);
+
+  return { config, log, db, queue, github, llm, clock: systemClock, registry, signals };
 }

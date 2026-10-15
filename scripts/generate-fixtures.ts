@@ -107,7 +107,7 @@ function at(root: unknown, instancePath: string): Record<string, unknown> | unde
 }
 
 function repair(name: string, payload: Record<string, unknown>): void {
-  const def = name === "ping" ? "ping$event" : name.replace(".", "$");
+  const def = name === "ping" || name === "push" ? `${name}$event` : name.replace(".", "$");
   const validate = ajv.getSchema(`root#/definitions/${def}`);
   if (!validate) throw new Error(`no schema for ${name}`);
   for (let i = 0; i < 25 && !validate(payload); i++) {
@@ -237,6 +237,79 @@ fixtures["pull_request.reopened"] = pick("pull_request", "reopened");
   pr.merged_at = pr.closed_at;
   pr.merged_by = pr.user;
   fixtures["pull_request.closed"] = p;
+}
+{
+  // Step 5: a label added to the PR fixture's pull request (clone `opened`, which keeps the head).
+  const p = pick("pull_request", "opened");
+  p.action = "labeled";
+  p.label = {
+    id: 3000001,
+    node_id: "LA_fake3000001",
+    url: "https://api.github.com/repos/graft-sandbox/sample-ts/labels/hotfix",
+    name: "hotfix",
+    color: "d73a4a",
+    default: false,
+    description: null,
+  };
+  fixtures["pull_request.labeled"] = p;
+}
+for (const action of ["submitted", "dismissed"] as const) {
+  // Step 5: a review on the PR fixture's pull request, on its head commit.
+  const p = pick("pull_request_review", action);
+  const pr = rewrite(fixtures["pull_request.opened"]?.pull_request) as Record<string, unknown>;
+  const review = p.review as Record<string, unknown>;
+  review.state = action === "submitted" ? "approved" : "dismissed";
+  review.commit_id = get(pr, "head.sha");
+  review.user = { ...(review.user as Record<string, unknown>), login: "reviewer-1", id: 5000001 };
+  // The review payload's pull_request has a slimmer schema: keep upstream's and move it onto
+  // the fixture PR's number and head.
+  const slim = p.pull_request as Record<string, unknown>;
+  slim.draft = false;
+  slim.number = get(pr, "number");
+  slim.id = get(pr, "id");
+  (slim.head as Record<string, unknown>).sha = get(pr, "head.sha");
+  (slim.head as Record<string, unknown>).ref = get(pr, "head.ref");
+  (slim.base as Record<string, unknown>).ref = get(pr, "base.ref");
+  (slim.base as Record<string, unknown>).sha = get(pr, "base.sha");
+  fixtures[`pull_request_review.${action}`] = p;
+}
+{
+  // Step 5: a push to the fixture PRs' base branch that modifies graft.yaml, so that the smoke
+  // test's fan-out finds the fixture PR (`policy:pr:...:master:...`).
+  const p = pick("push", undefined);
+  const openedPr = rewrite(fixtures["pull_request.opened"]?.pull_request) as Record<
+    string,
+    unknown
+  >;
+  p.ref = `refs/heads/${String(get(openedPr, "base.ref"))}`;
+  p.base_ref = null;
+  p.before = "b".repeat(40);
+  p.after = "a".repeat(40);
+  p.created = false;
+  p.deleted = false;
+  p.forced = false;
+  const who = {
+    name: "graft-dev",
+    email: "graft-dev@users.noreply.github.com",
+    username: "graft-dev",
+  };
+  p.commits = [
+    {
+      timestamp: "2026-10-14T11:30:00Z",
+      url: `https://github.com/graft-sandbox/sample-ts/commit/${"a".repeat(40)}`,
+      author: who,
+      committer: who,
+      id: "a".repeat(40),
+      tree_id: "c".repeat(40),
+      distinct: true,
+      message: "Tighten the policy",
+      added: [],
+      modified: ["graft.yaml"],
+      removed: [],
+    },
+  ];
+  p.head_commit = (p.commits as unknown[])[0];
+  fixtures.push = p;
 }
 fixtures["check_run.rerequested"] = pick("check_run", "rerequested");
 // A reviewer clicked "Card is accurate" on the graft/intent check (step 3).

@@ -6,6 +6,7 @@ import type { JobQueue } from "../queue/queue.js";
 import type { Registry } from "../webhooks/registry.js";
 import type { Clock } from "./clock.js";
 import type { Logger } from "./logger.js";
+import type { Signals } from "./signals.js";
 
 export interface JobContext {
   db: Db;
@@ -15,6 +16,7 @@ export interface JobContext {
   clock: Clock;
   config: Config;
   llm: LlmClient;
+  signals: Signals;
 }
 
 export interface AppDeps extends JobContext {

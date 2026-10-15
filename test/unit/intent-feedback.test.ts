@@ -2,6 +2,7 @@ import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import type { JobContext } from "../../src/core/context.js";
 import { createLogger } from "../../src/core/logger.js";
+import { noSignals } from "../../src/core/signals.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
 import { forbiddenLlm } from "../../src/llm/fake.js";
 import { attributeReactions, type ReactionInput } from "../../src/modules/intent/feedback.js";
@@ -146,6 +147,7 @@ describe("intent payload handling", () => {
         clock: fixedClock,
         config: testConfig(),
         llm: forbiddenLlm(),
+        signals: noSignals,
       },
       queue,
       calls,

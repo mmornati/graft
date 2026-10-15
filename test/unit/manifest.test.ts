@@ -13,7 +13,12 @@ describe("github app manifest", () => {
       pull_requests: "write",
       checks: "write",
     });
-    expect(manifest.default_events).toEqual(["check_run", "pull_request"]);
+    expect(manifest.default_events).toEqual([
+      "check_run",
+      "pull_request",
+      "pull_request_review",
+      "push",
+    ]);
     expect(manifest.public).toBe(false);
   });
 });

@@ -313,3 +313,34 @@ describe("combineRisk", () => {
     ).toEqual({ final: "sensitive", raisedBy: [] });
   });
 });
+
+describe("computeRiskFloor limits (review 2)", () => {
+  const long = `${"d/".repeat(600)}x.test.ts`; // over 1,024 characters
+  const many = `${Array(129).fill("d").join("/")}/x.test.ts`; // over 128 segments
+
+  it("U-RISK-20 R8 and R9 still tighten for a path over the limits", () => {
+    for (const p of [long, many]) {
+      expect(rules(floorOf([file(p, { status: "removed" })])), "removed").toContain("test_deleted");
+      expect(
+        rules(floorOf([file("src/x.py", { status: "renamed", previousPath: p })])),
+        "renamed away",
+      ).toContain("test_deleted");
+      expect(rules(floorOf([file(p, { additions: 2, deletions: 12 })])), "shrunk").toContain(
+        "test_shrunk",
+      );
+    }
+  });
+
+  it("U-RISK-21 a spent glob budget raises the floor to sensitive instead of passing", () => {
+    const g = `*${"a".repeat(44)}b?x*`;
+    const files = Array.from({ length: 1_000 }, (_, i) =>
+      file(`${"a".repeat(1_000)}b${String(i).padStart(23, "0")}`),
+    );
+    const started = performance.now();
+    const r = floorOf(files, {}, { extraSensitiveGlobs: Array(50).fill(g) });
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(r.floor).toBe("sensitive");
+    expect(rules(r)).toContain("glob_budget");
+    expect(rules(r)).not.toContain("listing_truncated");
+  });
+});

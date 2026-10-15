@@ -1,0 +1,5 @@
+version: 1
+sensitive_paths:
+  - !custom infra/**
+x: !!binary aGVsbG8=
+y: !!python/object {}

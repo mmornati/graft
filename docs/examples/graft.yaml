@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+version: 1
+
+# Extra paths that set the intent risk floor to `sensitive` (step 3 rule R7).
+sensitive_paths:
+  - services/billing/**
+  - "**/payments/**"
+
+# Used when no rule matches. Must be a `require`. Defaults to 1 human.
+default:
+  require: { humans: 1 }
+
+rules:
+  - name: docs-only
+    match: { risk: trivial, only_paths: ["docs/**", "*.md"] }
+    approve: auto
+
+  - name: trivial
+    match: { risk: trivial }
+    approve: auto
+
+  - name: infra-and-auth
+    match: { paths: ["infra/**", "**/auth/**"] }
+    require: { humans: 1, team: security }
+
+  - name: agent-sensitive
+    match: { author: agent, risk: sensitive }
+    require: { humans: 2 }
+
+  - name: no-agent-secrets
+    match: { paths: ["secrets/**"], author: agent }
+    block: true
+
+  - name: big-change
+    match: { size: { min_lines: 1000 } }
+    require: { humans: 2 }
+
+  - name: preview-agent
+    match: { agent: [codex-preview] }
+    require: { humans: 1, team: [platform, security] }
+
+  - name: hotfix
+    match: { labels: [hotfix] }
+    require: { humans: 1, team: oncall }

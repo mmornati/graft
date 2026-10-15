@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import {
   type FakeCommit,
+  type FakeContent,
   type FakeFile,
   type FakeIssue,
   type FakePull,
   type FakeReaction,
+  type FakeReview,
+  fakeSha,
   OWNER,
   REPO,
 } from "./github-builders.js";
@@ -31,6 +35,8 @@ export interface RecordedApiRequest {
   method: string;
   path: string;
   query: Record<string, string>;
+  /** The `ref` query parameter (contents requests), if any. */
+  ref: string | undefined;
   /** Parsed JSON body, if any. */
   body: Record<string, unknown> | undefined;
 }
@@ -49,6 +55,8 @@ export interface Blocker {
   reached: Promise<void>;
 }
 
+const sha1 = (text: string): string => createHash("sha1").update(text).digest("hex");
+
 /** An in-memory GitHub REST API for one repository (graft-sandbox/sample-ts). */
 export function createFakeGitHubApi(
   opts: { appId?: number; botLogin?: string; now?: () => number } = {},
@@ -64,6 +72,12 @@ export function createFakeGitHubApi(
     /** `pulls.listFiles`; at most 3,000 are served, like the real API. */
     files: new Map<number, FakeFile[]>(),
     issues: new Map<number, FakeIssue>(),
+    /** Branch tips served by `git/ref/heads/<branch>` (a missing branch is a 404). */
+    branches: new Map<string, string>([["main", fakeSha(0xba5e)]]),
+    /** `repos.getContent`: contents[ref][path]. A missing entry is a 404. */
+    contents: new Map<string, Map<string, FakeContent>>(),
+    /** `pulls.listReviews`, oldest first. */
+    reviews: new Map<number, FakeReview[]>(),
     /** Reactions per comment id. */
     reactions: new Map<number, FakeReaction[]>(),
     comments: [] as FakeComment[],
@@ -108,6 +122,58 @@ export function createFakeGitHubApi(
     }
     void path;
     return json(200, slice, links.length > 0 ? { link: links.join(", ") } : {});
+  }
+
+  function contentResponse(filePath: string, entry: FakeContent) {
+    const name = filePath.split("/").pop() ?? filePath;
+    const base = { name, path: filePath };
+    switch (entry.kind) {
+      case "dir":
+        return json(200, [
+          { type: "file", name: "inner.yaml", path: `${filePath}/inner.yaml`, size: 1 },
+        ]);
+      case "symlink":
+        return json(200, {
+          ...base,
+          type: "symlink",
+          target: entry.target,
+          size: entry.target.length,
+          sha: sha1(entry.target),
+        });
+      case "submodule":
+        return json(200, { ...base, type: "submodule", sha: sha1(filePath), size: 0 });
+      case "large":
+        return json(200, {
+          ...base,
+          type: "file",
+          encoding: "none",
+          size: entry.size,
+          content: "",
+          sha: sha1(`large:${filePath}`),
+        });
+      case "sized":
+        return json(200, {
+          ...base,
+          type: "file",
+          encoding: "base64",
+          size: entry.size,
+          content: Buffer.from(entry.text).toString("base64"),
+          sha: sha1(entry.text),
+        });
+      case "file": {
+        const bytes =
+          typeof entry.text === "string" ? Buffer.from(entry.text) : Buffer.from(entry.text);
+        return json(200, {
+          ...base,
+          ...(entry.path !== undefined ? { path: entry.path } : {}),
+          type: "file",
+          encoding: "base64",
+          size: bytes.byteLength,
+          content: bytes.toString("base64"),
+          ...(entry.omitSha ? {} : { sha: sha1(bytes.toString("latin1")) }),
+        });
+      }
+    }
   }
 
   async function route(method: string, url: URL, body: Record<string, unknown> | undefined) {
@@ -155,6 +221,26 @@ export function createFakeGitHubApi(
     if (m) {
       const all = state.files.get(Number(m[1]));
       return all ? paged(all.slice(0, 3000), url, path) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/pulls\/(\d+)\/reviews$/);
+    if (m) return paged(state.reviews.get(Number(m[1])) ?? [], url, path);
+    // Octokit percent-encodes the slash of `heads/main` ("heads%2Fmain"); GitHub accepts both.
+    m = is("GET", /^\/git\/ref\/heads(?:\/|%2F)(.+)$/i);
+    if (m) {
+      const branch = decodeURIComponent(m[1] as string);
+      const sha = state.branches.get(branch);
+      return sha === undefined
+        ? json(404, { message: "Not Found" })
+        : json(200, {
+            ref: `refs/heads/${branch}`,
+            object: { type: "commit", sha, url: `https://api.github.com/commit/${sha}` },
+          });
+    }
+    m = is("GET", /^\/contents\/(.+)$/);
+    if (m) {
+      const filePath = decodeURIComponent(m[1] as string);
+      const entry = state.contents.get(url.searchParams.get("ref") ?? "")?.get(filePath);
+      return entry ? contentResponse(filePath, entry) : json(404, { message: "Not Found" });
     }
     m = is("GET", /^\/issues\/(\d+)$/);
     if (m) {
@@ -257,6 +343,7 @@ export function createFakeGitHubApi(
       method,
       path: url.pathname,
       query: Object.fromEntries(url.searchParams),
+      ref: url.searchParams.get("ref") ?? undefined,
       body,
     };
     requests.push(record);

@@ -228,21 +228,40 @@ export interface IntentDisplaysTable {
   shown_at: Date;
 }
 
+/**
+ * Step 5 (spec §11). Rule indices, reason codes, PR paths (at most 5 per reason), counts, SHAs,
+ * logins and the policy hash. Never globs, rule names, team slugs or YAML text.
+ */
 export interface PolicyVerdictsTable {
   id: Generated<string>;
   change_id: string;
   head_sha: string;
-  policy_sha: string | null;
-  mode: "report" | "enforce";
-  status: "pending" | "pass" | "fail" | "blocked" | "error";
-  check_conclusion: "success" | "failure" | "neutral" | "action_required" | null;
+  base_ref: string;
+  policy_commit_sha: string;
+  /** NULL: no file (missing, directory). */
+  policy_file_sha: string | null;
+  policy_status: "ok" | "missing" | "invalid";
+  /** Set iff `policy_status` is `ok`. */
+  policy_hash: string | null;
+  mode: Generated<"report" | "enforce">;
+  outcome: "would_approve" | "would_require" | "would_block" | "no_policy" | "policy_invalid";
+  check_conclusion: Generated<"neutral" | "success" | "failure" | "action_required">;
   risk_class: RiskClass | null;
+  risk_final: Generated<boolean>;
+  risk_source: "card" | "card_unavailable" | "card_pending" | null;
+  author_kind: "agent" | "human" | "unknown" | null;
+  policy_file_changed: Generated<boolean>;
   rules_matched: Json<unknown[]>;
-  approvals_required: Json<Record<string, unknown>>;
-  approvals_present: Json<Record<string, unknown>>;
+  required: Json<Record<string, unknown>>;
+  approvals: Json<Record<string, unknown>>;
+  errors: Json<unknown[]>;
+  facts_hash: string;
+  facts_read_at: Date;
   check_run_id: number | null;
-  evaluated_at: Timestamp;
+  published_at: Date | null;
+  evaluated_at: Date;
   created_at: CreatedAt;
+  updated_at: Timestamp;
 }
 
 export interface GuardEventsTable {

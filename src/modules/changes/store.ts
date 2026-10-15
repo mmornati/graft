@@ -22,6 +22,7 @@ export interface LivePull {
   deletions: number;
   commits: number;
   user: { login: string; type: string } | null;
+  labels?: { name: string }[];
   head: { sha: string };
   base: {
     ref: string;

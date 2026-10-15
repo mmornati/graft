@@ -61,6 +61,7 @@ describe("database", () => {
       expect(rolled).toContain("0002_provenance");
       expect(rolled).toContain("0003_intent");
       expect(rolled).toContain("0004_intent_display_pending");
+      expect(rolled).toContain("0005_policy");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -74,6 +75,7 @@ describe("database", () => {
         "0002_provenance",
         "0003_intent",
         "0004_intent_display_pending",
+        "0005_policy",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -227,12 +229,22 @@ describe("database", () => {
       .values({
         change_id: change.id,
         head_sha: SHA,
-        policy_sha: null,
-        mode: "report",
-        status: "pass",
-        check_conclusion: "success",
+        base_ref: "main",
+        policy_commit_sha: SHA,
+        policy_file_sha: SHA,
+        policy_status: "ok",
+        policy_hash: HASH,
+        outcome: "would_require",
         risk_class: "logic",
+        risk_source: "card",
+        author_kind: "agent",
+        rules_matched: JSON.stringify([{ index: 1 }]),
+        required: JSON.stringify({ humans: 1 }),
+        facts_hash: HASH,
+        facts_read_at: now,
         check_run_id: null,
+        published_at: null,
+        evaluated_at: now,
       })
       .execute();
     await db
@@ -411,6 +423,8 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      const down5 = await migrator.migrateDown();
+      expect(down5.results?.[0]?.migrationName).toBe("0005_policy");
       const down4 = await migrator.migrateDown();
       expect(down4.results?.[0]?.migrationName).toBe("0004_intent_display_pending");
       const down3 = await migrator.migrateDown();
@@ -437,6 +451,7 @@ describe("database", () => {
         "0002_provenance",
         "0003_intent",
         "0004_intent_display_pending",
+        "0005_policy",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -448,6 +463,7 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0005_policy");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0004_intent_display_pending",
       );
@@ -472,7 +488,11 @@ describe("database", () => {
         "UNIQUE (change_id, head_sha, prompt_version)",
       ]);
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0003_intent", "0004_intent_display_pending"]);
+      expect(await migrateToLatest(db)).toEqual([
+        "0003_intent",
+        "0004_intent_display_pending",
+        "0005_policy",
+      ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
     expect(await tableNames(db)).toContain("intent_spend");
@@ -528,6 +548,7 @@ describe("database", () => {
       await expect(display("bogus")).rejects.toThrow(/check constraint/);
 
       // down: pending rows are deleted, the old constraint is back
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0005_policy");
       const down4 = await migrator.migrateDown();
       expect(down4.error).toBeUndefined();
       expect(down4.results?.[0]?.migrationName).toBe("0004_intent_display_pending");
@@ -546,6 +567,149 @@ describe("database", () => {
     }
     expect(await tableNames(db)).toContain("intent_displays");
     expect(await tableNames(db)).toContain("intent_spend");
+  });
+
+  it("I-DB-10 0005 applies; its rollback restores the 0001 policy_verdicts exactly; up again works", async () => {
+    const policyColumns = async () =>
+      (
+        await sql<{ column_name: string; is_nullable: string; data_type: string }>`
+          select column_name, is_nullable, data_type from information_schema.columns
+          where table_name = 'policy_verdicts' order by column_name`.execute(db)
+      ).rows.map((r) => `${r.column_name}:${r.data_type}:${r.is_nullable}`);
+    const policyConstraints = async () =>
+      (
+        await sql<{ def: string }>`
+          select pg_get_constraintdef(oid) as def from pg_constraint
+          where conrelid = 'policy_verdicts'::regclass and contype in ('c', 'u') order by 1`.execute(
+          db,
+        )
+      ).rows.map((r) => r.def);
+    const policyIndexes = async () =>
+      (
+        await sql<{ indexdef: string }>`
+          select indexdef from pg_indexes where tablename = 'policy_verdicts'
+          and indexname = 'policy_verdicts_change_idx' order by 1`.execute(db)
+      ).rows.map((r) => r.indexdef);
+
+    // Up: the new shape.
+    const upColumns = await policyColumns();
+    expect(upColumns).toContain("policy_file_sha:text:YES");
+    expect(upColumns).toContain("facts_read_at:timestamp with time zone:NO");
+    expect(await policyIndexes()).toEqual([
+      "CREATE INDEX policy_verdicts_change_idx ON public.policy_verdicts USING btree (change_id, facts_read_at DESC)",
+    ]);
+    const upConstraints = await policyConstraints();
+    expect(upConstraints.some((d) => d.startsWith("UNIQUE NULLS NOT DISTINCT"))).toBe(true);
+
+    const migrator = createMigrator(db);
+    try {
+      const down = await migrator.migrateDown();
+      expect(down.error).toBeUndefined();
+      expect(down.results?.[0]?.migrationName).toBe("0005_policy");
+      expect(await policyColumns()).toEqual(
+        [
+          "approvals_present:jsonb:NO",
+          "approvals_required:jsonb:NO",
+          "change_id:uuid:NO",
+          "check_conclusion:text:YES",
+          "check_run_id:bigint:YES",
+          "created_at:timestamp with time zone:NO",
+          "evaluated_at:timestamp with time zone:NO",
+          "head_sha:text:NO",
+          "id:uuid:NO",
+          "mode:text:NO",
+          "policy_sha:text:YES",
+          "risk_class:text:YES",
+          "rules_matched:jsonb:NO",
+          "status:text:NO",
+        ].sort(),
+      );
+      expect(await policyIndexes()).toEqual([
+        "CREATE INDEX policy_verdicts_change_idx ON public.policy_verdicts USING btree (change_id, evaluated_at DESC)",
+      ]);
+      expect((await policyConstraints()).some((d) => d.includes("'pass'"))).toBe(true);
+    } finally {
+      expect(await migrateToLatest(db)).toEqual(["0005_policy"]);
+    }
+    expect(await policyColumns()).toEqual(upColumns);
+    expect(await policyConstraints()).toEqual(upConstraints);
+  });
+
+  it("I-DB-10 policy_verdicts constraints: hash iff ok, one row per (change, head, file), neutral default", async () => {
+    await sql`insert into installations (id, account_id, account_login, account_type, repository_selection) values (1, 1, 'a', 'User', 'all')`.execute(
+      db,
+    );
+    await sql`insert into repositories (id, installation_id, full_name, private) values (2, 1, 'a/b', false)`.execute(
+      db,
+    );
+    const change = await db
+      .insertInto("changes")
+      .values({
+        repository_id: 2,
+        pr_number: 1,
+        pr_node_id: "n",
+        task_id: null,
+        head_sha: SHA,
+        base_ref: "main",
+        author_login: "x",
+        state: "open",
+        merge_commit_sha: null,
+        opened_at: new Date(),
+        closed_at: null,
+        merged_at: null,
+        pr_updated_at: null,
+        graft_comment_id: null,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const row = (over: Record<string, unknown> = {}) => ({
+      change_id: change.id,
+      head_sha: SHA,
+      base_ref: "main",
+      policy_commit_sha: SHA,
+      policy_file_sha: null,
+      policy_status: "missing" as const,
+      policy_hash: null,
+      outcome: "no_policy" as const,
+      risk_class: null,
+      risk_source: null,
+      author_kind: null,
+      facts_hash: HASH,
+      facts_read_at: new Date(),
+      check_run_id: null,
+      published_at: null,
+      evaluated_at: new Date(),
+      ...over,
+    });
+    const inserted = await db
+      .insertInto("policy_verdicts")
+      .values(row())
+      .returning(["check_conclusion", "mode"])
+      .executeTakeFirstOrThrow();
+    expect(inserted).toEqual({ check_conclusion: "neutral", mode: "report" });
+    // NULL policy_file_sha is one identity (NULLS NOT DISTINCT).
+    await expect(db.insertInto("policy_verdicts").values(row()).execute()).rejects.toThrow(
+      /unique|duplicate/,
+    );
+    // policy_hash is set iff the status is ok.
+    await expect(
+      db
+        .insertInto("policy_verdicts")
+        .values(row({ policy_file_sha: SHA, policy_status: "ok", policy_hash: null }))
+        .execute(),
+    ).rejects.toThrow(/check constraint/);
+    await expect(
+      db
+        .insertInto("policy_verdicts")
+        .values(row({ policy_file_sha: SHA, policy_status: "invalid", policy_hash: HASH }))
+        .execute(),
+    ).rejects.toThrow(/check constraint/);
+    await expect(
+      db
+        .insertInto("policy_verdicts")
+        .values(row({ policy_file_sha: SHA, outcome: "would_maybe" as never }))
+        .execute(),
+    ).rejects.toThrow(/check constraint/);
   });
 
   it("I-DB-6 a bigint above 2^53 read through createDb throws", async () => {

@@ -242,8 +242,9 @@ describe("end to end", () => {
     loadIntentScenario(api);
     api.state.commits.set(PR_NUMBER, [makeCommit(makePull().head.sha, commitMessage("Fix"))]);
     model = scenarioLlm({ writer: writerReply({ goal: `Goal ${SENTINEL} for the card.` }) });
-    // Both publishers fail once on the check-run POST; the response body carries the sentinel too.
-    for (let i = 0; i < 2; i++) {
+    // Each of the three publishers (intent, provenance, and since step 5 policy) fails once on its
+    // first check-run POST; the response body carries the sentinel too.
+    for (let i = 0; i < 3; i++) {
       api.failNext("POST", /\/check-runs$/, 500, {}, { message: "boom", extra: SENTINEL });
     }
     const raw = body("pull_request.opened", (p) => {

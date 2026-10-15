@@ -319,13 +319,188 @@ describe("eval redaction forms", () => {
       `<password>${"x".repeat(100_000)}`,
       `Authorization: Bearer ${"a".repeat(100_000)}`,
       "AKIA".repeat(30_000),
+      // T14: a head inside a rejected or long value must not be scanned again.
+      "password=${".repeat(20_000),
+      'password="'.repeat(20_000),
+      "token=$(".repeat(20_000),
+      "password=a(".repeat(20_000),
+      "password=process.env.".repeat(10_000),
     ];
     const started = Date.now();
     for (const line of lines) {
+      const t0 = Date.now();
       const r = redactInputs(withBody(line));
       expect(r.inputs.pr.body.split("\n")).toHaveLength(1);
+      expect(Date.now() - t0, line.slice(0, 20)).toBeLessThan(300);
     }
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("U-RED-14 an unquoted value ends at a terminator; null, short and member values stay", () => {
+    const body = (t: string) => redactInputs(withBody(t)).inputs.pr.body;
+    for (const keep of [
+      'var a={password:null,user:"bob"}',
+      "x={token:e.token,user:u.name,flags:[1,2,3]}",
+    ]) {
+      expect(body(keep), keep).toBe(keep);
+    }
+    expect(body("q?password=hunter2hunter2&user=bob")).toBe(
+      "q?password=[REDACTED:assignment]&user=bob",
+    );
+    expect(body("f(password=hunter2hunter2); next")).toBe(
+      "f(password=[REDACTED:assignment]); next",
+    );
+    // A value longer than the 512-character window is redacted whole, up to its real end.
+    const long = "x".repeat(5_000);
+    expect(body(`password=${long}&rest`)).toBe("password=[REDACTED:assignment]&rest");
+  });
+
+  it("U-RED-15 values on the next lines: YAML blocks, empty values, continuations, open quotes", () => {
+    const run = (lines: string[], patch = false) => {
+      const text = lines.join("\n");
+      if (!patch) {
+        const out = redactInputs(withBody(text)).inputs.pr.body;
+        return out.split("\n");
+      }
+      const out = redactPatch(text).out;
+      return out.split("\n");
+    };
+    const M = "[REDACTED:assignment]";
+    for (const [label, input, expected] of [
+      [
+        "literal block",
+        ["password: |", "  hunter2hunter2", "  second secret line", "name: x"],
+        ["password: |", `  ${M}`, `  ${M}`, "name: x"],
+      ],
+      [
+        "folded strip",
+        ["token: >-", "    abcdefgh", "next: 1"],
+        ["token: >-", `    ${M}`, "next: 1"],
+      ],
+      [
+        "empty value",
+        ["password:", "  hunter2hunter2", "other: 1"],
+        ["password:", `  ${M}`, "other: 1"],
+      ],
+      [
+        "empty value list",
+        ["secrets:", "  - hunter2hunter2", "  - another-secret-1", "done: 1"],
+        ["secrets:", `  ${M}`, `  ${M}`, "done: 1"],
+      ],
+      [
+        "continuation",
+        ["password = \\", "  hunter2hunter2 \\", "  tailtailtail", "echo after"],
+        ["password = \\", `  ${M}`, `  ${M}`, "echo after"],
+      ],
+      [
+        "unterminated quote",
+        ['password = "line one', "line two secret", 'last line"', "after"],
+        ['password = "line one', `${M}`, `${M}`, "after"],
+      ],
+      [
+        "credentials followed by a key line",
+        ["credentials:", "  username: bob", "  region: eu"],
+        ["credentials:", "  username: bob", "  region: eu"],
+      ],
+      [
+        "python if on a secret name is code, not a YAML key",
+        ["if password:", "    check(user)", "    login(user)", "done()"],
+        ["if password:", "    check(user)", "    login(user)", "done()"],
+      ],
+      [
+        "python for over tokens",
+        ["for token in tokens:", "    use(token)", "    log(token)"],
+        ["for token in tokens:", "    use(token)", "    log(token)"],
+      ],
+      [
+        "class PasswordForm",
+        ["class PasswordForm:", "    field = 1", "    other = 2"],
+        ["class PasswordForm:", "    field = 1", "    other = 2"],
+      ],
+      [
+        "switch case on a secret name",
+        ['case "password":', "  handle();", "  break;"],
+        ['case "password":', "  handle();", "  break;"],
+      ],
+      [
+        "list item and quoted YAML keys still continue",
+        ["- password:", "    hunter2hunter2", '"secret":', "  hunter2hunter2"],
+        ["- password:", `    ${M}`, '"secret":', `  ${M}`],
+      ],
+    ] as [string, string[], string[]][]) {
+      expect(run(input), label).toEqual(expected);
+    }
+    // Patch mode: prefixes and the line count stay; a hunk header ends the state.
+    const patch = [
+      "@@ -1,4 +1,5 @@",
+      "+password: |",
+      "+  hunter2hunter2",
+      " ",
+      "@@ -20,2 +21,2 @@",
+      "   not secret",
+    ];
+    const out = run(patch, true);
+    expect(out).toHaveLength(patch.length);
+    expect(out[2]).toBe(`+  ${M}`);
+    expect(out[4]).toBe("@@ -20,2 +21,2 @@");
+    expect(out[5]).toBe("   not secret");
+    // At most 50 lines.
+    const many = ["password: |", ...Array.from({ length: 80 }, () => "  hunter2hunter2")];
+    const redacted = run(many).filter((l) => l.includes(M));
+    expect(redacted).toHaveLength(50);
+  });
+
+  it("U-RED-16 CLI flags", () => {
+    const body = (t: string) => redactInputs(withBody(t)).inputs.pr.body;
+    expect(body("run --password hunter2hunter2 --verbose")).toBe(
+      "run --password [REDACTED:cli_flag] --verbose",
+    );
+    expect(body("tool -token abcdefgh12345")).toBe("tool -token [REDACTED:cli_flag]");
+    expect(body("mysql -u root -pS3cretPass db")).toBe("mysql -u root -p[REDACTED:cli_flag] db");
+    expect(body("curl -u admin:hunter2hunter2 https://x.example")).toBe(
+      "curl -u admin:[REDACTED:cli_flag] https://x.example",
+    );
+    expect(body('tool --user "admin:hunter2hunter2" go')).toBe(
+      'tool --user "admin:[REDACTED:cli_flag]" go',
+    );
+    for (const keep of [
+      "gcc -pthread main.c",
+      "tool --password-file /x/y",
+      "ssh -pS3cretPass host",
+      "curl -u admin:$PASSWORD host",
+    ]) {
+      expect(body(keep), keep).toBe(keep);
+    }
+  });
+
+  it("U-RED-17 redis URLs, more key names, internal capitals and Slack webhooks", () => {
+    const body = (t: string) => redactInputs(withBody(t)).inputs.pr.body;
+    expect(body("redis://:hunter2hunter2@cache:6379")).toBe(
+      "redis://:[REDACTED:url_credentials]@cache:6379",
+    );
+    for (const name of ["encryption_key", "master_key", "signing_key", "ENCRYPTION_KEY"]) {
+      expect(body(`${name} = ${PW}`), name).toBe(`${name} = [REDACTED:assignment]`);
+    }
+    expect(body(`PassWord = ${PW}`)).toBe("PassWord = [REDACTED:assignment]");
+    const hook = `https://hooks.slack.com/services/${"T0001AAAA/B0002BBBB/abcdefghijklmnopqrstuvwx"}`;
+    const r = redactInputs(withBody(`post to ${hook} now`));
+    expect(r.inputs.pr.body).toBe("post to https://[REDACTED:slack_webhook] now");
+    expect(r.redactions).toEqual([{ kind: "slack_webhook", count: 1 }]);
+  });
+
+  it("U-RED-18 counters and limits stay readable; the step 4 negatives stay", () => {
+    for (const keep of [
+      "max_tokens = 100000000",
+      "limit_secret_count = 12345678",
+      "num_tokens = 123456789",
+      "budget_token = 123456789",
+      "password_length = 1234567890",
+      "const token = process.env.GITHUB_TOKEN;",
+    ]) {
+      const r = redactInputs(withBody(keep));
+      expect(r.inputs.pr.body, keep).toBe(keep);
+      expect(r.redactions, keep).toEqual([]);
+    }
   });
 
   it("U-RED-13 a custom pattern that matches the empty string, or is invalid, is rejected", () => {

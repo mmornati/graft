@@ -34,6 +34,10 @@ const SECRET_PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: "npm_token", re: /\bnpm_[A-Za-z0-9]{30,}/g },
   { kind: "slack_token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g },
   {
+    kind: "slack_webhook",
+    re: /\bhooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9_/-]{10,200}/g,
+  },
+  {
     kind: "jwt",
     re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   },
@@ -41,7 +45,7 @@ const SECRET_PATTERNS: { kind: string; re: RegExp }[] = [
 
 /** `scheme://user:PASSWORD@host`: only the password is replaced. */
 const URL_CREDENTIALS =
-  /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,20}:\/\/[^\s:/@"'`]{1,100}:)([^\s@/"'`]{1,200})(?=@)/g;
+  /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{0,20}:\/\/[^\s:/@"'`]{0,100}:)([^\s@/"'`]{1,200})(?=@)/g;
 /** `Authorization: Bearer|Basic|Token VALUE`: the scheme word stays. */
 const AUTH_HEADER =
   /(\bauthorization["'`]?[ \t]{0,3}[:=][ \t]{0,3}["'`]?(?:bearer|basic|token)[ \t]{1,3})([A-Za-z0-9._~+/=-]{8,})/gi;
@@ -57,7 +61,7 @@ const ASSIGN_HEAD =
   /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(\\?["'`]?)([ \t]{0,20})(:=|=>|={1,3}|:(?![:=]))([ \t]{0,20})/g;
 
 const KEY_SUBSTRING =
-  /password|passwd|passphrase|secret|credential|api_?key|access_?key|private_?key/;
+  /password|passwd|passphrase|secret|credential|api_?key|access_?key|private_?key|(?:encryption|master|signing)_?key/;
 const KEY_SEGMENT = /(?:^|_)(?:tokens?|pwd|auth|authorization|bearer)(?:_|$)/;
 /**
  * Intentional over-redaction is accepted for names that really are secrets in some codebases. These
@@ -65,14 +69,18 @@ const KEY_SEGMENT = /(?:^|_)(?:tokens?|pwd|auth|authorization|bearer)(?:_|$)/;
  */
 const BENIGN_LAST =
   /(?:^|_)(?:length|len|size|count|max|min|limit|type|name|path|file|url|uri|ttl|expiry|expires|expiration|enabled|required|pattern|regex|label|placeholder)$/;
+/** The same idea for a leading word: `max_tokens`, `num_tokens`, `limit_secret_count`. */
+const BENIGN_FIRST = /^(?:max|min|limit|budget|num|total)_/;
 
 function isSecretName(ident: string): boolean {
   const n = ident
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toLowerCase()
     .replace(/[-.]+/g, "_");
-  if (!KEY_SUBSTRING.test(n) && !KEY_SEGMENT.test(n)) return false;
-  return !BENIGN_LAST.test(n);
+  // The flat form catches a capital inside a word (`PassWord`).
+  const flat = ident.toLowerCase().replace(/[_.-]+/g, "");
+  if (!KEY_SUBSTRING.test(n) && !KEY_SUBSTRING.test(flat) && !KEY_SEGMENT.test(n)) return false;
+  return !BENIGN_LAST.test(n) && !BENIGN_FIRST.test(n);
 }
 
 const VALUE_MIN = 8;
@@ -93,48 +101,142 @@ const NOT_A_VALUE = new RegExp(
 );
 const NULLISH = /^(?:none|null|undefined|nil|false|true)$/i;
 
-/** Where the value of an assignment starts and ends, or null when there is none to redact. */
-function valueSpan(line: string, from: number): { start: number; end: number } | null {
+/** The most a quoted close is looked for in (T14): later characters are scanned once, not per head. */
+const WINDOW = 512;
+/** An unquoted value ends at whitespace, a quote, or one of these. */
+const VALUE_END = /[\s"'`,;)}\]&]/;
+
+interface Span {
+  start: number;
+  end: number;
+  /** The quote that opened a value and never closes on this line. */
+  openQuote?: string;
+}
+
+/**
+ * Where the value of an assignment starts and ends, or null when there is none to redact. Every
+ * character is scanned at most once per head, and the caller moves past `end`, so a line is
+ * scanned in linear time however adversarial it is.
+ */
+function valueSpan(line: string, from: number): Span | null {
   const c = line[from];
   if (c === undefined) return null;
   const esc = c === "\\" && /["'`]/.test(line[from + 1] ?? "");
   const q = esc ? line.slice(from, from + 2) : c;
   if (esc || c === '"' || c === "'" || c === "`") {
     const start = from + q.length;
-    const close = line.indexOf(q, start);
-    if (close !== -1) return { start, end: close };
-    // No closing quote on this line: treat what follows as an unquoted value.
-    return unquoted(line, start);
+    const limit = Math.min(line.length, start + WINDOW);
+    const rel = line.slice(start, limit).indexOf(q);
+    if (rel !== -1) return { start, end: start + rel };
+    // No closing quote in the window: the value is an unquoted run. It is an unterminated quote
+    // (continued on the next lines) only when the rest of the line has no closing quote either.
+    const span = unquoted(line, start);
+    if (span && line.indexOf(q, limit) === -1) span.openQuote = q;
+    return span;
   }
   return unquoted(line, from);
 }
 
-function unquoted(line: string, start: number): { start: number; end: number } | null {
+function unquoted(line: string, start: number): Span | null {
   let end = start;
-  while (end < line.length && !/[\s"'`]/.test(line.charAt(end))) end += 1;
-  // A trailing separator is not part of the value.
-  while (end > start && /[,;)\]}]/.test(line.charAt(end - 1))) end -= 1;
+  while (end < line.length && !VALUE_END.test(line.charAt(end))) end += 1;
   return end > start ? { start, end } : null;
 }
 
-function redactAssignments(line: string, counter: Counter): string {
+/** What the lines after an assignment hold, when the value did not fit on its own line. */
+type Pending =
+  | { kind: "block"; indent: number }
+  | { kind: "empty"; indent: number }
+  | { kind: "continuation" }
+  | { kind: "quote"; q: string };
+
+const YAML_KEY_PREFIX = /^[ \t]*(?:-[ \t]+)*["'`]?$/;
+const BLOCK_INDICATOR = /^(?:[|>][+-]?[1-9]?|[|>][1-9][+-])$/;
+
+/** Redacts the assignments on one line; `pending` describes how the value goes on. */
+function redactAssignments(
+  line: string,
+  counter: Counter,
+): { text: string; pending: Pending | null } {
   ASSIGN_HEAD.lastIndex = 0;
   let out = "";
   let last = 0;
+  let pending: Pending | null = null;
+  const indent = line.length - line.trimStart().length;
   for (let m = ASSIGN_HEAD.exec(line); m !== null; m = ASSIGN_HEAD.exec(line)) {
     const ident = m[1] ?? "";
     const headEnd = m.index + m[0].length;
     if (!isSecretName(ident)) continue;
+    const rest = line.slice(headEnd).trim();
+    // An empty value goes on below only for a YAML-style key line (`key:`, `- key:`, `"key":`), so
+    // `if password:` or `for token in tokens:` in code do not hide the block that follows.
+    const yamlKey = m[4] === ":" && YAML_KEY_PREFIX.test(line.slice(0, m.index));
+    if ((rest === "" && yamlKey) || rest === "\\" || BLOCK_INDICATOR.test(rest)) {
+      pending =
+        rest === ""
+          ? { kind: "empty", indent }
+          : rest === "\\"
+            ? { kind: "continuation" }
+            : { kind: "block", indent };
+    }
     const span = valueSpan(line, headEnd);
-    if (!span) continue;
+    if (!span) {
+      ASSIGN_HEAD.lastIndex = Math.max(ASSIGN_HEAD.lastIndex, headEnd);
+      continue;
+    }
+    // Whatever happens next, the scanned span is never scanned again.
+    ASSIGN_HEAD.lastIndex = Math.max(ASSIGN_HEAD.lastIndex, span.end);
     const value = line.slice(span.start, span.end);
-    if (value.length < VALUE_MIN || NOT_A_VALUE.test(value) || NULLISH.test(value)) continue;
+    if (span.openQuote !== undefined) pending = { kind: "quote", q: span.openQuote };
+    if (value.length < VALUE_MIN || NOT_A_VALUE.test(value.slice(0, 256)) || NULLISH.test(value)) {
+      continue;
+    }
     counter.add("assignment");
     out += `${line.slice(last, span.start)}[REDACTED:assignment]`;
     last = span.end;
-    ASSIGN_HEAD.lastIndex = Math.max(span.end, headEnd);
   }
-  return out + line.slice(last);
+  return { text: out + line.slice(last), pending };
+}
+
+/** `--name value` and `-name value` where the name is a secret name. */
+const FLAG_HEAD = /(?<![A-Za-z0-9_-])(--?)([A-Za-z][A-Za-z0-9_-]{0,60})([ \t]{1,4})(?=[^\s-])/g;
+const MYSQL_LINE = /\b(?:mysql|mysqldump|mysqladmin|mariadb)\b/;
+const MYSQL_P = /(?<![A-Za-z0-9_-])(-p)([^\s"'`-][^\s"'`]{3,100})/g;
+const USER_PASS =
+  /(?<![A-Za-z0-9_-])((?:-u|--user)(?:[ \t]{1,4}|=)(["']?)[^\s:"'`]{1,100}:)([^\s"'`]{1,200})(?=\2(?:\s|$))/g;
+
+function redactFlags(line: string, counter: Counter): string {
+  let t = line;
+  if (MYSQL_LINE.test(t)) {
+    t = t.replace(MYSQL_P, (m, flag: string, value: string) => {
+      if (NOT_A_VALUE.test(value) || NULLISH.test(value)) return m;
+      counter.add("cli_flag");
+      return `${flag}[REDACTED:cli_flag]`;
+    });
+  }
+  t = t.replace(USER_PASS, (m, head: string, _q: string, pass: string) => {
+    if (NOT_A_VALUE.test(pass)) return m;
+    counter.add("cli_flag");
+    return `${head}[REDACTED:cli_flag]`;
+  });
+  FLAG_HEAD.lastIndex = 0;
+  let out = "";
+  let last = 0;
+  for (let m = FLAG_HEAD.exec(t); m !== null; m = FLAG_HEAD.exec(t)) {
+    const headEnd = m.index + m[0].length;
+    if (!isSecretName(m[2] ?? "")) continue;
+    const span = valueSpan(t, headEnd);
+    if (!span) continue;
+    FLAG_HEAD.lastIndex = Math.max(FLAG_HEAD.lastIndex, span.end);
+    const value = t.slice(span.start, span.end);
+    if (value.length < VALUE_MIN || NOT_A_VALUE.test(value.slice(0, 256)) || NULLISH.test(value)) {
+      continue;
+    }
+    counter.add("cli_flag");
+    out += `${t.slice(last, span.start)}[REDACTED:cli_flag]`;
+    last = span.end;
+  }
+  return out + t.slice(last);
 }
 
 const KEY_BEGIN = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/;
@@ -202,7 +304,7 @@ function makeRedactor(opts: RedactOptions, counter: Counter) {
       return `[REDACTED:${kind}]`;
     });
 
-  function redactLine(line: string): string {
+  function redactLine(line: string): { text: string; pending: Pending | null } {
     let t = line;
     for (const { kind, re } of SECRET_PATTERNS) t = replaceAll(t, kind, re);
     t = t.replace(AUTH_HEADER, (_m, head: string, value: string) => {
@@ -219,24 +321,38 @@ function makeRedactor(opts: RedactOptions, counter: Counter) {
       counter.add("assignment");
       return `${open}[REDACTED:assignment]`;
     });
-    t = redactAssignments(t, counter);
+    const assigned = redactAssignments(t, counter);
+    t = redactFlags(assigned.text, counter);
     if (opts.emails) t = replaceAll(t, "email", EMAIL, KEEP_EMAIL);
     for (const { kind, re } of extra) t = replaceAll(t, kind === "host" ? "host" : kind, re);
-    return t;
+    return { text: t, pending: assigned.pending };
   }
 
-  /** `patch`: the first character of a line is a diff prefix (`+`, `-`, space) and stays. */
+  const MAX_PENDING_LINES = 50;
+  const KEY_LINE = /^\s*["'`]?[A-Za-z0-9_.-]+["'`]?\s*:(?:\s|$)/;
+
+  /**
+   * `patch`: the first character of a line is a diff prefix (`+`, `-`, space) and stays. A value
+   * that continues on the next lines (a YAML block, an empty value, a `\` continuation or an
+   * unterminated quote) redacts those lines too, at most 50 of them.
+   */
   function redactText(text: string, patch: boolean): string {
     let inKey = false;
+    let pending: Pending | null = null;
+    let used = 0;
     return text
       .split("\n")
       .map((line) => {
         if (patch && line.startsWith("@@")) {
           // A hunk header ends any key block and keeps its `@@` markers; only its context text is scrubbed.
           inKey = false;
-          return redactLine(line);
+          pending = null;
+          return redactLine(line).text;
         }
-        if (patch && line.startsWith("\\")) return line; // "\ No newline at end of file"
+        if (patch && line.startsWith("\\")) {
+          pending = null;
+          return line; // "\ No newline at end of file"
+        }
         const prefix = patch && /^[+\- ]/.test(line) ? line.slice(0, 1) : "";
         const body = line.slice(prefix.length);
         if (inKey) {
@@ -249,7 +365,40 @@ function makeRedactor(opts: RedactOptions, counter: Counter) {
           if (!KEY_END.test(body.slice(begin.index + begin[0].length))) inKey = true;
           return `${prefix}[REDACTED:private_key]`;
         }
-        return prefix + redactLine(body);
+        if (pending !== null) {
+          const lead = body.length - body.trimStart().length;
+          const indentation = body.slice(0, lead);
+          const blank = body.trim() === "";
+          const p: Pending = pending;
+          // "take": this line belongs to the value; "pass": it ends the state and is read normally.
+          let take: "redact" | "skip" | "pass" = "pass";
+          let keep = true; // does the state outlive this line?
+          if (used >= MAX_PENDING_LINES) take = "pass";
+          else if (p.kind === "block") {
+            take = blank ? "skip" : lead > p.indent ? "redact" : "pass";
+          } else if (p.kind === "empty") {
+            take = blank ? "skip" : lead > p.indent && !KEY_LINE.test(body) ? "redact" : "pass";
+          } else if (p.kind === "continuation") {
+            take = "redact";
+            keep = body.trimEnd().endsWith("\\");
+          } else {
+            take = "redact";
+            keep = !body.includes(p.q);
+          }
+          if (take === "pass") {
+            pending = null;
+          } else {
+            used += 1;
+            if (!keep) pending = null;
+            if (take === "skip") return line;
+            counter.add("assignment");
+            return `${prefix}${indentation}[REDACTED:assignment]`;
+          }
+        }
+        used = 0;
+        const r = redactLine(body);
+        pending = r.pending;
+        return prefix + r.text;
       })
       .join("\n");
   }

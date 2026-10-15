@@ -1,30 +1,50 @@
 import type { JobContext } from "../../core/context.js";
+import type { GitHubClient } from "../../github/client-factory.js";
+import { loadBasePolicy } from "../../policy/load.js";
 import type { FloorConfig } from "./risk-floor.js";
 
 /**
- * What step 5 needs to read `graft.yaml`: an installation client and a ref. The base SHA, not the
- * head, so a pull request cannot edit its own policy.
+ * What the hook needs to read `graft.yaml`: an installation client and the BASE commit. The base
+ * SHA, never the head, so a pull request cannot edit the policy that judges it (D3).
  */
 export interface IntentSettingsTarget {
   repositoryId: number;
   installationId: number;
   owner: string;
   repo: string;
+  /** 40-hex SHA of a base-branch commit. */
   baseSha: string;
 }
 
 /**
- * Per-repository settings for the intent service.
- *
- * Step 5 merges `graft.yaml` sensitive paths and budgets here; callers must not read config
- * directly.
+ * Per-repository settings for the intent service. Merges the `sensitive_paths` of the base
+ * branch's `graft.yaml` with `GRAFT_INTENT_SENSITIVE_PATHS` (T9). A missing or invalid file falls
+ * back to the configured globs only. Transient GitHub errors propagate (the caller maps them).
  */
 export async function intentRepoSettings(
-  ctx: Pick<JobContext, "config">,
-  _repo: IntentSettingsTarget,
+  ctx: Pick<JobContext, "config" | "log">,
+  target: IntentSettingsTarget,
+  octokit: GitHubClient,
 ): Promise<{ floor: FloorConfig; dailyTokenBudget: number }> {
+  if (!/^[0-9a-f]{40}$/.test(target.baseSha)) {
+    throw new Error("intentRepoSettings needs a 40-hex base SHA");
+  }
+  const loaded = await loadBasePolicy(octokit, {
+    repositoryId: target.repositoryId,
+    owner: target.owner,
+    repo: target.repo,
+    commitSha: target.baseSha,
+    log: ctx.log,
+  });
+  const configured = ctx.config.intentSensitivePaths;
+  let globs = configured;
+  if (loaded.status === "ok") {
+    globs = [...new Set([...configured, ...loaded.policy.sensitivePaths])];
+  } else {
+    ctx.log.info({ policy_status: loaded.status }, "graft.yaml not used for sensitive paths");
+  }
   return {
-    floor: { extraSensitiveGlobs: ctx.config.intentSensitivePaths },
+    floor: { extraSensitiveGlobs: globs },
     dailyTokenBudget: ctx.config.llmDailyTokenBudget,
   };
 }

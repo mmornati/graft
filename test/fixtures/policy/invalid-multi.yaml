@@ -1,0 +1,22 @@
+# Several different mistakes, each in its own place. No value here may appear in a message.
+version: 1
+sensitive_paths:
+  - "../etc/passwd-secret-glob"
+  - "{a,b}-brace-secret"
+default:
+  approve: auto
+rules:
+  - name: dup-secret-name
+    match: { paths: ["infra/**"], author: agent, labels: [secret-label] }
+    approve: auto
+  - name: dup-secret-name
+    match: { risk: urgent-secret-risk }
+    require: { humans: 99, team: "@acme/Secret-Team" }
+  - name: has no action
+    match: { size: { min_lines: 10, max_lines: 5 } }
+  - match: {}
+    block: false
+  - aprove: yes
+    match: { risk: trivial }
+    approve: auto
+    block: true

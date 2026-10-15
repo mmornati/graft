@@ -1,3 +1,4 @@
+import type { SignalListener } from "../core/signals.js";
 import type { JobDefinition } from "../queue/job.js";
 import { createGithubWebhookJob, type GithubWebhookData } from "./dispatch-job.js";
 import type { WebhookHandler } from "./handler.js";
@@ -10,11 +11,14 @@ export interface Registry {
   jobs: readonly JobDefinition<unknown>[];
   /** The `github.webhook` job (also present in `jobs`); the receiver sends this one. */
   webhookJob: JobDefinition<GithubWebhookData>;
+  /** Listeners for cross-module signals (D15), in module order. */
+  signalListeners: readonly SignalListener[];
 }
 
 export function createRegistry(o: {
   webhookHandlers: readonly WebhookHandler[];
   jobs: readonly JobDefinition<unknown>[];
+  signalListeners?: readonly SignalListener[];
 }): Registry {
   const handlerNames = new Set<string>();
   for (const h of o.webhookHandlers) {
@@ -41,5 +45,6 @@ export function createRegistry(o: {
     isHandled: (event, action) => handlersFor(event, action).length > 0,
     jobs,
     webhookJob,
+    signalListeners: [...(o.signalListeners ?? [])],
   };
 }

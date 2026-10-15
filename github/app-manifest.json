@@ -13,5 +13,5 @@
     "pull_requests": "write",
     "checks": "write"
   },
-  "default_events": ["check_run", "pull_request"]
+  "default_events": ["check_run", "pull_request", "pull_request_review", "push"]
 }

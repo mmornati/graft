@@ -45,5 +45,5 @@ export {
   type RiskClass,
   TEST_GLOBS,
 } from "./risk-floor.js";
-export { feedbackSummary } from "./store.js";
+export { feedbackSummary, type IntentCardRow, latestPublishedCard } from "./store.js";
 export { feedbackSweepJob };

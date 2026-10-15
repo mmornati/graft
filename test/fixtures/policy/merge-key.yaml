@@ -1,0 +1,7 @@
+version: 1
+rules:
+  - &base
+    match: { risk: trivial }
+    approve: auto
+  - <<: *base
+    name: copy

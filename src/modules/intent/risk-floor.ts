@@ -4,11 +4,13 @@
  * Safety rule: the model can only RAISE a PR's risk class, never lower it. Fixed rules set a
  * minimum; `combineRisk` takes the maximum of every source.
  */
-import picomatch from "picomatch";
+import { GlobBudget, globMatcher, type PathMatcher } from "../../core/glob.js";
 import type { RiskClass } from "../../db/schema.js";
+import { POLICY_FILE_GLOBS } from "../../policy/constants.js";
 import type { ChangedFile } from "./inputs.js";
 
-export type { RiskClass };
+export type { PathMatcher, RiskClass };
+export { globMatcher, POLICY_FILE_GLOBS };
 
 export type FloorRuleId =
   | "ci_config"
@@ -25,6 +27,7 @@ export type FloorRuleId =
   | "size_huge"
   | "partial_view"
   | "listing_truncated"
+  | "glob_budget"
   | "injection_marker";
 
 export interface FloorReason {
@@ -57,14 +60,25 @@ export const maxRisk = (...classes: (RiskClass | null | undefined)[]): RiskClass
 
 /** Code-point order (not UTF-16 order). */
 export function compareCodePoints(a: string, b: string): number {
-  const x = Array.from(a, (c) => c.codePointAt(0) ?? 0);
-  const y = Array.from(b, (c) => c.codePointAt(0) ?? 0);
-  const n = Math.min(x.length, y.length);
-  for (let i = 0; i < n; i++) {
-    const d = (x[i] ?? 0) - (y[i] ?? 0);
-    if (d !== 0) return d;
+  // No allocation (paths are sorted by this, up to 1,000 of them per rule): walk both strings.
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const x = a.codePointAt(i) as number;
+    const y = b.codePointAt(j) as number;
+    if (x !== y) return x - y;
+    i += x > 0xffff ? 2 : 1;
+    j += y > 0xffff ? 2 : 1;
   }
-  return x.length - y.length;
+  const rest = (s: string, k: number): number => {
+    let n = 0;
+    while (k < s.length) {
+      k += (s.codePointAt(k) as number) > 0xffff ? 2 : 1;
+      n++;
+    }
+    return n;
+  };
+  return rest(a, i) - rest(b, j);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -87,7 +101,6 @@ export const CI_CONFIG_GLOBS = [
   "bitbucket-pipelines.yml",
   ".pre-commit-config.yaml",
 ];
-export const POLICY_FILE_GLOBS = ["/graft.yaml", "/graft.yml", "/.graft/**"];
 export const DEPENDENCY_MANIFEST_GLOBS = [
   "package.json",
   "package-lock.json",
@@ -277,34 +290,6 @@ export const INJECTION_PATTERNS: readonly RegExp[] = [
   /instructions_in_data/i,
 ];
 
-// ---------------------------------------------------------------------------------------------
-// Glob semantics (T10.2)
-// ---------------------------------------------------------------------------------------------
-
-// picomatch with { dot: true, nocase: true }. A pattern without a slash is matched as
-// "**" + "/" + pattern (any depth); a leading slash is stripped (anchored at the root).
-function normalizeGlob(g: string): string {
-  if (g.startsWith("/")) return g.slice(1);
-  return g.includes("/") ? g : `**/${g}`;
-}
-
-export type PathMatcher = (path: string) => boolean;
-
-const matcherCache = new Map<string, PathMatcher>();
-
-export function globMatcher(globs: readonly string[]): PathMatcher {
-  if (globs.length === 0) return () => false;
-  const key = JSON.stringify(globs);
-  let m = matcherCache.get(key);
-  if (!m) {
-    const pm = picomatch(globs.map(normalizeGlob), { dot: true, nocase: true });
-    m = (p) => pm(p);
-    if (matcherCache.size > 200) matcherCache.clear();
-    matcherCache.set(key, m);
-  }
-  return m;
-}
-
 /** A file matches when its path OR its previous path matches. */
 export function fileMatches(match: PathMatcher, f: Pick<ChangedFile, "path" | "previousPath">) {
   return match(f.path) || (f.previousPath !== null && match(f.previousPath));
@@ -350,9 +335,10 @@ const PATH_RULES: { rule: FloorRuleId; globs: readonly string[] }[] = [
 ];
 
 /** True when any of R1-R7 matches the file (priority group 0 in T9). */
-export function matchesPathRule(f: ChangedFile, config: FloorConfig): boolean {
-  for (const r of PATH_RULES) if (fileMatches(globMatcher(r.globs), f)) return true;
-  return fileMatches(globMatcher(config.extraSensitiveGlobs), f);
+export function matchesPathRule(f: ChangedFile, config: FloorConfig, budget?: GlobBudget): boolean {
+  const opts = { onLimit: true, ...(budget ? { budget } : {}) };
+  for (const r of PATH_RULES) if (fileMatches(globMatcher(r.globs, opts), f)) return true;
+  return fileMatches(globMatcher(config.extraSensitiveGlobs, opts), f);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -377,6 +363,8 @@ const stripFormatChars = (t: string): string =>
 export function computeRiskFloor(
   input: FloorInput,
   config: FloorConfig,
+  /** Share one glob work budget with the policy evaluation of the same job. */
+  sharedBudget?: GlobBudget,
 ): { floor: RiskClass; reasons: FloorReason[] } {
   const reasons: FloorReason[] = [];
   const add = (rule: FloorRuleId, floor: RiskClass, paths: string[]) => {
@@ -386,28 +374,33 @@ export function computeRiskFloor(
   const pathsWhere = (pred: (f: ChangedFile) => boolean) =>
     input.files.filter(pred).map((f) => f.path);
 
+  // One deterministic work budget for the whole floor (`configured_path` globs are author-controlled).
+  const budget = sharedBudget ?? new GlobBudget();
   // R1-R6
   for (const { rule, globs } of PATH_RULES) {
-    const m = globMatcher(globs);
+    const m = globMatcher(globs, { onLimit: true, budget });
     const hit = pathsWhere((f) => fileMatches(m, f));
     if (hit.length > 0) add(rule, "sensitive", hit);
   }
   // R7
   {
-    const m = globMatcher(config.extraSensitiveGlobs);
+    const m = globMatcher(config.extraSensitiveGlobs, { onLimit: true, budget });
     const hit = pathsWhere((f) => fileMatches(m, f));
     if (hit.length > 0) add("configured_path", "sensitive", hit);
   }
   // R8
   {
-    const test = globMatcher(TEST_GLOBS);
+    // `test` assumes a path over the limits is a test file (a deletion tightens); `notTest` is the
+    // opposite side, for the "no longer a test" term.
+    const test = globMatcher(TEST_GLOBS, { onLimit: true, budget });
+    const notTest = globMatcher(TEST_GLOBS, { budget });
     const hit = pathsWhere(
       (f) =>
         (f.status === "removed" && test(f.path)) ||
         (f.status === "renamed" &&
           f.previousPath !== null &&
           test(f.previousPath) &&
-          !test(f.path)),
+          !notTest(f.path)),
     );
     if (hit.length > 0) add("test_deleted", "sensitive", hit);
     // R9
@@ -438,6 +431,8 @@ export function computeRiskFloor(
   if (input.partialPaths.length > 0) add("partial_view", "logic", input.partialPaths);
   // R14
   if (input.listingTruncated) add("listing_truncated", "sensitive", []);
+  // A spent glob budget means paths were not fully checked: the same strict answer, its own reason.
+  if (budget.exhausted) add("glob_budget", "sensitive", []);
   // R15
   {
     const hits = input.untrustedTexts.filter((t) => {

@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 import pkg from "../../package.json" with { type: "json" };
 import type { AppDeps } from "../../src/core/context.js";
+import { noSignals } from "../../src/core/signals.js";
 import type { Db } from "../../src/db/client.js";
 import type { Database } from "../../src/db/schema.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
@@ -62,6 +63,7 @@ async function server(opts: { dbFails?: boolean; queueOk?: boolean }) {
     clock: fixedClock,
     github: {} as GitHubClientFactory,
     llm: forbiddenLlm(),
+    signals: noSignals,
   };
   return buildServer(deps);
 }

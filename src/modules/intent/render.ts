@@ -54,6 +54,7 @@ const RULE_LABEL: Record<FloorRuleId, string> = {
   size_huge: "very large change",
   partial_view: "part of the diff not shown to the model",
   listing_truncated: "file list incomplete",
+  glob_budget: "path matching stopped at its work limit",
   injection_marker: "text addressed to AI reviewers",
 };
 

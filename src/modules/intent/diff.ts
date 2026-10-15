@@ -2,6 +2,7 @@
  * Turns the file listing into what the model sees (T9). Pure; diff text lives in memory only.
  */
 import { createHash } from "node:crypto";
+import { GlobBudget } from "../../core/glob.js";
 import type { ChangedFile } from "./inputs.js";
 import {
   classifyFile,
@@ -72,8 +73,8 @@ export interface PreparedDiff {
   };
 }
 
-function group(f: ChangedFile, config: FloorConfig): 0 | 1 | 2 | 3 {
-  if (matchesPathRule(f, config)) return 0;
+function group(f: ChangedFile, config: FloorConfig, budget: GlobBudget): 0 | 1 | 2 | 3 {
+  if (matchesPathRule(f, config, budget)) return 0;
   if (fileMatches(globMatcher(TEST_GLOBS), f)) return 2;
   if (fileMatches(globMatcher(DOCS_GLOBS), f)) return 3;
   return 1;
@@ -88,8 +89,9 @@ function cutAtLine(text: string, limit: number): string {
 const countLines = (t: string): number => (t === "" ? 0 : t.split("\n").length);
 
 export function prepareDiff(files: readonly ChangedFile[], config: FloorConfig): PreparedDiff {
+  const globBudget = new GlobBudget();
   const ordered = files
-    .map((file) => ({ file, g: group(file, config), cls: classifyFile(file) }))
+    .map((file) => ({ file, g: group(file, config, globBudget), cls: classifyFile(file) }))
     .sort((a, b) => a.g - b.g || compareCodePoints(a.file.path, b.file.path));
 
   let budget: number = LIMITS.totalChars;

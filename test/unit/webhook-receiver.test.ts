@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppDeps } from "../../src/core/context.js";
+import { noSignals } from "../../src/core/signals.js";
 import type { GitHubClientFactory } from "../../src/github/client-factory.js";
 import { buildServer } from "../../src/http/server.js";
 import { forbiddenLlm } from "../../src/llm/fake.js";
@@ -30,6 +31,7 @@ async function setup(overrides: Record<string, string> = {}) {
     clock: fixedClock,
     github: {} as GitHubClientFactory,
     llm: forbiddenLlm(),
+    signals: noSignals,
   };
   const app = await buildServer(deps);
   return { app, queue, calls };

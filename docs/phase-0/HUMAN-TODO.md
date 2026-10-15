@@ -44,3 +44,19 @@ Every Phase 0 step appends to this checklist. Each item says who does it, what i
 - [ ] **First live baseline.** `pnpm eval run --set <pilot set> --live` (check the printed estimate; set `--max-cost-usd`), review `report.md`, then `--save-baseline <set>/baseline.json`. Set the `pilot` thresholds in `eval/thresholds.json` from it and set `provisional: false`. Record the date, models, `PROMPT_VERSION` and cost in `docs/plan/development-plan.md`. Who: repo owner.
 - [ ] **Check prices** in `src/eval/pricing.ts` against Anthropic's pricing page before the first live run and update `PRICING_VERIFIED_AT`. Who: repo owner.
 - [ ] **When a pilot leaves**: `pnpm eval purge --set <dir> --confirm <setId>` on every labeler machine, and delete any other copies. Who: repo owner.
+
+## Step 5: Policy engine (report-only)
+
+- [ ] **Update the App's events.** In the registered App's settings (Permissions & events), subscribe to **Pull request review** and **Push**. No permission changes. Check whether the installations must accept the change. Then confirm that one push and one review on `sample-ts` arrive (`select event, action from webhook_deliveries order by received_at desc limit 5`). Who: org owner.
+- [ ] **Pilot teams write their `graft.yaml`** on the default branch through a normal reviewed PR, starting from `docs/examples/graft.yaml`. Each pilot runs `pnpm graft policy check graft.yaml` and adds the Action from `docs/graft-yaml.md`. Who: each pilot's tech lead with their security owner. Produces: one valid `graft.yaml` per pilot repo.
+- [ ] **Move `GRAFT_INTENT_SENSITIVE_PATHS` into `graft.yaml`** (`sensitive_paths`) for each pilot, then clear the env value. Who: product owner.
+- [ ] **Check team slugs exist** in each pilot org (`gh api orgs/<org>/teams --jq '.[].slug'`). Graft cannot check them until Phase 1 (`members: read`). Who: pilot tech lead.
+- [ ] **Do not change branch protection in Phase 0.** Keep required reviewers. Do **not** make `graft/policy` a required check. Removing required reviewers and requiring `graft/policy` happens in Phase 1 (development plan, spec fix 1). Who: pilot repo admins.
+- [ ] **Publish the JSON Schema URL.** Decide the final Graft repo location, replace `<org>` in `docs/examples/graft.yaml`, `docs/graft-yaml.md` and the Action snippet, and set `GRAFT_TOOL_TOKEN` in pilot repos while the Graft repo is private (a fine-grained, read-only token for that one repository). Who: repo owner.
+- [ ] **Check on GitHub.** On a sandbox PR, check that:
+  - the `graft/policy` check is `neutral` with a "Would ..." title;
+  - the comment's policy section renders, with no team notification;
+  - a push to `main` that edits `graft.yaml` re-evaluates open PRs.
+
+  Who: repo owner.
+- [ ] **Plan Phase 1 permission.** Note that team approvals need `members: read` (org), which installations must accept. Who: product owner.

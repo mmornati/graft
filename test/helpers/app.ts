@@ -1,6 +1,7 @@
 import { buildAppRegistry } from "../../src/app/registry.js";
 import type { AppDeps, JobContext } from "../../src/core/context.js";
 import type { Logger } from "../../src/core/logger.js";
+import { createSignals } from "../../src/core/signals.js";
 import type { Db } from "../../src/db/client.js";
 import {
   createGitHubClientFactory,
@@ -78,6 +79,7 @@ export async function createTestApp(
     clock: fixedClock,
     github: opts.github ?? forbiddenGitHub(),
     llm: opts.llm ?? forbiddenLlm(),
+    signals: createSignals(registry.signalListeners),
   };
   return {
     deps,
