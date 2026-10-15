@@ -170,7 +170,7 @@ describe("gate report", () => {
     expect(r.accuracy.n).toBeGreaterThan(0);
   });
 
-  it("I-GATE-2 without reviewer rows every vote is not_reviewer (INSUFFICIENT_DATA); an allow-file of the voters restores PASS", async () => {
+  it("I-GATE-2 without reviewer rows every vote is not_reviewer (INSUFFICIENT_DATA); an allow-file of the voter ids restores PASS", async () => {
     const world = await seed();
     await t.db.deleteFrom("pr_reviewers").execute();
     const none = await gate([PILOT_A.id, PILOT_B.id]);
@@ -184,15 +184,105 @@ describe("gate report", () => {
     expect(none.accuracy.votesWithoutReviewerSync).toBeGreaterThan(0);
     expect(none.warnings).toContain("votes_without_reviewer_sync");
 
-    // Case does not matter in the allow-list.
+    // The allow-list matches the user id; the login in the file is informational only.
     const allow = parseAllowList(
-      `# every reviewer\n${world.voterLogins.map((l) => l.toUpperCase()).join("\n")}\n`,
+      `# every reviewer\n${world.voterIds.map((id, i) => `${world.voterLogins[i]?.toUpperCase()}:${id}`).join("\n")}\n`,
     );
     const back = await gate([PILOT_A.id, PILOT_B.id], { allow });
     expect(back.verdict).toBe("PASS");
     expect(back.accuracy).toMatchObject({ up: 169, down: 11, n: 180, voters: 8 });
     expect(back.allowList).toEqual({ count: 8, sha256: allow.sha256 });
     expect(back.accuracy.dropped).toEqual({ author: 4, bot_or_agent: 2, not_reviewer: 3 });
+  });
+
+  it("I-GATE-9 a recycled login does not inherit an allow-listed vote; the renamed owner of the id still counts", async () => {
+    const world = await seed();
+    await t.db.deleteFrom("pr_reviewers").execute();
+    const victimId = world.voterIds[0] as number;
+    const victimLogin = world.voterLogins[0] as string;
+    const allow = parseAllowList(`${victimLogin}:${victimId}\n`);
+    const before = await gate([PILOT_A.id, PILOT_B.id], { allow });
+    // The allow-listed user renames: the same id keeps counting under the new login.
+    await t.db
+      .updateTable("intent_feedback")
+      .set({ user_login: "renamed-person" })
+      .where("user_id", "=", victimId)
+      .execute();
+    const renamed = await gate([PILOT_A.id, PILOT_B.id], { allow });
+    expect(renamed.accuracy.n).toBe(before.accuracy.n);
+    expect(renamed.accuracy.n).toBeGreaterThan(0);
+    // Someone else takes the freed login: their votes are not counted, whatever the login says.
+    await t.db
+      .updateTable("intent_feedback")
+      .set({ user_login: victimLogin, user_id: 424242 })
+      .where("user_id", "=", victimId)
+      .execute();
+    const recycled = await gate([PILOT_A.id, PILOT_B.id], { allow });
+    expect(recycled.accuracy.n).toBe(0);
+    expect(recycled.accuracy.dropped.not_reviewer).toBeGreaterThanOrEqual(before.accuracy.n);
+  });
+
+  it("I-GATE-11 the PR author is excluded by user id: a renamed author who is allow-listed is still dropped", async () => {
+    await seed();
+    const before = await gate([PILOT_A.id, PILOT_B.id]);
+    const changeId = (await t.db
+      .selectFrom("changes")
+      .select("id")
+      .where("repository_id", "=", PILOT_A.repo)
+      .where("pr_number", "=", 1)
+      .executeTakeFirstOrThrow()) as { id: string };
+    const card = await t.db
+      .selectFrom("intent_cards")
+      .select("id")
+      .where("change_id", "=", changeId.id)
+      .where("status", "=", "ok")
+      .executeTakeFirstOrThrow();
+    // The author renamed after opening the PR: the vote's login no longer matches author_login, so
+    // the flag is false, and the author is on the allow-list. Only the stored id excludes them.
+    await t.db
+      .updateTable("changes")
+      .set({ author_id: 777001 })
+      .where("id", "=", changeId.id)
+      .execute();
+    await t.db
+      .insertInto("intent_feedback")
+      .values({
+        card_id: card.id,
+        change_id: changeId.id,
+        user_id: 777001,
+        user_login: "author-renamed",
+        verdict: "up",
+        source: "reaction",
+        reacted_at: new Date("2026-11-04T12:00:00Z"),
+        is_pr_author: false,
+      })
+      .execute();
+    const allow = parseAllowList("author-renamed:777001\n");
+    const withId = await gate([PILOT_A.id, PILOT_B.id], { allow });
+    expect(withId.accuracy.n).toBe(before.accuracy.n);
+    expect(withId.accuracy.dropped.author).toBe(before.accuracy.dropped.author + 1);
+    // Without the stored id the same vote would count.
+    await t.db
+      .updateTable("changes")
+      .set({ author_id: null })
+      .where("id", "=", changeId.id)
+      .execute();
+    const without = await gate([PILOT_A.id, PILOT_B.id], { allow });
+    expect(without.accuracy.n).toBe(before.accuracy.n + 1);
+  });
+
+  it("I-GATE-10 legacy unverified pr_reviewers rows do not make a vote eligible", async () => {
+    await seed();
+    const verified = await gate([PILOT_A.id, PILOT_B.id]);
+    expect(verified.accuracy.n).toBe(180);
+    await t.db.updateTable("pr_reviewers").set({ verified: false }).execute();
+    const legacy = await gate([PILOT_A.id, PILOT_B.id]);
+    expect(legacy.accuracy.n).toBe(0);
+    expect(legacy.verdict).toBe("INSUFFICIENT_DATA");
+    expect(legacy.accuracy.dropped.not_reviewer).toBe(183);
+    // They read as "not synced yet", which is what the operator must do next.
+    expect(legacy.warnings).toContain("votes_without_reviewer_sync");
+    expect(legacy.accuracy.votesWithoutReviewerSync).toBeGreaterThan(0);
   });
 
   it("I-GATE-3 a third installation's votes do not leak into a report for the first two", async () => {
@@ -477,11 +567,18 @@ describe("gate report", () => {
         (await run("gate", "report", "--installation", "1", "--since", "11/01/2026")).code,
       ).toBe(2);
       const file = path.join(dir, "allow.txt");
-      writeFileSync(file, "good-login\nnot a login!\n");
+      writeFileSync(file, "good-login:1\nnot a login!\n");
       const bad = await run(...BASE, "--allow-file", file);
       expect(bad.code).toBe(2);
       expect(bad.err).toContain("line 2");
       expect(bad.err).not.toContain("not a login!");
+      // A login-only line names the line and the command that resolves it, never the login.
+      writeFileSync(file, "1\nsentinel-login\n");
+      const loginOnly = await run(...BASE, "--allow-file", file);
+      expect(loginOnly.code).toBe(2);
+      expect(loginOnly.err).toContain("line 2");
+      expect(loginOnly.err).toContain("allow-list resolve");
+      expect(loginOnly.err).not.toContain("sentinel-login");
       expect((await run(...BASE, "--allow-file", path.join(dir, "missing.txt"))).code).toBe(2);
       expect((await run("gate", "nope")).code).toBe(2);
       expect((await run("frobnicate")).code).toBe(2);

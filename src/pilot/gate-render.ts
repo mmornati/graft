@@ -236,7 +236,7 @@ export function renderGateMarkdown(r: GateReport): string {
     )
     .join(", ");
   const allow = r.allowList
-    ? `${r.allowList.count} ${r.allowList.count === 1 ? "login" : "logins"} (sha256 ${r.allowList.sha256.slice(0, 8)}…)`
+    ? `${r.allowList.count} ${r.allowList.count === 1 ? "user ID" : "user IDs"} (sha256 ${r.allowList.sha256.slice(0, 8)}…)`
     : "none";
   lines.push(`Installations: ${instText}. Data through ${through}. Allow-list: ${allow}.`, "");
 
@@ -262,7 +262,7 @@ export function renderGateMarkdown(r: GateReport): string {
   );
   const warn = r.warnings.map((w) =>
     w === "votes_without_reviewer_sync"
-      ? `votes_without_reviewer_sync (${a.votesWithoutReviewerSync} PRs with votes have no reviewer row)`
+      ? `votes_without_reviewer_sync (${a.votesWithoutReviewerSync} PRs with votes have no verified reviewer row)`
       : w,
   );
   lines.push(`Warnings: ${warn.length === 0 ? "none" : warn.join(", ")}.`);

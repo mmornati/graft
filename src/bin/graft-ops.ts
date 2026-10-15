@@ -19,10 +19,18 @@ import { createDb, type Db } from "../db/client.js";
 import { pendingMigrations } from "../db/migrator.js";
 import { toTerminalSafe } from "../eval/terminal.js";
 import { createGitHubClientFactory, type GitHubClientFactory } from "../github/client-factory.js";
+import { classifyGitHubError } from "../github/errors.js";
 import { RateLimitAbort } from "../github/rate-limit.js";
 import { unconfiguredLlm } from "../llm/index.js";
 import { rollupRange, syncReviewers } from "../modules/pilot/index.js";
-import { type AllowList, AllowListError, parseAllowList } from "../pilot/allow-list.js";
+import {
+  type AllowList,
+  AllowListError,
+  AllowListResolveError,
+  parseAllowList,
+  resolveAllowList,
+} from "../pilot/allow-list.js";
+import { writeFileAtomic } from "../pilot/atomic-write.js";
 import {
   BaselineUsageError,
   type Period,
@@ -54,6 +62,8 @@ export interface OpsDeps {
   github(config: Config): GitHubClientFactory;
   now(): Date;
   sleep(ms: number): Promise<void>;
+  /** Replaces a file atomically (tests inject a failing one). */
+  writeFileAtomic?(file: string, data: string): Promise<void>;
 }
 
 export const defaultDeps: OpsDeps = {
@@ -75,6 +85,7 @@ export const defaultDeps: OpsDeps = {
 const USAGE = `usage:
   graft pilot doctor --installation <id> [--json]
   graft pilot sync-reviewers --installation <id> --since <YYYY-MM-DD>
+  graft pilot allow-list resolve <file> --installation <id>
   graft pilot purge --installation <id> --confirm <account login> [--dry-run] [--even-if-active]
   graft baseline --repo <owner/repo> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--period baseline|shadow]
                  [--base <branch>] [--max-requests <n>] [--max-wait <15m>] [--dry-run]
@@ -231,6 +242,48 @@ async function pilot(sub: string | undefined, rest: string[], r: Run): Promise<n
     }
     r.out(`reviewers synced for ${synced} PRs, ${skipped} skipped\n`);
     return 0;
+  }
+  if (sub === "allow-list") {
+    if (rest[0] !== "resolve" || rest[1] === undefined || rest[1].startsWith("-")) {
+      throw new UsageError();
+    }
+    const file = rest[1];
+    const v = args(rest.slice(2), { installation: { type: "string" } });
+    const installationId = parseInstallation(str(v.installation));
+    let text: string;
+    try {
+      text = await readFile(file, "utf8");
+    } catch {
+      throw new UsageError("the allow-list file cannot be read");
+    }
+    // Public user data: an installation token only gives the request a rate limit of its own.
+    const octokit = await r.deps.github(r.config).forInstallation(installationId);
+    try {
+      const res = await resolveAllowList(text, async (login) => {
+        try {
+          const u = await octokit.rest.users.getByUsername({ username: login });
+          return u.data.id;
+        } catch (e) {
+          if (classifyGitHubError(e) === "not_found") return undefined;
+          throw e;
+        }
+      });
+      if (res.resolved > 0) await (r.deps.writeFileAtomic ?? writeFileAtomic)(file, res.text);
+      r.out(`resolved ${res.resolved} logins to user IDs\n`);
+      if (res.resolved > 0) {
+        r.out(
+          "check each resolved ID against the person you mean (a login can belong to someone else today)\n",
+        );
+      }
+      return 0;
+    } catch (e) {
+      if (e instanceof AllowListError) throw new UsageError(e.message);
+      if (e instanceof AllowListResolveError) {
+        r.err(`${e.message}\n`);
+        return 3;
+      }
+      throw e;
+    }
   }
   if (sub === "purge") {
     const v = args(rest, {

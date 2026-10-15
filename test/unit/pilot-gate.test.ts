@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { EffectiveVote } from "../../src/modules/intent/index.js";
 import { pickEffectiveVotes } from "../../src/modules/intent/index.js";
-import { AllowListError, parseAllowList } from "../../src/pilot/allow-list.js";
+import {
+  AllowListError,
+  AllowListResolveError,
+  emptyAllowList,
+  parseAllowList,
+  resolveAllowList,
+} from "../../src/pilot/allow-list.js";
 import {
   decideGate,
   filterEligible,
@@ -45,25 +51,10 @@ describe("eligibility and effective votes", () => {
     const res = filterEligible([author, bot, agent, stranger, requested, reviewed, allowed], {
       agentLogins: ["agent-one"],
       reviewers: new Set([`change-1:2`, `change-1:3`]),
-      allow: new Set(["allowed-person"]),
+      allow: new Set([4]),
     });
     expect(res.dropped).toEqual({ author: 1, bot_or_agent: 2, not_reviewer: 1 });
     expect(res.kept.map((v) => v.userLogin)).toEqual(["requested", "reviewed", "Allowed-Person"]);
-    // A reviewer who renamed matches the allow-list by the login of their newest vote.
-    const renamed = filterEligible([vote({ userLogin: "old-name", userId: 77 })], {
-      agentLogins: [],
-      reviewers: new Set(),
-      allow: new Set(["new-name"]),
-      latestLogin: new Map([[77, "New-Name"]]),
-    });
-    expect(renamed.kept).toHaveLength(1);
-    const stale = filterEligible([vote({ userLogin: "old-name", userId: 78 })], {
-      agentLogins: [],
-      reviewers: new Set(),
-      allow: new Set(["new-name"]),
-      latestLogin: new Map([[78, "someone-else"]]),
-    });
-    expect(stale.dropped.not_reviewer).toBe(1);
     // The author is dropped even when the author is also a listed reviewer.
     const both = filterEligible([vote({ isPrAuthor: true, userId: 9 })], {
       agentLogins: [],
@@ -72,6 +63,36 @@ describe("eligibility and effective votes", () => {
     });
     expect(both.kept).toHaveLength(0);
     expect(both.dropped.author).toBe(1);
+  });
+
+  it("U-GATE-13 a recycled login does not inherit an allow-listed vote; the renamed owner of the id still counts", () => {
+    // The allow-list holds user 1 as `alice`. A vote from user 1 who renamed to `alice2` counts; a
+    // vote from user 2 who registered the freed login `alice` does not.
+    const allow = parseAllowList("alice:1\n");
+    const renamed = filterEligible(
+      [vote({ userLogin: "alice2", userId: 1 }), vote({ userLogin: "alice", userId: 2 })],
+      { agentLogins: [], reviewers: new Set(), allow: allow.ids },
+    );
+    expect(renamed.kept.map((v) => [v.userId, v.userLogin])).toEqual([[1, "alice2"]]);
+    expect(renamed.dropped.not_reviewer).toBe(1);
+  });
+
+  it("U-GATE-16 the author is excluded by user id: a rename (the vote's flag was computed from the old login) does not hide them", () => {
+    const renamedAuthor = vote({ userLogin: "new-author-name", userId: 31, isPrAuthor: false });
+    const other = vote({ userLogin: "other", userId: 32, changeId: "change-1" });
+    const elsewhere = vote({ userLogin: "p", userId: 31, changeId: "change-2" });
+    const res = filterEligible([renamedAuthor, other, elsewhere], {
+      agentLogins: [],
+      reviewers: new Set(["change-1:31", "change-1:32", "change-2:31"]),
+      allow: new Set([31]),
+      authorIds: new Map([["change-1", 31]]),
+    });
+    expect(res.dropped.author).toBe(1);
+    // User 31 is the author of change-1 only: their vote on another PR is an ordinary one.
+    expect(res.kept.map((v) => [v.changeId, v.userId])).toEqual([
+      ["change-1", 32],
+      ["change-2", 31],
+    ]);
   });
 
   it("U-GATE-3 one effective vote per (card, user): the latest across sources; two cards are two votes", () => {
@@ -463,7 +484,7 @@ const EXPECTED_MD = `# Graft Phase 0 gate — 2026-11-01 to 2026-11-29
 
 **Verdict: INSUFFICIENT DATA** — below_min_votes (128 of 150), pilot_below_min (inst 456: 31 of 40)
 
-Installations: 123 (acme, 2 repos), 456 (globex, 1 repo). Data through 2026-11-28. Allow-list: 3 logins (sha256 1a2b3c4d…).
+Installations: 123 (acme, 2 repos), 456 (globex, 1 repo). Data through 2026-11-28. Allow-list: 3 user IDs (sha256 1a2b3c4d…).
 
 ## Card accuracy (eligible reviewer votes)
 | Scope | 👍 | 👎 | n | Accuracy | Wilson 95% | PRs | Voters |
@@ -508,23 +529,69 @@ describe("gate report rendering", () => {
 });
 
 describe("allow-list", () => {
-  it("U-GATE-12 skips comments and blanks, lowercases, and names the line of an invalid login", () => {
-    const text = "# pilot reviewers\n\nAlice-Dev  # a trailing comment\nbob\r\n   \ncarol[bot]\n";
+  it("U-GATE-12 reads ids and login:id lines, skips comments and blanks, and counts distinct ids", () => {
+    const text =
+      "# pilot reviewers\n\n12345\nAlice-Dev:678  # a trailing comment\n   \nbob:9\r\ncarol[bot]:10\n678\n";
     const list = parseAllowList(text);
-    expect([...list.logins]).toEqual(["alice-dev", "bob", "carol[bot]"]);
-    expect(list.count).toBe(3);
+    expect([...list.ids].sort((a, b) => a - b)).toEqual([9, 10, 678, 12345]);
+    expect(list.count).toBe(4);
     expect(list.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(parseAllowList(text).sha256).toBe(list.sha256);
+    // The login is informational: it is never matched.
+    expect(parseAllowList("alice:1\n").ids.has(1)).toBe(true);
+    expect(emptyAllowList().count).toBe(0);
+  });
 
-    let thrown: unknown;
-    try {
-      parseAllowList("alice\nnot a login!\nbob\n");
-    } catch (e) {
-      thrown = e;
+  it("U-GATE-14 a login-only line is rejected naming the line number only; so is any malformed line", () => {
+    const secret = "sentinel-login";
+    for (const [text, line, kind] of [
+      [`1\n${secret}\n2\n`, 2, "login_only"],
+      [`# c\n${secret} # note\n`, 2, "login_only"],
+      ["1\n2\nnot a login!:5\n", 3, "invalid"],
+      ["alice:abc\n", 1, "invalid"],
+      ["alice:0\n", 1, "invalid"],
+      ["alice:-3\n", 1, "invalid"],
+      ["alice:12:13\n", 1, "invalid"],
+      ["99999999999999999999\n", 1, "invalid"],
+    ] as const) {
+      let thrown: unknown;
+      try {
+        parseAllowList(text);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, text).toBeInstanceOf(AllowListError);
+      const err = thrown as AllowListError;
+      expect(err.line).toBe(line);
+      expect(err.kind).toBe(kind);
+      expect(err.message).toContain(`line ${line}`);
+      expect(err.message).not.toContain(secret);
+      expect(err.message).not.toContain("not a login");
+      if (kind === "login_only") expect(err.message).toContain("allow-list resolve");
     }
-    expect(thrown).toBeInstanceOf(AllowListError);
-    expect((thrown as AllowListError).line).toBe(2);
-    expect((thrown as AllowListError).message).toBe("allow-list: line 2 is not a GitHub login");
-    expect((thrown as AllowListError).message).not.toContain("not a login!");
+  });
+
+  it("U-GATE-15 resolve rewrites login-only lines as login:id, keeps comments and line endings, and is all-or-nothing", async () => {
+    const ids: Record<string, number> = { alice: 11, bob: 22 };
+    const lookup = async (login: string) => ids[login.toLowerCase()];
+    const out = await resolveAllowList("# x\r\nalice # lead\r\n5\r\nbob:3\nBob\n", lookup);
+    expect(out).toEqual({ text: "# x\r\nalice:11 # lead\r\n5\r\nbob:3\nBob:22\n", resolved: 2 });
+    expect(parseAllowList(out.text).ids).toEqual(new Set([11, 5, 3, 22]));
+
+    // A numeric login cannot be told from an ID by shape: `@1234` says it is a login.
+    const numeric = await resolveAllowList("@1234 # lead\n1234\n", async (l) =>
+      l === "1234" ? 98765 : undefined,
+    );
+    expect(numeric.text).toBe("1234:98765 # lead\n1234\n");
+    expect([...parseAllowList(numeric.text).ids].sort()).toEqual([1234, 98765]);
+    expect(() => parseAllowList("@1234\n")).toThrow(/line 1 has a login/);
+    expect(() => parseAllowList("@not a login\n")).toThrow(/line 1 is not/);
+
+    const err = await resolveAllowList("alice\nghost-1\nghost-2\n", lookup).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AllowListResolveError);
+    expect((err as AllowListResolveError).lines).toEqual([2, 3]);
+    expect((err as AllowListResolveError).message).not.toContain("ghost");
   });
 });

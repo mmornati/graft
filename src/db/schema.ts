@@ -52,6 +52,8 @@ export interface ChangesTable {
   head_sha: string;
   base_ref: string;
   author_login: string;
+  /** The author's immutable user id (null until the pull is next upserted). */
+  author_id: ColumnType<number | null, number | null | undefined, number | null>;
   state: "open" | "closed" | "merged";
   merge_commit_sha: string | null;
   opened_at: Date;
@@ -296,6 +298,16 @@ export interface PrReviewersTable {
   user_id: number;
   reason: "requested" | "reviewed";
   first_seen_at: Date;
+  /** Passed the reviewer sync's standing checks; the gate counts only these rows. */
+  verified: Generated<boolean>;
+}
+
+/** Fail-closed permission checks (403/404) of the last reviewer sync, by user id. */
+export interface ReviewerCheckDenialsTable {
+  change_id: string;
+  user_id: number;
+  status: 403 | 404;
+  checked_at: Date;
 }
 
 export interface ReviewTimeRunsTable {
@@ -376,6 +388,7 @@ export interface Database {
   guard_events: GuardEventsTable;
   webhook_deliveries: WebhookDeliveriesTable;
   pr_reviewers: PrReviewersTable;
+  reviewer_check_denials: ReviewerCheckDenialsTable;
   review_time_runs: ReviewTimeRunsTable;
   review_time_prs: ReviewTimePrsTable;
   incidents: IncidentsTable;
@@ -398,6 +411,7 @@ export const TABLE_NAMES = [
   "guard_events",
   "webhook_deliveries",
   "pr_reviewers",
+  "reviewer_check_denials",
   "review_time_runs",
   "review_time_prs",
   "incidents",

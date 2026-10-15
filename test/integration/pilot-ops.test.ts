@@ -1,3 +1,7 @@
+import { readdirSync, statSync } from "node:fs";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { applyCronSchedules } from "../../src/app/crons.js";
@@ -240,6 +244,47 @@ describe("pilot doctor", () => {
     expect(missing.err).toBe("");
   });
 
+  it("I-DOC-4 an unverified-only change counts as not synced; 403 permission denials warn, 404s are counted", async () => {
+    await healthy();
+    const feedback = async () =>
+      (
+        JSON.parse(
+          (await run("pilot", "doctor", "--installation", String(PILOT_A.id), "--json")).out,
+        ).checks as { id: string; status: string; detail: string }[]
+      ).find((c) => c.id === "feedback");
+    expect((await feedback())?.status).toBe("OK");
+
+    // Legacy rows: stored, but not verified.
+    await t.db.updateTable("pr_reviewers").set({ verified: false }).execute();
+    const legacy = await feedback();
+    expect(legacy?.status).toBe("WARN");
+    expect(legacy?.detail).toContain("no verified reviewer row");
+    await t.db.updateTable("pr_reviewers").set({ verified: true }).execute();
+
+    const change = await t.db.selectFrom("changes").select("id").executeTakeFirstOrThrow();
+    await t.db
+      .insertInto("reviewer_check_denials")
+      .values({ change_id: change.id, user_id: 11, status: 404, checked_at: ago(HOUR) })
+      .execute();
+    const notFound = await feedback();
+    expect(notFound?.status).toBe("OK");
+    expect(notFound?.detail).toContain("1 reviewer permission checks answered 404");
+
+    await t.db
+      .insertInto("reviewer_check_denials")
+      .values({ change_id: change.id, user_id: 12, status: 403, checked_at: ago(HOUR) })
+      .execute();
+    const forbidden = await feedback();
+    expect(forbidden?.status).toBe("WARN");
+    expect(forbidden?.detail).toContain("1 reviewer permission checks were forbidden (403)");
+    // An old denial does not count.
+    await t.db
+      .updateTable("reviewer_check_denials")
+      .set({ checked_at: ago(10 * DAY) })
+      .execute();
+    expect((await feedback())?.status).toBe("OK");
+  });
+
   it("warns for repository_selection = all and for votes without a reviewer sync", async () => {
     const change = await healthy();
     await t.db.updateTable("installations").set({ repository_selection: "all" }).execute();
@@ -319,6 +364,10 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
     at: ago(DAY),
   });
   await addReviewer(t.db, { changeId: change, userId: 70 + o.seq });
+  await t.db
+    .insertInto("reviewer_check_denials")
+    .values({ change_id: change, user_id: 90 + o.seq, status: 403, checked_at: FIXED_NOW })
+    .execute();
   const run = await sql<{ id: string }>`
     insert into review_time_runs (repository_id, period, from_date, to_date, base_ref, extractor_version,
       pr_count, excluded_count, aggregates, requests, extracted_at)
@@ -391,6 +440,9 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
     ),
     review_time_prs: await n(
       sql`select count(*) as n from review_time_prs where run_id in ${runs}`,
+    ),
+    reviewer_check_denials: await n(
+      sql`select count(*) as n from reviewer_check_denials where change_id in ${changes}`,
     ),
     incidents: await n(sql`select count(*) as n from incidents where repository_id = ${repo}`),
     metrics_daily: await n(
@@ -643,6 +695,72 @@ describe("operations CLI", () => {
     ).toBe(2);
   });
 
+  it("I-ALLOW-1 pilot allow-list resolve rewrites login-only lines as login:id through the fake GitHub; an unknown login writes nothing", async () => {
+    await world();
+    api.state.users.set("alice", 1001);
+    api.state.users.set("bob-dev", 1002);
+    const dir = await mkdtemp(path.join(tmpdir(), "graft-allow-"));
+    const file = path.join(dir, "allow.txt");
+    await writeFile(file, "# pilots\nAlice  # tech lead\n4242\ncarol:77\nbob-dev\n");
+    const argv = ["pilot", "allow-list", "resolve", file, "--installation", String(PILOT_A.id)];
+    const inodeBefore = statSync(file).ino;
+    const res = await run(...argv);
+    expect(res.code).toBe(0);
+    expect(res.out).toContain("resolved 2 logins");
+    // Written through a temp file renamed over the original (a new inode), with nothing left behind.
+    expect(statSync(file).ino).not.toBe(inodeBefore);
+    expect(readdirSync(dir)).toEqual(["allow.txt"]);
+    expect(await readFile(file, "utf8")).toBe(
+      "# pilots\nAlice:1001 # tech lead\n4242\ncarol:77\nbob-dev:1002\n",
+    );
+    // Only requests for users, never for a line that already has an ID.
+    expect(api.requests.map((r) => r.path).filter((p) => p.startsWith("/users/"))).toEqual([
+      "/users/Alice",
+      "/users/bob-dev",
+    ]);
+    // Nothing left to resolve: the file is unchanged.
+    expect((await run(...argv)).out).toContain("resolved 0 logins");
+
+    // One unknown login: exit 3, line number only, the file is not touched.
+    const before = "ghost\n1\n";
+    await writeFile(file, before);
+    const bad = await run(...argv);
+    expect(bad.code).toBe(3);
+    expect(bad.err).toContain("line 1");
+    expect(bad.err).not.toContain("ghost");
+    expect(await readFile(file, "utf8")).toBe(before);
+
+    // A malformed line is a usage error naming the line only.
+    await writeFile(file, "fine:1\nnot a login!\n");
+    const mal = await run(...argv);
+    expect(mal.code).toBe(2);
+    expect(mal.err).toContain("line 2");
+    expect(mal.err).not.toContain("not a login");
+    // The installation is required.
+    expect((await run("pilot", "allow-list", "resolve", file)).code).toBe(2);
+
+    // A numeric login is written `@1234` and comes out as `1234:id`.
+    api.state.users.set("1234", 555);
+    await writeFile(file, "@1234\n1234\n");
+    expect((await run(...argv)).code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe("1234:555\n1234\n");
+
+    // A write that fails leaves the original allow-list as it was (the CLI exits 1).
+    await writeFile(file, "alice\n");
+    const failing = await opsMain(
+      argv,
+      { out: () => undefined, err: () => undefined },
+      {
+        ...deps(),
+        writeFileAtomic: async () => {
+          throw new Error("disk full");
+        },
+      },
+    );
+    expect(failing).toBe(1);
+    expect(await readFile(file, "utf8")).toBe("alice\n");
+  });
+
   it("pilot sync-reviewers backfills eligibility; metrics rollup writes rows for the fixture installation", async () => {
     await world();
     api.state.pulls.set(PR_NUMBER, makePull());
@@ -650,6 +768,8 @@ describe("operations CLI", () => {
       users: [{ id: 5001, login: "rev-a", type: "User" }],
       teams: [],
     });
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    api.state.permissions.set("rev-b", { id: 5002, role: "write" });
     api.state.reviews.set(PR_NUMBER, [makeReview({ id: 1, login: "rev-b", userId: 5002 })]);
     await addChange(t.db, {
       repositoryId: REPO_ID,
@@ -745,13 +865,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0006_pilot"]);
+    expect(down).toEqual(["0007_vote_eligibility"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0006_pilot"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0007_vote_eligibility"]);
     }
   });
 });
@@ -802,10 +922,15 @@ describe("privacy of the step 6 tables", () => {
       },
     ]);
     api.state.requestedReviewers.set(PR_NUMBER, {
-      users: [{ id: 6001, login: S[4] as string, type: "User" }],
+      users: [
+        { id: 6001, login: S[4] as string, type: "User" },
+        // Not a collaborator (404): fails closed, recorded by id only.
+        { id: 6003, login: `${S[4]}-stranger`, type: "User" },
+      ],
       teams: [],
     });
-    api.state.reviews.set(PR_NUMBER, [makeReview({ id: 1, login: S[4], userId: 6002 })]);
+    api.state.permissions.set((S[4] as string).toLowerCase(), { id: 6001, role: "triage" });
+    api.state.reviews.set(PR_NUMBER, [makeReview({ id: 1, login: S[4], userId: 6001 })]);
     await addChange(t.db, {
       repositoryId: REPO_ID,
       prNumber: PR_NUMBER,
@@ -868,6 +993,7 @@ describe("privacy of the step 6 tables", () => {
 
     const tables = [
       "pr_reviewers",
+      "reviewer_check_denials",
       "review_time_runs",
       "review_time_prs",
       "incidents",

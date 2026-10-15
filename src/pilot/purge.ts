@@ -41,6 +41,8 @@ export const OWNED_ROWS: Record<PurgedTable, (installationId: number) => RawBuil
   webhook_deliveries: (i) =>
     sql`select count(*) as n from webhook_deliveries where installation_id = ${i} or repository_id in ${repos(i)}`,
   pr_reviewers: (i) => sql`select count(*) as n from pr_reviewers where change_id in ${changes(i)}`,
+  reviewer_check_denials: (i) =>
+    sql`select count(*) as n from reviewer_check_denials where change_id in ${changes(i)}`,
   review_time_runs: (i) =>
     sql`select count(*) as n from review_time_runs where repository_id in ${repos(i)}`,
   review_time_prs: (i) =>

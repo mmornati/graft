@@ -21,11 +21,13 @@ import {
   makeReaction,
   makeReview,
   OWNER,
+  PR_AUTHOR_ID,
   PR_NUMBER,
   REPO,
   REPO_ID,
 } from "../helpers/github-builders.js";
 import { GENERATE_DATA, loadIntentScenario, scenarioLlm } from "../helpers/intent-scenario.js";
+import { addReviewer } from "../helpers/pilot-seed.js";
 import { jobsNamed } from "../helpers/policy-scenario.js";
 import { seedWorld } from "../helpers/seed.js";
 
@@ -86,6 +88,7 @@ describe("reviewer eligibility sync", () => {
       users: [{ id: 5001, login: "rev-a", type: "User" }],
       teams: [{ slug: "platform" }],
     });
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
     const e = prEvent("pull_request.labeled", "rr-1", (p) => {
       p.action = "review_requested";
     });
@@ -110,6 +113,10 @@ describe("reviewer eligibility sync", () => {
       users: [{ id: 5001, login: "rev-a", type: "User" }],
       teams: [],
     });
+    api.state.permissions.set("rev-a", { id: 5001, role: "write" });
+    api.state.permissions.set("rev-b", { id: 5002, role: "write" });
+    api.state.permissions.set("rev-c", { id: 5005, role: "write" });
+    api.state.permissions.set("drive-by", { id: 5004, role: "write" });
     api.state.reviews.set(PR_NUMBER, [
       makeReview({ id: 1, login: "rev-b", userId: 5002, state: "CHANGES_REQUESTED" }),
       // A comment alone does not make a voter eligible (anyone can comment on a public repo).
@@ -253,6 +260,264 @@ describe("reviewer eligibility sync", () => {
     await t.db.deleteFrom("changes").execute();
     expect(await syncReviewers(jobContext(t), SYNC_DATA)).toBe("skipped");
     expect(api.requests).toEqual([]);
+  });
+
+  /** Every `pr_reviewers` row with its verified flag. */
+  const rows = () =>
+    t.db
+      .selectFrom("pr_reviewers")
+      .select(["user_id", "reason", "verified"])
+      .orderBy("reason")
+      .orderBy("user_id")
+      .execute();
+  const permissionCalls = () =>
+    api.requests.filter((r) => /\/collaborators\/[^/]+\/permission$/.test(r.path));
+
+  it("I-REV-6 an outsider's APPROVED or CHANGES_REQUESTED review on a public repo is not eligible; a member's, owner's and collaborator's are", async () => {
+    await withChange();
+    for (const [login, id] of [
+      ["outsider", 6001],
+      ["contributor", 6002],
+      ["first-timer", 6003],
+      ["collab", 6004],
+      ["member", 6005],
+      ["owner", 6006],
+      ["member-2", 6007],
+    ] as const) {
+      // Everyone has write access here: only the association tells them apart.
+      api.state.permissions.set(login, { id, role: "write" });
+    }
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 1, login: "outsider", userId: 6001, association: "NONE" }),
+      makeReview({
+        id: 2,
+        login: "contributor",
+        userId: 6002,
+        association: "CONTRIBUTOR",
+        state: "CHANGES_REQUESTED",
+      }),
+      makeReview({
+        id: 3,
+        login: "first-timer",
+        userId: 6003,
+        association: "FIRST_TIME_CONTRIBUTOR",
+      }),
+      makeReview({ id: 4, login: "collab", userId: 6004, association: "COLLABORATOR" }),
+      makeReview({
+        id: 5,
+        login: "member",
+        userId: 6005,
+        association: "MEMBER",
+        state: "DISMISSED",
+      }),
+      makeReview({ id: 6, login: "owner", userId: 6006, association: "OWNER" }),
+      // A member's comment is still only a comment.
+      makeReview({
+        id: 7,
+        login: "member-2",
+        userId: 6007,
+        association: "MEMBER",
+        state: "COMMENTED",
+      }),
+    ]);
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect(await rows()).toEqual([
+      { user_id: 6004, reason: "reviewed", verified: true },
+      { user_id: 6005, reason: "reviewed", verified: true },
+      { user_id: 6006, reason: "reviewed", verified: true },
+    ]);
+  });
+
+  it("I-REV-7 a requested user needs triage or higher: write, maintain, admin and triage pass; read, a 404 and a 403 do not", async () => {
+    await withChange();
+    const users = [
+      ["u-admin", 7001, "admin"],
+      ["u-maintain", 7002, "maintain"],
+      ["u-write", 7003, "write"],
+      ["u-triage", 7004, "triage"],
+      ["u-read", 7005, "read"],
+      ["u-none", 7006, "none"],
+      ["u-missing", 7007, null],
+      ["u-forbidden", 7008, "write"],
+      ["u-sock", 7009, "write"],
+    ] as const;
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: users.map(([login, id]) => ({ id, login, type: "User" })),
+      teams: [],
+    });
+    for (const [login, id, role] of users) {
+      if (role !== null) api.state.permissions.set(login, { id, role });
+    }
+    // The login now belongs to someone else: the permission answer is for another account.
+    api.state.permissions.set("u-sock", { id: 99999, role: "write" });
+    api.failNext("GET", /\/collaborators\/u-forbidden\/permission$/, 403);
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect((await rows()).map((r) => r.user_id)).toEqual([7001, 7002, 7003, 7004]);
+    expect((await rows()).every((r) => r.reason === "requested" && r.verified)).toBe(true);
+    // One permission request per distinct user.
+    expect(permissionCalls()).toHaveLength(users.length);
+  });
+
+  it("I-REV-8 a rate limit or a 5xx on the permission check retries the job and stores nothing; the retry succeeds", async () => {
+    await withChange();
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: [
+        { id: 8001, login: "ok-user", type: "User" },
+        { id: 8002, login: "flaky", type: "User" },
+      ],
+      teams: [],
+    });
+    api.state.permissions.set("ok-user", { id: 8001, role: "write" });
+    api.state.permissions.set("flaky", { id: 8002, role: "write" });
+    api.failNext("GET", /\/collaborators\/flaky\/permission$/, 502);
+    const transient = await syncReviewers(jobContext(t), SYNC_DATA).catch((e: unknown) => e);
+    expect(transient).toBeInstanceOf(Error);
+    expect(transient).not.toBeInstanceOf(PermanentJobError);
+    api.failNext("GET", /\/collaborators\/flaky\/permission$/, 403, {
+      "x-ratelimit-remaining": "0",
+      "retry-after": "60",
+    });
+    const limited = await syncReviewers(jobContext(t), SYNC_DATA).catch((e: unknown) => e);
+    expect(limited).toBeInstanceOf(Error);
+    expect(limited).not.toBeInstanceOf(PermanentJobError);
+    // Nothing was stored by the failed attempts: no half-verified state.
+    expect(await rows()).toEqual([]);
+    expect(await syncReviewers(jobContext(t), SYNC_DATA)).toBe("synced");
+    expect((await rows()).map((r) => r.user_id)).toEqual([8001, 8002]);
+  });
+
+  it("I-REV-9 legacy rows are unverified: a sync promotes the ones that pass the checks and leaves the others unverified", async () => {
+    const change = await withChange();
+    for (const [userId, reason] of [
+      [9001, "requested"],
+      [9002, "reviewed"],
+      [9003, "reviewed"],
+    ] as const) {
+      await addReviewer(t.db, { changeId: change.id, userId, reason, verified: false });
+    }
+    expect((await rows()).every((r) => !r.verified)).toBe(true);
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: [{ id: 9001, login: "legacy-ok", type: "User" }],
+      teams: [],
+    });
+    api.state.permissions.set("legacy-ok", { id: 9001, role: "triage" });
+    api.state.permissions.set("legacy-member", { id: 9002, role: "write" });
+    api.state.permissions.set("legacy-outsider", { id: 9003, role: "write" });
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 1, login: "legacy-member", userId: 9002, association: "MEMBER" }),
+      makeReview({ id: 2, login: "legacy-outsider", userId: 9003, association: "NONE" }),
+    ]);
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect(await rows()).toEqual([
+      { user_id: 9001, reason: "requested", verified: true },
+      { user_id: 9002, reason: "reviewed", verified: true },
+      { user_id: 9003, reason: "reviewed", verified: false },
+    ]);
+  });
+
+  it("I-REV-10 custom roles: judged by their base permission. A role built on write passes; one built on triage or read fails; a role named Triage is not the built-in", async () => {
+    await withChange();
+    const cases = [
+      ["custom-write", 7101, "release-manager", "write", true],
+      ["custom-maintain", 7102, "release-lead", "write", true],
+      ["custom-triage", 7103, "triager-plus", "read", false],
+      ["custom-read", 7104, "auditor", "read", false],
+      ["case-trick", 7105, "Triage", "read", false],
+      ["builtin-triage", 7106, "triage", "read", true],
+    ] as const;
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: cases.map(([login, id]) => ({ id, login, type: "User" })),
+      teams: [],
+    });
+    for (const [login, id, role, permission] of cases) {
+      api.state.permissions.set(login, { id, role, permission });
+    }
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect((await rows()).map((r) => r.user_id)).toEqual(
+      cases.filter((c) => c[4]).map((c) => c[1]),
+    );
+  });
+
+  it("I-REV-11 review authors need triage-or-higher too: a MEMBER or COLLABORATOR with read only is not eligible, one with write is; one check per user", async () => {
+    await withChange();
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 1, login: "org-member-read", userId: 7201, association: "MEMBER" }),
+      makeReview({ id: 2, login: "org-member-write", userId: 7202, association: "MEMBER" }),
+      makeReview({ id: 3, login: "collab-read", userId: 7203, association: "COLLABORATOR" }),
+      makeReview({ id: 4, login: "collab-triage", userId: 7204, association: "COLLABORATOR" }),
+      // Two reviews by the same user, who is also requested: one permission check.
+      makeReview({ id: 5, login: "org-member-write", userId: 7202, association: "MEMBER" }),
+    ]);
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: [{ id: 7202, login: "org-member-write", type: "User" }],
+      teams: [],
+    });
+    api.state.permissions.set("org-member-read", { id: 7201, role: "read" });
+    api.state.permissions.set("org-member-write", { id: 7202, role: "write" });
+    api.state.permissions.set("collab-read", { id: 7203, role: "read" });
+    api.state.permissions.set("collab-triage", { id: 7204, role: "triage" });
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect(await rows()).toEqual([
+      { user_id: 7202, reason: "requested", verified: true },
+      { user_id: 7202, reason: "reviewed", verified: true },
+      { user_id: 7204, reason: "reviewed", verified: true },
+    ]);
+    expect(permissionCalls()).toHaveLength(4);
+  });
+
+  it("I-REV-12 a 403 or 404 on the permission check is logged (status and route only) and recorded by id; a later pass clears it", async () => {
+    await withChange();
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: [
+        { id: 7301, login: "login-secret-a", type: "User" },
+        { id: 7302, login: "login-secret-b", type: "User" },
+      ],
+      teams: [],
+    });
+    api.state.permissions.set("login-secret-a", { id: 7301, role: "write" });
+    api.state.permissions.set("login-secret-b", { id: 7302, role: "write" });
+    api.failNext("GET", /\/collaborators\/login-secret-a\/permission$/, 403);
+    api.failNext("GET", /\/collaborators\/login-secret-b\/permission$/, 404);
+    const logged: { level: string; obj: unknown; msg: string }[] = [];
+    const rec =
+      (level: string) =>
+      (obj: unknown, msg?: string): void => {
+        logged.push({ level, obj, msg: msg ?? "" });
+      };
+    const log = { info: rec("info"), warn: rec("warn"), error: rec("error"), debug: rec("debug") };
+    const ctx = { ...jobContext(t), log: log as never };
+    await syncReviewers(ctx, SYNC_DATA);
+    expect(await rows()).toEqual([]);
+    const denials = () =>
+      t.db
+        .selectFrom("reviewer_check_denials")
+        .select(["user_id", "status"])
+        .orderBy("user_id")
+        .execute();
+    expect(await denials()).toEqual([
+      { user_id: 7301, status: 403 },
+      { user_id: 7302, status: 404 },
+    ]);
+    const warns = logged.filter((l) => l.level === "warn");
+    expect(warns.map((w) => (w.obj as { status: number }).status).sort()).toEqual([403, 404]);
+    expect(JSON.stringify(logged)).not.toContain("login-secret");
+    expect(JSON.stringify(warns)).toContain("collaborators/{username}/permission");
+    const info = logged.find((l) => l.level === "info")?.obj as Record<string, number>;
+    expect(info).toMatchObject({ permissionForbidden: 1, permissionNotFound: 1 });
+
+    // The next sync passes (the permission was fixed): nothing is denied any more.
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect(await denials()).toEqual([]);
+    expect((await rows()).map((r) => r.user_id)).toEqual([7301, 7302]);
+  });
+
+  it("I-REV-13 the change row stores the PR author's user id (the author is excluded by id, not login)", async () => {
+    const change = await withChange();
+    expect(change.author_id).toBe(PR_AUTHOR_ID);
+    // A later snapshot with a renamed author keeps the id.
+    const renamed = makePull({ user: { id: PR_AUTHOR_ID, login: "renamed", type: "User" } });
+    const res = await upsertChangeFromPull(t.db, REPO_ID, renamed as never, FIXED_NOW);
+    expect(res.change).toMatchObject({ author_id: PR_AUTHOR_ID, author_login: "renamed" });
   });
 });
 

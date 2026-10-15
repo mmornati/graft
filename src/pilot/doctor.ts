@@ -132,19 +132,38 @@ export async function runDoctor(
       (select count(distinct f.change_id) from intent_feedback f join changes ch on ch.id = f.change_id
         join repositories r on r.id = ch.repository_id
         where r.installation_id = ${id}
-          and not exists (select 1 from pr_reviewers p where p.change_id = f.change_id))::text as unsynced`.execute(
+          and not exists (select 1 from pr_reviewers p where p.change_id = f.change_id and p.verified))::text as unsynced`.execute(
     db,
   );
   const fr = fb.rows[0];
+  const den = await sql<{ forbidden: string; not_found: string }>`
+    select count(*) filter (where d.status = 403)::text as forbidden,
+      count(*) filter (where d.status = 404)::text as not_found
+    from reviewer_check_denials d join changes ch on ch.id = d.change_id
+    join repositories r on r.id = ch.repository_id
+    where r.installation_id = ${id} and d.checked_at >= ${ago(7 * DAY_MS)}`.execute(db);
   if (num(fr?.votes) === 0 && num(fr?.shown) > 0) {
     add("feedback", "WARN", "0 votes in 7 days while cards were shown");
+  } else if (num(den.rows[0]?.forbidden) > 0) {
+    add(
+      "feedback",
+      "WARN",
+      `${num(den.rows[0]?.forbidden)} reviewer permission checks were forbidden (403) in 7 days: does the App have Metadata: read? Those reviewers are not eligible`,
+    );
   } else if (num(fr?.unsynced) > 0) {
     add(
       "feedback",
       "WARN",
-      `${num(fr?.unsynced)} PRs have votes but no reviewer sync (run pilot sync-reviewers)`,
+      `${num(fr?.unsynced)} PRs have votes but no verified reviewer row (run pilot sync-reviewers)`,
     );
-  } else add("feedback", "OK", `${num(fr?.votes)} votes in 7 days`);
+  } else {
+    const nf = num(den.rows[0]?.not_found);
+    add(
+      "feedback",
+      "OK",
+      `${num(fr?.votes)} votes in 7 days${nf > 0 ? `; ${nf} reviewer permission checks answered 404 (not a collaborator)` : ""}`,
+    );
+  }
 
   // policy
   const pol = await sql<{ full_name: string; outcome: string }>`

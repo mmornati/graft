@@ -192,7 +192,13 @@ export async function addSpend(
 
 export async function addReviewer(
   db: Db,
-  r: { changeId: string; userId: number; reason?: "requested" | "reviewed" },
+  r: {
+    changeId: string;
+    userId: number;
+    reason?: "requested" | "reviewed";
+    /** Default true; false is a legacy row stored before eligibility was verified. */
+    verified?: boolean;
+  },
 ): Promise<void> {
   await db
     .insertInto("pr_reviewers")
@@ -201,6 +207,7 @@ export async function addReviewer(
       user_id: r.userId,
       reason: r.reason ?? "requested",
       first_seen_at: new Date("2026-10-01T00:00:00Z"),
+      verified: r.verified ?? true,
     })
     .execute();
 }
@@ -263,6 +270,8 @@ const D = (s: string): Date => new Date(s);
 export interface GateWorld {
   /** Logins of every eligible voter (to build an allow-list). */
   voterLogins: string[];
+  /** User ids of every eligible voter, in the same order. */
+  voterIds: number[];
   /** `${changeId}` of each PR by installation, for tests that remove reviewers. */
   changes: Map<number, string[]>;
 }
@@ -273,7 +282,7 @@ export interface GateWorld {
  * votes. `seedWorld` is NOT called: this helper adds both installations.
  */
 export async function seedGateWorld(db: Db, o: { votes?: boolean } = {}): Promise<GateWorld> {
-  const world: GateWorld = { voterLogins: [], changes: new Map() };
+  const world: GateWorld = { voterLogins: [], voterIds: [], changes: new Map() };
   const pilots = [
     { ...PILOT_A, name: "api", downs: 5, voterBase: 100, prefix: "a" },
     { ...PILOT_B, name: "svc", downs: 6, voterBase: 200, prefix: "b" },
@@ -355,7 +364,10 @@ export async function seedGateWorld(db: Db, o: { votes?: boolean } = {}): Promis
       for (let k = 0; k < 3; k++) {
         const voter = p.voterBase + ((i + k) % 4) + 1;
         const login = `${p.prefix}-rev-${voter}`;
-        if (!world.voterLogins.includes(login)) world.voterLogins.push(login);
+        if (!world.voterLogins.includes(login)) {
+          world.voterLogins.push(login);
+          world.voterIds.push(voter);
+        }
         await addVote(db, {
           changeId: change,
           cardId: card,

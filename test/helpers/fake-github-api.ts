@@ -85,6 +85,13 @@ export function createFakeGitHubApi(
       number,
       { users: { id: number; login: string; type: string }[]; teams: { slug: string }[] }
     >(),
+    /**
+     * `repos.getCollaboratorPermissionLevel` by lowercased login. A login with no entry is a 404,
+     * like a user who is not a collaborator.
+     */
+    permissions: new Map<string, { id: number; role: string; permission?: string }>(),
+    /** `users.getByUsername` by lowercased login (a missing login is a 404). */
+    users: new Map<string, number>(),
     /** Reactions per comment id. */
     reactions: new Map<number, FakeReaction[]>(),
     comments: [] as FakeComment[],
@@ -196,6 +203,14 @@ export function createFakeGitHubApi(
         repository_selection: "selected",
       });
     }
+    const userMatch = method === "GET" ? /^\/users\/([^/]+)$/.exec(path) : null;
+    if (userMatch) {
+      const login = decodeURIComponent(userMatch[1] as string);
+      const id = state.users.get(login.toLowerCase());
+      return id === undefined
+        ? json(404, { message: "Not Found" })
+        : json(200, { id, login, type: "User" });
+    }
     if (!path.startsWith(`${repoPrefix}/`)) return json(404, { message: "Not Found (fake repo)" });
     const rest = path.slice(repoPrefix.length);
     const is = (meth: string, re: RegExp): RegExpExecArray | null =>
@@ -233,6 +248,20 @@ export function createFakeGitHubApi(
       const n = Number(m[1]);
       if (!state.pulls.has(n)) return json(404, { message: "Not Found" });
       return json(200, state.requestedReviewers.get(n) ?? { users: [], teams: [] });
+    }
+    m = is("GET", /^\/collaborators\/([^/]+)\/permission$/);
+    if (m) {
+      const login = decodeURIComponent(m[1] as string);
+      const p = state.permissions.get(login.toLowerCase());
+      if (!p) return json(404, { message: "Not Found" });
+      // The legacy `permission` field maps maintain to write and triage to read.
+      const legacy =
+        p.permission ?? (p.role === "maintain" ? "write" : p.role === "triage" ? "read" : p.role);
+      return json(200, {
+        permission: legacy,
+        role_name: p.role,
+        user: { id: p.id, login, type: "User" },
+      });
     }
     m = is("GET", /^\/issues\/(\d+)\/timeline$/);
     if (m) {

@@ -21,7 +21,7 @@ export interface LivePull {
   additions: number;
   deletions: number;
   commits: number;
-  user: { login: string; type: string } | null;
+  user: { id?: number; login: string; type: string } | null;
   labels?: { name: string }[];
   head: { sha: string };
   base: {
@@ -52,6 +52,7 @@ export async function upsertChangeFromPull(
     head_sha: pull.head.sha,
     base_ref: pull.base.ref,
     author_login: pull.user?.login ?? "ghost",
+    author_id: pull.user?.id ?? null,
     author_is_bot: pull.user?.type === "Bot",
     state,
     // GitHub fills merge_commit_sha with a test-merge SHA on open PRs: keep it only when merged.

@@ -5,7 +5,11 @@ import type { Database, IncidentsTable } from "../../db/schema.js";
 type Executor = Db | Transaction<Database>;
 export type IncidentRow = Selectable<IncidentsTable>;
 
-/** Insert reviewer ids for a change; existing (change, user, reason) rows stay as they are. */
+/**
+ * Upsert verified reviewer ids for a change (returns how many rows were written). A row that exists already keeps its `first_seen_at`
+ * and becomes verified: a legacy row (stored before eligibility was checked) is promoted only by a
+ * sync that re-verified it. Callers pass only users who passed the checks.
+ */
 export async function addReviewers(
   ex: Executor,
   changeId: string,
@@ -21,9 +25,12 @@ export async function addReviewers(
         user_id: r.userId,
         reason: r.reason,
         first_seen_at: now,
+        verified: true,
       })),
     )
-    .onConflict((oc) => oc.columns(["change_id", "user_id", "reason"]).doNothing())
+    .onConflict((oc) =>
+      oc.columns(["change_id", "user_id", "reason"]).doUpdateSet({ verified: true }),
+    )
     .returning("user_id")
     .execute();
   return res.length;
@@ -89,4 +96,41 @@ export async function listIncidents(
     where r.installation_id = ${installationId}
     order by i.occurred_at, i.id`.execute(ex);
   return res.rows;
+}
+
+/**
+ * Keep the last permission-check answer per (change, user) that failed closed with 403 or 404, and
+ * forget users whose latest check passed. Ids and a status only.
+ */
+export async function recordPermissionDenials(
+  ex: Executor,
+  changeId: string,
+  r: { denied: ReadonlyMap<number, 403 | 404>; clear: readonly number[] },
+  now: Date,
+): Promise<void> {
+  if (r.clear.length > 0) {
+    await ex
+      .deleteFrom("reviewer_check_denials")
+      .where("change_id", "=", changeId)
+      .where("user_id", "in", [...r.clear])
+      .execute();
+  }
+  if (r.denied.size === 0) return;
+  await ex
+    .insertInto("reviewer_check_denials")
+    .values(
+      [...r.denied].map(([userId, status]) => ({
+        change_id: changeId,
+        user_id: userId,
+        status,
+        checked_at: now,
+      })),
+    )
+    .onConflict((oc) =>
+      oc.columns(["change_id", "user_id"]).doUpdateSet((eb) => ({
+        status: eb.ref("excluded.status"),
+        checked_at: eb.ref("excluded.checked_at"),
+      })),
+    )
+    .execute();
 }

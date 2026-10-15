@@ -29,7 +29,7 @@ export interface FakePull {
   deletions: number;
   draft: boolean;
   commits: number;
-  user: { login: string; type: string } | null;
+  user: { id?: number; login: string; type: string } | null;
   labels: { name: string }[];
   head: { sha: string };
   base: {
@@ -38,6 +38,9 @@ export interface FakePull {
     repo: { id: number; full_name: string; private: boolean; default_branch: string };
   };
 }
+
+/** User id of the default pull request author. */
+export const PR_AUTHOR_ID = 4_242_001;
 
 export function makePull(overrides: Partial<FakePull> = {}): FakePull {
   return {
@@ -57,7 +60,7 @@ export function makePull(overrides: Partial<FakePull> = {}): FakePull {
     deletions: 2,
     draft: false,
     commits: 1,
-    user: { login: "graft-dev", type: "User" },
+    user: { id: PR_AUTHOR_ID, login: "graft-dev", type: "User" },
     labels: [],
     head: { sha: HEAD_SHA },
     base: {
@@ -183,9 +186,13 @@ export interface FakeReview {
   state: string;
   commit_id: string | null;
   submitted_at: string | null;
+  author_association: string;
 }
 
-/** A review of `pulls.listReviews`. Defaults: approved on the PR head, by a human reviewer. */
+/**
+ * A review of `pulls.listReviews`. Defaults: approved on the PR head, by a human reviewer who is a
+ * COLLABORATOR (pass `association: "NONE"` for an outsider on a public repository).
+ */
 export function makeReview(o: {
   id: number;
   login?: string;
@@ -194,6 +201,7 @@ export function makeReview(o: {
   state?: string;
   commitId?: string | null;
   submittedAt?: string;
+  association?: string;
 }): FakeReview {
   const login = o.login ?? "reviewer-1";
   return {
@@ -202,6 +210,7 @@ export function makeReview(o: {
     state: o.state ?? "APPROVED",
     commit_id: o.commitId === undefined ? HEAD_SHA : o.commitId,
     submitted_at: o.submittedAt ?? `2026-10-14T11:${String(o.id % 60).padStart(2, "0")}:00Z`,
+    author_association: o.association ?? "COLLABORATOR",
   };
 }
 

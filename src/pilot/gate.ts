@@ -166,16 +166,17 @@ export interface EligibilityResult {
 
 /**
  * D5, in the order author, bot or agent, not a reviewer. `reviewers` holds `${changeId}:${userId}`
- * for every `pr_reviewers` row; `allow` holds lowercased logins.
+ * for every verified `pr_reviewers` row; `allow` holds GitHub user ids. Neither matches by login:
+ * a login can be recycled after a rename, a user id cannot.
  */
 export function filterEligible(
   votes: readonly EffectiveVote[],
   o: {
     agentLogins: readonly string[];
     reviewers: ReadonlySet<string>;
-    allow: ReadonlySet<string>;
-    /** user id → the login of that user's newest vote: the allow-list matches by it. */
-    latestLogin?: ReadonlyMap<number, string>;
+    allow: ReadonlySet<number>;
+    /** changeId → the PR author's user id: the author is excluded by id, so a rename cannot hide them. */
+    authorIds?: ReadonlyMap<string, number>;
   },
 ): EligibilityResult {
   const agents = new Set(o.agentLogins.map((l) => l.toLowerCase()));
@@ -184,13 +185,9 @@ export function filterEligible(
   for (const v of votes) {
     if (v.cardStatus !== "ok") continue;
     const login = v.userLogin.toLowerCase();
-    if (v.isPrAuthor) dropped.author++;
+    if (v.isPrAuthor || o.authorIds?.get(v.changeId) === v.userId) dropped.author++;
     else if (login.endsWith("[bot]") || agents.has(login)) dropped.bot_or_agent++;
-    else if (
-      o.reviewers.has(`${v.changeId}:${v.userId}`) ||
-      o.allow.has(login) ||
-      o.allow.has((o.latestLogin?.get(v.userId) ?? login).toLowerCase())
-    ) {
+    else if (o.reviewers.has(`${v.changeId}:${v.userId}`) || o.allow.has(v.userId)) {
       kept.push(v);
     } else dropped.not_reviewer++;
   }
@@ -266,30 +263,32 @@ export async function gatherGate(
   const synced = new Set<string>();
   if (changeIds.length > 0) {
     const rows = await sql<{ change_id: string; user_id: number }>`
-      select change_id, user_id from pr_reviewers where change_id in (${inList(changeIds)})`.execute(
-      db,
-    );
+      select change_id, user_id from pr_reviewers
+      where verified and change_id in (${inList(changeIds)})`.execute(db);
     for (const r of rows.rows) {
       reviewers.add(`${r.change_id}:${num(r.user_id)}`);
       synced.add(r.change_id);
     }
   }
-  // A reviewer who renamed matches the allow-list by the login of their newest vote.
-  const latest = await sql<{ user_id: number; user_login: string }>`
-    select distinct on (f.user_id) f.user_id, f.user_login
-    from intent_feedback f join changes ch on ch.id = f.change_id
-    join repositories r on r.id = ch.repository_id
-    where r.installation_id in (${inList(ids)})
-    order by f.user_id, f.reacted_at desc, f.created_at desc`.execute(db);
-  const latestLogin = new Map(latest.rows.map((r) => [num(r.user_id), r.user_login] as const));
+  const authorIds = new Map<string, number>();
+  if (changeIds.length > 0) {
+    const authors = await sql<{ id: string; author_id: number }>`
+      select id, author_id from changes
+      where author_id is not null and id in (${inList(changeIds)})`.execute(db);
+    for (const a of authors.rows) authorIds.set(a.id, num(a.author_id));
+  }
   const { kept, dropped } = filterEligible(votes, {
+    authorIds,
     agentLogins: config.agentLogins,
     reviewers,
-    allow: o.allow?.logins ?? new Set(),
-    latestLogin,
+    allow: o.allow?.ids ?? new Set<number>(),
   });
   const votesWithoutSync = new Set(
-    okVotes.filter((v) => !v.isPrAuthor && !synced.has(v.changeId)).map((v) => v.changeId),
+    okVotes
+      .filter(
+        (v) => !v.isPrAuthor && authorIds.get(v.changeId) !== v.userId && !synced.has(v.changeId),
+      )
+      .map((v) => v.changeId),
   ).size;
 
   const up = kept.filter((v) => v.verdict === "up").length;
