@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-015-size-large",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "size"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 115,
+      "title": "Rework catalog search ranking",
+      "body": "Ranking now weighs popularity.",
+      "additions": 320,
+      "deletions": 40,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/catalog/search.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 320,
+        "deletions": 40,
+        "patch": "@@ -10,41 +10,321 @@\n-  rank(a, 0);\n-  rank(a, 1);\n-  rank(a, 2);\n-  rank(a, 3);\n-  rank(a, 4);\n-  rank(a, 5);\n-  rank(a, 6);\n-  rank(a, 7);\n-  rank(a, 8);\n-  rank(a, 9);\n-  rank(a, 10);\n-  rank(a, 11);\n-  rank(a, 12);\n-  rank(a, 13);\n-  rank(a, 14);\n-  rank(a, 15);\n-  rank(a, 16);\n-  rank(a, 17);\n-  rank(a, 18);\n-  rank(a, 19);\n-  rank(a, 20);\n-  rank(a, 21);\n-  rank(a, 22);\n-  rank(a, 23);\n-  rank(a, 24);\n-  rank(a, 25);\n-  rank(a, 26);\n-  rank(a, 27);\n-  rank(a, 28);\n-  rank(a, 29);\n-  rank(a, 30);\n-  rank(a, 31);\n-  rank(a, 32);\n-  rank(a, 33);\n-  rank(a, 34);\n-  rank(a, 35);\n-  rank(a, 36);\n-  rank(a, 37);\n-  rank(a, 38);\n-  rank(a, 39);\n+  score(a, 0);\n+  score(a, 1);\n+  score(a, 2);\n+  score(a, 3);\n+  score(a, 4);\n+  score(a, 5);\n+  score(a, 6);\n+  score(a, 7);\n+  score(a, 8);\n+  score(a, 9);\n+  score(a, 10);\n+  score(a, 11);\n+  score(a, 12);\n+  score(a, 13);\n+  score(a, 14);\n+  score(a, 15);\n+  score(a, 16);\n+  score(a, 17);\n+  score(a, 18);\n+  score(a, 19);\n+  score(a, 20);\n+  score(a, 21);\n+  score(a, 22);\n+  score(a, 23);\n+  score(a, 24);\n+  score(a, 25);\n+  score(a, 26);\n+  score(a, 27);\n+  score(a, 28);\n+  score(a, 29);\n+  score(a, 30);\n+  score(a, 31);\n+  score(a, 32);\n+  score(a, 33);\n+  score(a, 34);\n+  score(a, 35);\n+  score(a, 36);\n+  score(a, 37);\n+  score(a, 38);\n+  score(a, 39);\n+  score(a, 40);\n+  score(a, 41);\n+  score(a, 42);\n+  score(a, 43);\n+  score(a, 44);\n+  score(a, 45);\n+  score(a, 46);\n+  score(a, 47);\n+  score(a, 48);\n+  score(a, 49);\n+  score(a, 50);\n+  score(a, 51);\n+  score(a, 52);\n+  score(a, 53);\n+  score(a, 54);\n+  score(a, 55);\n+  score(a, 56);\n+  score(a, 57);\n+  score(a, 58);\n+  score(a, 59);\n+  score(a, 60);\n+  score(a, 61);\n+  score(a, 62);\n+  score(a, 63);\n+  score(a, 64);\n+  score(a, 65);\n+  score(a, 66);\n+  score(a, 67);\n+  score(a, 68);\n+  score(a, 69);\n+  score(a, 70);\n+  score(a, 71);\n+  score(a, 72);\n+  score(a, 73);\n+  score(a, 74);\n+  score(a, 75);\n+  score(a, 76);\n+  score(a, 77);\n+  score(a, 78);\n+  score(a, 79);\n+  score(a, 80);\n+  score(a, 81);\n+  score(a, 82);\n+  score(a, 83);\n+  score(a, 84);\n+  score(a, 85);\n+  score(a, 86);\n+  score(a, 87);\n+  score(a, 88);\n+  score(a, 89);\n+  score(a, 90);\n+  score(a, 91);\n+  score(a, 92);\n+  score(a, 93);\n+  score(a, 94);\n+  score(a, 95);\n+  score(a, 96);\n+  score(a, 97);\n+  score(a, 98);\n+  score(a, 99);\n+  score(a, 100);\n+  score(a, 101);\n+  score(a, 102);\n+  score(a, 103);\n+  score(a, 104);\n+  score(a, 105);\n+  score(a, 106);\n+  score(a, 107);\n+  score(a, 108);\n+  score(a, 109);\n+  score(a, 110);\n+  score(a, 111);\n+  score(a, 112);\n+  score(a, 113);\n+  score(a, 114);\n+  score(a, 115);\n+  score(a, 116);\n+  score(a, 117);\n+  score(a, 118);\n+  score(a, 119);\n+  score(a, 120);\n+  score(a, 121);\n+  score(a, 122);\n+  score(a, 123);\n+  score(a, 124);\n+  score(a, 125);\n+  score(a, 126);\n+  score(a, 127);\n+  score(a, 128);\n+  score(a, 129);\n+  score(a, 130);\n+  score(a, 131);\n+  score(a, 132);\n+  score(a, 133);\n+  score(a, 134);\n+  score(a, 135);\n+  score(a, 136);\n+  score(a, 137);\n+  score(a, 138);\n+  score(a, 139);\n+  score(a, 140);\n+  score(a, 141);\n+  score(a, 142);\n+  score(a, 143);\n+  score(a, 144);\n+  score(a, 145);\n+  score(a, 146);\n+  score(a, 147);\n+  score(a, 148);\n+  score(a, 149);\n+  score(a, 150);\n+  score(a, 151);\n+  score(a, 152);\n+  score(a, 153);\n+  score(a, 154);\n+  score(a, 155);\n+  score(a, 156);\n+  score(a, 157);\n+  score(a, 158);\n+  score(a, 159);\n+  score(a, 160);\n+  score(a, 161);\n+  score(a, 162);\n+  score(a, 163);\n+  score(a, 164);\n+  score(a, 165);\n+  score(a, 166);\n+  score(a, 167);\n+  score(a, 168);\n+  score(a, 169);\n+  score(a, 170);\n+  score(a, 171);\n+  score(a, 172);\n+  score(a, 173);\n+  score(a, 174);\n+  score(a, 175);\n+  score(a, 176);\n+  score(a, 177);\n+  score(a, 178);\n+  score(a, 179);\n+  score(a, 180);\n+  score(a, 181);\n+  score(a, 182);\n+  score(a, 183);\n+  score(a, 184);\n+  score(a, 185);\n+  score(a, 186);\n+  score(a, 187);\n+  score(a, 188);\n+  score(a, 189);\n+  score(a, 190);\n+  score(a, 191);\n+  score(a, 192);\n+  score(a, 193);\n+  score(a, 194);\n+  score(a, 195);\n+  score(a, 196);\n+  score(a, 197);\n+  score(a, 198);\n+  score(a, 199);\n+  score(a, 200);\n+  score(a, 201);\n+  score(a, 202);\n+  score(a, 203);\n+  score(a, 204);\n+  score(a, 205);\n+  score(a, 206);\n+  score(a, 207);\n+  score(a, 208);\n+  score(a, 209);\n+  score(a, 210);\n+  score(a, 211);\n+  score(a, 212);\n+  score(a, 213);\n+  score(a, 214);\n+  score(a, 215);\n+  score(a, 216);\n+  score(a, 217);\n+  score(a, 218);\n+  score(a, 219);\n+  score(a, 220);\n+  score(a, 221);\n+  score(a, 222);\n+  score(a, 223);\n+  score(a, 224);\n+  score(a, 225);\n+  score(a, 226);\n+  score(a, 227);\n+  score(a, 228);\n+  score(a, 229);\n+  score(a, 230);\n+  score(a, 231);\n+  score(a, 232);\n+  score(a, 233);\n+  score(a, 234);\n+  score(a, 235);\n+  score(a, 236);\n+  score(a, 237);\n+  score(a, 238);\n+  score(a, 239);\n+  score(a, 240);\n+  score(a, 241);\n+  score(a, 242);\n+  score(a, 243);\n+  score(a, 244);\n+  score(a, 245);\n+  score(a, 246);\n+  score(a, 247);\n+  score(a, 248);\n+  score(a, 249);\n+  score(a, 250);\n+  score(a, 251);\n+  score(a, 252);\n+  score(a, 253);\n+  score(a, 254);\n+  score(a, 255);\n+  score(a, 256);\n+  score(a, 257);\n+  score(a, 258);\n+  score(a, 259);\n+  score(a, 260);\n+  score(a, 261);\n+  score(a, 262);\n+  score(a, 263);\n+  score(a, 264);\n+  score(a, 265);\n+  score(a, 266);\n+  score(a, 267);\n+  score(a, 268);\n+  score(a, 269);\n+  score(a, 270);\n+  score(a, 271);\n+  score(a, 272);\n+  score(a, 273);\n+  score(a, 274);\n+  score(a, 275);\n+  score(a, 276);\n+  score(a, 277);\n+  score(a, 278);\n+  score(a, 279);\n+  score(a, 280);\n+  score(a, 281);\n+  score(a, 282);\n+  score(a, 283);\n+  score(a, 284);\n+  score(a, 285);\n+  score(a, 286);\n+  score(a, 287);\n+  score(a, 288);\n+  score(a, 289);\n+  score(a, 290);\n+  score(a, 291);\n+  score(a, 292);\n+  score(a, 293);\n+  score(a, 294);\n+  score(a, 295);\n+  score(a, 296);\n+  score(a, 297);\n+  score(a, 298);\n+  score(a, 299);\n+  score(a, 300);\n+  score(a, 301);\n+  score(a, 302);\n+  score(a, 303);\n+  score(a, 304);\n+  score(a, 305);\n+  score(a, 306);\n+  score(a, 307);\n+  score(a, 308);\n+  score(a, 309);\n+  score(a, 310);\n+  score(a, 311);\n+  score(a, 312);\n+  score(a, 313);\n+  score(a, 314);\n+  score(a, 315);\n+  score(a, 316);\n+  score(a, 317);\n+  score(a, 318);\n+  score(a, 319);\n export function search(q: string) {"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [],
+      "goal": "Reworks how catalog search results are ranked.",
+      "keyBehaviorChanges": [
+        "Search results come in a different order."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Rework the catalog search ranking.",
+        "behavior_changes": [
+          "Search results are ranked differently."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Large change to search.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

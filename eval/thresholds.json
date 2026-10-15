@@ -1,0 +1,18 @@
+{
+  "synthetic": {
+    "underClassificationFinal": { "max": 0 },
+    "severeUnderClassificationFinal": { "max": 0 },
+    "unavailableRate": { "max": 0.1 },
+    "matchBaseline": true
+  },
+  "pilot": {
+    "underClassificationFinal": { "max": 0.02 },
+    "severeUnderClassificationFinal": { "max": 0 },
+    "exactAccuracyFinal": { "min": 0.75 },
+    "outOfScopeRecall": { "min": 0.6 },
+    "flagRecall": { "min": 0.6 },
+    "unavailableRate": { "max": 0.05 },
+    "regressionVsBaseline": { "underClassificationFinal": 0, "exactAccuracyFinal": 0.05 },
+    "provisional": true
+  }
+}

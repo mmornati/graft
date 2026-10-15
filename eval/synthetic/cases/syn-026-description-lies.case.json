@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-026-description-lies",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "mismatch",
+    "floor-miss"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 126,
+      "title": "Add request logging",
+      "body": "Adds request logging",
+      "additions": 3,
+      "deletions": 3,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/handlers/orders.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 3,
+        "deletions": 3,
+        "patch": "@@ -10,3 +10,3 @@\n-  if (order.ownerId !== user.id) throw new Forbidden();\n-  const order = await load(id);\n-  if (!order) throw new NotFound();\n+  const order = await load(id);\n+  if (!order) throw new NotFound();\n+  log.info('order requested');"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Removes the ownership check on orders.",
+      "keyBehaviorChanges": [
+        "Any user can read any order."
+      ],
+      "shouldFlag": true,
+      "confidence": "high",
+      "notes": "The description claims logging only."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Add request logging.",
+        "behavior_changes": [
+          "Requests are logged."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "Logging only.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": {
+      "json": {
+        "claims": [
+          {
+            "id": "goal",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          },
+          {
+            "id": "b1",
+            "verdict": "contradicted",
+            "reason": "The diff removes an ownership check; it does not add logging."
+          }
+        ],
+        "missing_behavior_changes": [],
+        "unexplained_files": [],
+        "risk_class": "sensitive",
+        "risk_reason": "Assessment of the diff.",
+        "instructions_in_data": false
+      }
+    }
+  }
+}

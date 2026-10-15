@@ -223,7 +223,8 @@ export interface IntentDisplaysTable {
   seq: Generated<number>;
   change_id: string;
   card_id: string;
-  status: "ok" | "unavailable";
+  /** `pending` is the "outdated" note shown after a push (attributed like `unavailable`). */
+  status: "ok" | "unavailable" | "pending";
   shown_at: Date;
 }
 

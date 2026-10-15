@@ -96,6 +96,11 @@ beforeEach(async () => {
 
 const runJob = (over: Partial<GenerateData> = {}) =>
   generateIntent({ ...GENERATE_DATA, ...over }, jobContext(t));
+const runJobAt = (offsetMs: number, over: Partial<GenerateData> = {}) =>
+  generateIntent(
+    { ...GENERATE_DATA, ...over },
+    { ...jobContext(t), clock: { now: () => new Date(FIXED_NOW.getTime() + offsetMs) } },
+  );
 const repoWrites = () =>
   api.requests.filter((r) => r.method !== "GET" && !r.path.includes("access_tokens"));
 const writes = (re: RegExp) => api.requests.filter((r) => r.method !== "GET" && re.test(r.path));
@@ -497,7 +502,7 @@ describe("intent.generate job", () => {
 
     const jobs = await intentJobs();
     expect(jobs.rows).toHaveLength(1);
-    const key = `intent-retry:${card?.change_id}:${HEAD_SHA}:${card?.input_hash.slice(0, 16)}:1:${GENERATE_DATA.deliveryId}`;
+    const key = `intent-retry:${card?.change_id}:${HEAD_SHA}:${card?.input_hash.slice(0, 16)}:1:${Math.floor(FIXED_NOW.getTime() / 300_000)}`;
     expect(jobs.rows[0]?.id).toBe(singletonJobId("intent.generate", key));
     expect(jobs.rows[0]?.data).toMatchObject({ trigger: "retry", attempt: 1, headSha: HEAD_SHA });
     const delay =
@@ -798,9 +803,76 @@ describe("review 1: spend, display time, retry notice", () => {
     expect(api.state.comments[0]?.body).toContain("Re-run the `graft/intent` check to try again.");
     expect(api.state.checkRuns[0]?.output.summary).not.toContain("retries automatically");
 
-    // A new triggering delivery with the same inputs queues its own retry and says so.
-    expect(await runJob({ deliveryId: "d-later" })).toBe("published");
+    // A new triggering delivery in the same 5-minute bucket is deduplicated too (T17.1).
+    expect(await runJob({ deliveryId: "d-same-bucket" })).toBe("published");
+    expect((await intentJobs()).rows).toHaveLength(1);
+
+    // A later delivery with the same inputs, in the next bucket, queues its own retry and says so.
+    expect(await runJobAt(300_000, { deliveryId: "d-later" })).toBe("published");
     expect((await intentJobs()).rows).toHaveLength(2);
     expect(api.state.comments[0]?.body).toContain("Graft retries automatically.");
+  });
+});
+
+describe("step 4 follow-ups (T17)", () => {
+  const retryJobs = async () => (await intentJobs()).rows.filter((r) => r.data.trigger === "retry");
+
+  it("I-INT-22 retry bucket: one retry job per 5 minutes and inputs, a new one in the next bucket", async () => {
+    current = scenarioLlm({ writer: { failure: "unavailable" } });
+    // Two different deliveries, same inputs, same bucket: one retry job.
+    expect(await runJobAt(0, { deliveryId: "d-1" })).toBe("published");
+    expect(await runJobAt(60_000, { deliveryId: "d-2" })).toBe("published");
+    expect(await retryJobs()).toHaveLength(1);
+    const key = `intent-retry:${(await change()).id}:${HEAD_SHA}:${(await cards())[0]?.input_hash.slice(0, 16)}:1:${Math.floor(FIXED_NOW.getTime() / 300_000)}`;
+    expect((await retryJobs())[0]?.id).toBe(singletonJobId("intent.generate", key));
+
+    // The first chain completes; a failure in the next bucket queues a new retry job.
+    await sql`update pgboss.job set state = 'completed', completed_on = now() where name = 'intent.generate'`.execute(
+      t.db,
+    );
+    expect(await runJobAt(300_000, { deliveryId: "d-3" })).toBe("published");
+    expect(await retryJobs()).toHaveLength(2);
+  });
+
+  it("I-INT-23 a failed check-run call leaves the old comment and no new display; the retry publishes once", async () => {
+    expect(await runJob()).toBe("published");
+    const first = (await change()).graft_comment_id;
+    const commentBefore = api.state.comments[0]?.body;
+    const displaysBefore = await t.db.selectFrom("intent_displays").selectAll().execute();
+    expect(displaysBefore).toHaveLength(1);
+
+    // The description changes: a new card for the same head. Its check-run update fails once.
+    loadIntentScenario(api, {
+      body: "Fixes #42\n\nA different description.",
+      updated_at: "2026-10-14T12:30:00Z",
+    });
+    api.failNext("PATCH", /\/check-runs\/\d+$/, 500);
+    const err = await runJob({ trigger: "edited" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(api.state.comments[0]?.body).toBe(commentBefore);
+    expect((await change()).graft_comment_id).toBe(first);
+    expect(await t.db.selectFrom("intent_displays").selectAll().execute()).toHaveLength(1);
+
+    // The pg-boss retry finds the saved card, calls no model, and publishes exactly once.
+    const calls = current.calls.length;
+    expect(await runJob({ trigger: "edited" })).toBe("cached");
+    expect(current.calls).toHaveLength(calls);
+    expect(api.state.comments[0]?.body).not.toBe(commentBefore);
+    const displays = await t.db.selectFrom("intent_displays").selectAll().execute();
+    expect(displays).toHaveLength(2);
+    expect(displays.map((d) => d.status)).toEqual(["ok", "ok"]);
+  });
+
+  it("I-INT-23 a failed comment call (after the check run) leaves no new display either", async () => {
+    expect(await runJob()).toBe("published");
+    loadIntentScenario(api, {
+      body: "Fixes #42\n\nA different description.",
+      updated_at: "2026-10-14T12:30:00Z",
+    });
+    api.failNext("PATCH", /\/issues\/comments\/\d+$/, 500);
+    expect(await runJob({ trigger: "edited" }).catch((e: unknown) => e)).toBeInstanceOf(Error);
+    expect(await t.db.selectFrom("intent_displays").selectAll().execute()).toHaveLength(1);
+    expect(await runJob({ trigger: "edited" })).toBe("cached");
+    expect(await t.db.selectFrom("intent_displays").selectAll().execute()).toHaveLength(2);
   });
 });

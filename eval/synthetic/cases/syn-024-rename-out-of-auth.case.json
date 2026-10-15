@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-024-rename-out-of-auth",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "rename",
+    "auth"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 124,
+      "title": "Move token helper to util",
+      "body": "Cleanup.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/util/token.ts",
+        "previousPath": "src/auth/token.ts",
+        "status": "renamed",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -1,2 +1,2 @@\n-export const PREFIX = 'sk';\n+export const PREFIX = 'tk';"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Moves the token helper out of the auth folder.",
+      "keyBehaviorChanges": [
+        "The helper lives under util."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": "Counts at both old and new path."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Move a helper to the util folder.",
+        "behavior_changes": [
+          "No observable behavior change."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "A move.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

@@ -34,3 +34,13 @@ Every Phase 0 step appends to this checklist. Each item says who does it, what i
 
   Who: repo owner.
 - [ ] **Sensitive paths for pilots.** Decide the extra `GRAFT_INTENT_SENSITIVE_PATHS` per pilot until `graft.yaml` lands. Who: product owner with the pilot's security owner.
+
+## Step 4: Evaluation set
+
+- [ ] **Pilot consent for export.** Each pilot agrees in writing that a sample of its merged agent PRs (diffs, descriptions, linked issues) is copied to an encrypted evaluation store held by the Graft team, used only to measure card quality, never committed, and deleted on request or when the pilot ends. Who: product owner. Produces: an agreement reference → `pnpm eval init --consent-ref`.
+- [ ] **Create and store `GRAFT_EVAL_KEY`** (`pnpm eval keygen`) in the team password manager; share it only with labelers. Exclude `GRAFT_EVAL_DIR` from backups and cloud sync; confirm full-disk encryption on every labeler laptop. Who: repo owner.
+- [ ] **Export each pilot's PRs** (`pnpm eval export … --sample 50`, about 100 cases over two pilots), with the pilot's `--sensitive-paths` and any `--redact-host` they ask for. Who: repo owner, with the App installed on the pilot (step 6) or a read-only token.
+- [ ] **Labeling sessions.** Two labelers read `docs/phase-0/labeling-guide.md`, label every case, run `assign-double` and double-label the subset, run `agreement` (target risk κ ≥ 0.6), adjudicate. Who: two engineers familiar with the pilot code. Produces: gold labels for about 100 cases.
+- [ ] **First live baseline.** `pnpm eval run --set <pilot set> --live` (check the printed estimate; set `--max-cost-usd`), review `report.md`, then `--save-baseline <set>/baseline.json`. Set the `pilot` thresholds in `eval/thresholds.json` from it and set `provisional: false`. Record the date, models, `PROMPT_VERSION` and cost in `docs/plan/development-plan.md`. Who: repo owner.
+- [ ] **Check prices** in `src/eval/pricing.ts` against Anthropic's pricing page before the first live run and update `PRICING_VERIFIED_AT`. Who: repo owner.
+- [ ] **When a pilot leaves**: `pnpm eval purge --set <dir> --confirm <setId>` on every labeler machine, and delete any other copies. Who: repo owner.

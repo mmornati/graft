@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-022-oos-flagged",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "oos",
+    "mismatch"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 122,
+      "title": "Fix typo in guide",
+      "body": "Small docs fix.",
+      "additions": 2,
+      "deletions": 2,
+      "changedFiles": 2
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "docs/guide.md",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,1 @@\n-Use the defualt settings.\n+Use the default settings."
+      },
+      {
+        "path": "src/config/defaults.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,1 @@\n-export const REQUEST_TIMEOUT_MS = 30000;\n+export const REQUEST_TIMEOUT_MS = 5000;"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [
+        "src/config/defaults.ts"
+      ],
+      "goal": "Fixes a typo in the guide.",
+      "keyBehaviorChanges": [
+        "A typo is fixed.",
+        "The request timeout drops from 30 to 5 seconds."
+      ],
+      "shouldFlag": true,
+      "confidence": "high",
+      "notes": "The timeout change is not mentioned."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Fix a typo in the guide.",
+        "behavior_changes": [
+          "A typo in the guide is fixed.",
+          "The default request timeout changes from 30 seconds to 5 seconds."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "A default value changed.",
+        "out_of_scope_edits": [
+          {
+            "path": "src/config/defaults.ts",
+            "reason": "The timeout change is not explained by a typo fix."
+          }
+        ],
+        "instructions_in_data": false
+      }
+    },
+    "writerEscalated": {
+      "json": {
+        "goal": "Fix a typo in the guide.",
+        "behavior_changes": [
+          "A typo in the guide is fixed.",
+          "The default request timeout changes from 30 seconds to 5 seconds."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "A default value changed.",
+        "out_of_scope_edits": [
+          {
+            "path": "src/config/defaults.ts",
+            "reason": "The timeout change is not explained by a typo fix."
+          }
+        ],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": {
+      "json": {
+        "claims": [
+          {
+            "id": "goal",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          },
+          {
+            "id": "b1",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          },
+          {
+            "id": "b2",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          },
+          {
+            "id": "o1",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          }
+        ],
+        "missing_behavior_changes": [
+          "Requests that take longer than 5 seconds now fail."
+        ],
+        "unexplained_files": [],
+        "risk_class": "logic",
+        "risk_reason": "Assessment of the diff.",
+        "instructions_in_data": false
+      }
+    }
+  }
+}

@@ -5,6 +5,7 @@
  * bump PROMPT_VERSION. U-PROMPT-1 pins a hash of the prompts and schemas next to the version, so
  * changing one without the other fails the test.
  */
+import { createHash } from "node:crypto";
 
 export const PROMPT_VERSION = "intent-v1";
 
@@ -244,4 +245,19 @@ export function buildVerifierUser(
     ),
     "Check every claim in the card against the diff.",
   ].join("\n\n");
+}
+
+/**
+ * SHA-256 of the two system prompts and the two output schemas (U-PROMPT-1 pins it). The eval
+ * harness keys its cache on it, so a prompt edited without a version bump is not served stale.
+ */
+export function promptFingerprint(): string {
+  return createHash("sha256")
+    .update(
+      WRITER_SYSTEM_PROMPT +
+        VERIFIER_SYSTEM_PROMPT +
+        JSON.stringify(WRITER_OUTPUT_SCHEMA) +
+        JSON.stringify(VERIFIER_OUTPUT_SCHEMA),
+    )
+    .digest("hex");
 }

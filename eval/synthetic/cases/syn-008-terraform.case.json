@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-008-terraform",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "infra"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 108,
+      "title": "Increase API instance size",
+      "body": "The API needs more memory.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "infra/main.tf",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-  instance_type = \"t3.small\"\n+  instance_type = \"t3.large\"\n resource \"aws_instance\" \"api\" {"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Moves the API to a larger instance type.",
+      "keyBehaviorChanges": [
+        "The API instance type changes."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Use a larger instance for the API.",
+        "behavior_changes": [
+          "The API runs on a larger instance type."
+        ],
+        "risk_class": "sensitive",
+        "risk_reason": "Infrastructure.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

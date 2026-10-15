@@ -494,3 +494,47 @@ describe("check-run buttons", () => {
     expect(await feedback()).toHaveLength(3);
   });
 });
+
+describe("pending note display (T17.2)", () => {
+  it("I-FB-10 a reaction made while the outdated note is shown is dropped; one made after the new card is shown is credited to it", async () => {
+    await runAt(0);
+    const headB = "b".repeat(40);
+    loadIntentScenario(api, { head: { sha: headB }, updated_at: "2026-10-14T12:30:00Z" });
+    let n = 0;
+    await generateIntent(
+      { ...GENERATE_DATA, headSha: headB, trigger: "synchronize" },
+      {
+        ...jobContext(t),
+        clock: { now: () => new Date(FIXED_NOW.getTime() + HOUR + 60_000 * n++) },
+      },
+    );
+    const displays = await t.db
+      .selectFrom("intent_displays")
+      .selectAll()
+      .orderBy("shown_at")
+      .orderBy("seq")
+      .execute();
+    expect(displays.map((d) => d.status)).toEqual(["ok", "pending", "ok"]);
+    const [a, pending, b] = displays as [
+      (typeof displays)[0],
+      (typeof displays)[0],
+      (typeof displays)[0],
+    ];
+    expect(pending.card_id).toBe(a.card_id);
+    expect(b.card_id).not.toBe(a.card_id);
+    const t1 = pending.shown_at.getTime();
+    const t2 = b.shown_at.getTime();
+    expect(t2).toBeGreaterThan(t1 + 2000);
+
+    const commentId = api.state.comments[0]?.id as number;
+    api.state.reactions.set(commentId, [
+      makeReaction(1, "reviewer-1", "+1", new Date(t1 + 1000).toISOString()),
+      makeReaction(2, "reviewer-2", "+1", new Date(t2 + 1000).toISOString()),
+    ]);
+    await pollReactions(await pollData(), jobContext(t));
+    const rows = await feedback();
+    expect(rows.map((r) => [r.card_id, r.user_login, r.verdict])).toEqual([
+      [b.card_id, "reviewer-2", "up"],
+    ]);
+  });
+});

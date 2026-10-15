@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-013-test-shrunk",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "tests"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 113,
+      "title": "Simplify cart tests",
+      "body": "Cut repetitive assertions.",
+      "additions": 2,
+      "deletions": 12,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "test/cart.test.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 12,
+        "patch": "@@ -10,13 +10,3 @@\n-  expect(cartTotal([1, 2])).toBe(3);\n-  expect(cartTotal([2, 3])).toBe(5);\n-  expect(cartTotal([3, 4])).toBe(7);\n-  expect(cartTotal([4, 5])).toBe(9);\n-  expect(cartTotal([5, 6])).toBe(11);\n-  expect(cartTotal([6, 7])).toBe(13);\n-  expect(cartTotal([7, 8])).toBe(15);\n-  expect(cartTotal([8, 9])).toBe(17);\n-  expect(cartTotal([9, 10])).toBe(19);\n-  expect(cartTotal([10, 11])).toBe(21);\n-  expect(cartTotal([11, 12])).toBe(23);\n-  expect(cartTotal([12, 13])).toBe(25);\n+  expect(cartTotal([1, 2])).toBe(3);\n+  expect(cartTotal([])).toBe(0);\n describe('cart', () => {"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [],
+      "goal": "Cuts the number of assertions in the cart tests.",
+      "keyBehaviorChanges": [
+        "The cart is tested with fewer cases."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Simplify the cart tests.",
+        "behavior_changes": [
+          "The cart tests check fewer cases."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Tests weakened.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

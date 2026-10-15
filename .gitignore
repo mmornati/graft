@@ -3,3 +3,6 @@ dist
 .env
 *.pem
 coverage
+.graft-eval/
+eval/synthetic/cache/
+eval/synthetic/runs/

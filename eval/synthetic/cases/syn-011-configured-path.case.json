@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-011-configured-path",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "configured"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": [
+      "services/billing/**"
+    ]
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 111,
+      "title": "Round invoice totals",
+      "body": "Invoices showed long decimals.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "services/billing/invoice.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,3 +10,3 @@\n-  return total;\n+  return Math.round(total * 100) / 100;\n export function invoiceTotal(lines: number[]): number {\n   const total = lines.reduce((a, b) => a + b, 0);"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Rounds invoice totals to two decimals.",
+      "keyBehaviorChanges": [
+        "Invoice totals have at most two decimals."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Round invoice totals to two decimals.",
+        "behavior_changes": [
+          "Invoice totals are rounded to two decimals."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Invoice calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

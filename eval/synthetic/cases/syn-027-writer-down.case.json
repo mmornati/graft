@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-027-writer-down",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "unavailable",
+    "docs"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 127,
+      "title": "Fix FAQ wording",
+      "body": "Small docs fix.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "docs/faq.md",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,1 @@\n-How do I reset?\n+How do I reset my account?"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "trivial",
+      "outOfScope": [],
+      "goal": "Clarifies a FAQ question.",
+      "keyBehaviorChanges": [
+        "The FAQ wording changes."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "failure": "unavailable"
+    }
+  }
+}

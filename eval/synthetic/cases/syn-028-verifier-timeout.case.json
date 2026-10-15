@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-028-verifier-timeout",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "verifier-error",
+    "logic"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 128,
+      "title": "Round the cart total",
+      "body": "Whole numbers only.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/cart/total.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-  return sum;\n+  return Math.round(sum);\n export function total(items: number[]): number {"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [],
+      "goal": "Rounds the cart total.",
+      "keyBehaviorChanges": [
+        "Totals are whole numbers."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Round the cart total.",
+        "behavior_changes": [
+          "The cart total is rounded."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "writerEscalated": {
+      "json": {
+        "goal": "Round the cart total.",
+        "behavior_changes": [
+          "The cart total is rounded."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": {
+      "failure": "timeout"
+    }
+  }
+}

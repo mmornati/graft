@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-014-binary",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "binary"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 114,
+      "title": "Update logo",
+      "body": "New brand colors.",
+      "additions": 0,
+      "deletions": 0,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "docs/img/logo.png",
+        "previousPath": null,
+        "status": "added",
+        "additions": 0,
+        "deletions": 0,
+        "patch": null
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [],
+      "goal": "Adds a new logo image.",
+      "keyBehaviorChanges": [
+        "A binary image is added."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": "Binary content cannot be reviewed from the diff."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Replace the logo image.",
+        "behavior_changes": [
+          "The logo image changes."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "An image changed.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

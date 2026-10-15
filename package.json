@@ -24,7 +24,9 @@
     "db:rollback": "tsx src/bin/migrate.ts down",
     "db:status": "tsx src/bin/migrate.ts status",
     "webhook:send": "tsx scripts/send-webhook.ts",
-    "tunnel": "smee --url \"$SMEE_URL\" --target \"http://localhost:${PORT:-3000}/webhooks/github\""
+    "tunnel": "smee --url \"$SMEE_URL\" --target \"http://localhost:${PORT:-3000}/webhooks/github\"",
+    "eval": "tsx src/bin/eval.ts",
+    "eval:ci": "tsx src/bin/eval.ts run --set eval/synthetic --baseline eval/baselines/synthetic.json --check"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",

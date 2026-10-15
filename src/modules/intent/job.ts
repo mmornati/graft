@@ -31,6 +31,7 @@ import {
   latestPublishedCard,
   markPublished,
   publishedCheckRunForHead,
+  recordPendingDisplay,
   rowToView,
   saveCard,
   tokensUsedToday,
@@ -196,6 +197,13 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
             .set({ graft_comment_id: c.commentId })
             .where("id", "=", change.id)
             .execute();
+          // The note is a display too: a reaction made while it is shown is not a vote on the
+          // previous card (it is dropped like one made on an "unavailable" notice).
+          await recordPendingDisplay(tx, {
+            changeId: change.id,
+            cardId: previous.id,
+            now: ctx.clock.now(),
+          });
         } catch (err) {
           throw toJobError(err, "publish pending note");
         }
@@ -224,15 +232,20 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
 
   // 8. Publish.
   // The notice says "retries automatically" only when a retry job was really queued: a deduplicated
-  // send (null) means none was added by this run. The key carries the triggering delivery, so an
-  // old, completed retry of the same inputs cannot swallow a new one.
+  // send (null) means none was added by this run. A pending-only singleton is not available on our
+  // `standard` queues (README §7, pg-boss 12), hence the 5-minute bucket in the key: two triggers
+  // for the same inputs within one bucket queue one retry, and a retry that already completed
+  // cannot swallow a failure in a later bucket (it starts at least 300 s later, so in a later
+  // bucket). Known limit, accepted: two triggers on either side of a bucket boundary queue two
+  // retry chains (at most two per boundary, each capped at `attempt < 2`), because the queue
+  // offers no pending-only dedupe here; a duplicate chain republishes the same card idempotently.
   let retryScheduled = false;
   if (card.status === "unavailable" && (result?.retryable ?? false) && data.attempt < 2) {
     const id = await ctx.queue.send(
       intentGenerateJob,
       { ...data, trigger: "retry", headSha: pull.head.sha, attempt: data.attempt + 1 },
       {
-        singletonKey: `intent-retry:${change.id}:${pull.head.sha}:${prepared.inputHash.slice(0, 16)}:${data.attempt + 1}:${data.deliveryId}`,
+        singletonKey: `intent-retry:${change.id}:${pull.head.sha}:${prepared.inputHash.slice(0, 16)}:${data.attempt + 1}:${Math.floor(ctx.clock.now().getTime() / 300_000)}`,
         startAfterSeconds: 300 * (data.attempt + 1),
       },
     );
@@ -246,22 +259,9 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
     }
     const view = rowToView(card);
     try {
-      const comment = await upsertManagedSection(octokit, {
-        owner: data.owner,
-        repo: data.repo,
-        issueNumber: data.prNumber,
-        appId: config.githubAppId,
-        appBotLogin: config.githubAppSlug ? `${config.githubAppSlug}[bot]` : undefined,
-        knownCommentId: current.graft_comment_id,
-        section: "intent",
-        markdown: renderIntentSection(view, { retryScheduled }),
-      });
-      await tx
-        .updateTable("changes")
-        .set({ graft_comment_id: comment.commentId })
-        .where("id", "=", change.id)
-        .execute();
-
+      // Order matters (README §7): the check run first, then the comment, then the display. A
+      // failure of either call leaves the old comment and no new display row, so a retry
+      // publishes once. The check run's buttons attribute exactly through `external_id`.
       const body = {
         name: INTENT_CHECK_NAME,
         status: "completed" as const,
@@ -299,11 +299,27 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
         });
         checkRunId = created.data.id;
       }
-      // The moment the card is really on screen (not the job start, which precedes the model).
+      const comment = await upsertManagedSection(octokit, {
+        owner: data.owner,
+        repo: data.repo,
+        issueNumber: data.prNumber,
+        appId: config.githubAppId,
+        appBotLogin: config.githubAppSlug ? `${config.githubAppSlug}[bot]` : undefined,
+        knownCommentId: current.graft_comment_id,
+        section: "intent",
+        markdown: renderIntentSection(view, { retryScheduled }),
+      });
+      // The moment the card is really on screen: right after the comment write.
+      const shownAt = ctx.clock.now();
+      await tx
+        .updateTable("changes")
+        .set({ graft_comment_id: comment.commentId })
+        .where("id", "=", change.id)
+        .execute();
       await markPublished(
         tx,
         { id: card.id, changeId: change.id, status: card.status },
-        { commentId: comment.commentId, checkRunId, now: ctx.clock.now() },
+        { commentId: comment.commentId, checkRunId, now: shownAt },
       );
     } catch (err) {
       // Rolls the transaction back; the retry finds the saved card and calls no model.

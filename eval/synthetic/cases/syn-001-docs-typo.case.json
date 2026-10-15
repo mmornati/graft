@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-001-docs-typo",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "docs",
+    "trivial"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 101,
+      "title": "Fix typo in README",
+      "body": "Fixes #100.\n\nCorrects 'recieve' in the setup section.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": {
+      "number": 100,
+      "title": "Typo in README setup section",
+      "body": "'recieve' should be 'receive'."
+    },
+    "files": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -12,3 +12,3 @@\n ## Setup\n-You will recieve a token by e-mail.\n+You will receive a token by e-mail.\n "
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "trivial",
+      "outOfScope": [],
+      "goal": "Fixes a spelling mistake in the README setup section.",
+      "keyBehaviorChanges": [
+        "The README says 'receive' instead of 'recieve'."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Fix a spelling mistake in the README setup section.",
+        "behavior_changes": [
+          "The README setup section spells 'receive' correctly."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "Documentation only.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

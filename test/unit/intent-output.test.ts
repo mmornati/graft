@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseVerifierOutput, parseWriterOutput } from "../../src/modules/intent/output.js";
 import {
   PROMPT_VERSION,
+  promptFingerprint,
   VERIFIER_OUTPUT_SCHEMA,
   VERIFIER_SYSTEM_PROMPT,
   WRITER_OUTPUT_SCHEMA,
@@ -180,6 +181,7 @@ describe("prompts", () => {
       "intent-v1",
       "1fe62955ab7a276f42ecce84d38c3ca3e106e044e2f5bcdee2ff9e9f72781b40",
     ]);
+    expect(promptFingerprint()).toBe(hash);
     for (const p of [WRITER_SYSTEM_PROMPT, VERIFIER_SYSTEM_PROMPT]) {
       expect(p.length).toBeGreaterThanOrEqual(2000);
       expect(p).not.toMatch(/[{}]/);

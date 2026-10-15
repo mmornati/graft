@@ -50,7 +50,10 @@ export interface Blocker {
 }
 
 /** An in-memory GitHub REST API for one repository (graft-sandbox/sample-ts). */
-export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } = {}) {
+export function createFakeGitHubApi(
+  opts: { appId?: number; botLogin?: string; now?: () => number } = {},
+) {
+  const clock = opts.now ?? Date.now;
   const appId = opts.appId ?? 12345;
   const botLogin = opts.botLogin ?? "graft-dev[bot]";
   const state = {
@@ -67,6 +70,14 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
     checkRuns: [] as FakeCheckRun[],
     /** When true, comments created through the API carry no performed_via_github_app (D13). */
     omitPerformedViaApp: false,
+    /**
+     * When set, every response carries `x-ratelimit-*` and `remaining` decrements per request. At 0
+     * the API answers 403 "API rate limit exceeded" until the injected clock passes `reset`
+     * (epoch seconds), then the window starts again.
+     */
+    rateLimit: null as { limit: number; remaining: number; reset: number } | null,
+    /** When set, `GET /pulls` serves at most this many per page whatever `per_page` says. */
+    listPageSize: null as number | null,
     nextId: 1000,
   };
   const requests: RecordedApiRequest[] = [];
@@ -117,6 +128,18 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
     const is = (meth: string, re: RegExp): RegExpExecArray | null =>
       method === meth ? re.exec(rest) : null;
 
+    if (is("GET", /^\/pulls$/)) {
+      const wantState = url.searchParams.get("state") ?? "open";
+      const direction = url.searchParams.get("direction") === "asc" ? 1 : -1;
+      const all = [...state.pulls.values()]
+        .filter((p) => wantState === "all" || p.state === wantState)
+        .sort(
+          (a, b) =>
+            direction * (a.updated_at < b.updated_at ? -1 : a.updated_at > b.updated_at ? 1 : 0),
+        );
+      if (state.listPageSize !== null) url.searchParams.set("per_page", String(state.listPageSize));
+      return paged(all, url, path);
+    }
     m = is("GET", /^\/pulls\/(\d+)$/);
     if (m) {
       const pull = state.pulls.get(Number(m[1]));
@@ -246,13 +269,33 @@ export function createFakeGitHubApi(opts: { appId?: number; botLogin?: string } 
       await blocker.gate;
     }
 
+    const rl = state.rateLimit;
+    const withRateLimit = (res: Response): Response => {
+      if (!rl) return res;
+      const headers = new Headers(res.headers);
+      headers.set("x-ratelimit-limit", String(rl.limit));
+      headers.set("x-ratelimit-remaining", String(rl.remaining));
+      headers.set("x-ratelimit-reset", String(rl.reset));
+      return new Response(res.body, { status: res.status, headers });
+    };
+    if (rl) {
+      if (rl.remaining <= 0 && clock() / 1000 >= rl.reset) {
+        rl.remaining = rl.limit;
+        rl.reset += 3600;
+      }
+      if (rl.remaining <= 0) {
+        return withRateLimit(json(403, { message: "API rate limit exceeded for installation" }));
+      }
+      rl.remaining -= 1;
+    }
+
     const fIdx = failures.findIndex((f) => f.method === method && f.pathRegex.test(url.pathname));
     const failure = fIdx >= 0 ? failures[fIdx] : undefined;
     if (failure) {
       failures.splice(fIdx, 1);
-      return json(failure.status, failure.body, failure.headers);
+      return withRateLimit(json(failure.status, failure.body, failure.headers));
     }
-    return route(method, url, body);
+    return withRateLimit(await route(method, url, body));
   };
 
   return {

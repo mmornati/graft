@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-016-too-large",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "size",
+    "unavailable"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 116,
+      "title": "Rename the catalog module across the codebase",
+      "body": "Mechanical rename.",
+      "additions": 18000,
+      "deletions": 7000,
+      "changedFiles": 40
+    },
+    "issue": null,
+    "files": [],
+    "listingTruncated": true,
+    "tooLarge": true
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Renames the catalog module everywhere.",
+      "keyBehaviorChanges": [
+        "Many files change."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": "Too large to review as a diff."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {}
+}

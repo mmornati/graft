@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-004-ci-workflow",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "ci"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 104,
+      "title": "Add dependency audit to CI",
+      "body": "Runs the package audit on every push.",
+      "additions": 1,
+      "deletions": 0,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0,
+        "patch": "@@ -10,2 +10,3 @@\n+      - run: pnpm audit --prod\n       - run: pnpm lint\n       - run: pnpm test"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Adds a dependency audit step to the CI pipeline.",
+      "keyBehaviorChanges": [
+        "CI now runs a production dependency audit."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Add a dependency audit step to the CI workflow.",
+        "behavior_changes": [
+          "No observable behavior change."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "Only a workflow file changed.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

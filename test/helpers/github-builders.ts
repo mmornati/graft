@@ -33,6 +33,7 @@ export interface FakePull {
   head: { sha: string };
   base: {
     ref: string;
+    sha?: string;
     repo: { id: number; full_name: string; private: boolean; default_branch: string };
   };
 }
@@ -59,6 +60,7 @@ export function makePull(overrides: Partial<FakePull> = {}): FakePull {
     head: { sha: HEAD_SHA },
     base: {
       ref: "main",
+      sha: fakeSha(0xba5e),
       repo: {
         id: REPO_ID,
         full_name: `${OWNER}/${REPO}`,

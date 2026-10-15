@@ -1,0 +1,424 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-018-listing-truncated",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "size"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 118,
+      "title": "Bump generated module versions",
+      "body": "Regenerated.",
+      "additions": 90,
+      "deletions": 45,
+      "changedFiles": 60
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/gen/mod-01.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-02.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-03.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-04.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-05.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-06.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-07.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-08.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-09.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-10.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-11.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-12.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-13.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-14.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-15.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-16.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-17.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-18.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-19.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-20.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-21.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-22.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-23.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-24.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-25.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-26.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-27.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-28.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-29.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-30.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-31.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-32.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-33.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-34.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-35.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-36.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-37.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-38.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-39.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-40.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-41.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-42.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-43.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-44.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      },
+      {
+        "path": "src/gen/mod-45.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,2 @@\n-export const v = 1;\n+export const v = 2;\n+export const w = 3;"
+      }
+    ],
+    "listingTruncated": true,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Regenerates many modules.",
+      "keyBehaviorChanges": [
+        "Module constants change."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": "15 files are not listed."
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Update the generated modules.",
+        "behavior_changes": [
+          "Many modules change."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Wide change.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

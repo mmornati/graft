@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-003-discount-logic",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "logic",
+    "pricing"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 103,
+      "title": "Round discounts down",
+      "body": "Customers should never get more than the advertised discount.",
+      "additions": 4,
+      "deletions": 4,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/pricing/discount.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 4,
+        "deletions": 4,
+        "patch": "@@ -10,5 +10,5 @@\n-  const cents = Math.round(price * rate);\n-  return price - cents;\n-}\n-\n+  const cents = Math.floor(price * rate);\n+  return Math.max(0, price - cents);\n+}\n+\n export function applyDiscount(price: number, rate: number): number {"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [],
+      "goal": "Changes the discount rounding rule from nearest to down.",
+      "keyBehaviorChanges": [
+        "Discounts are rounded down.",
+        "The discounted price can no longer go below zero."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Round discounts down to the whole cent.",
+        "behavior_changes": [
+          "Discounts are rounded down instead of to the nearest cent."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Changes a pricing calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "writerEscalated": {
+      "json": {
+        "goal": "Round discounts down to the whole cent.",
+        "behavior_changes": [
+          "Discounts are rounded down instead of to the nearest cent."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Changes a pricing calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-012-test-deleted",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "tests"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 112,
+      "title": "Remove flaky cart tests",
+      "body": "They failed randomly.",
+      "additions": 0,
+      "deletions": 30,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/cart/cart.test.ts",
+        "previousPath": null,
+        "status": "removed",
+        "additions": 0,
+        "deletions": 30,
+        "patch": "@@ -1,30 +0,0 @@\n-  it('cart case 1', () => expect(cartTotal([1])).toBe(1));\n-  it('cart case 2', () => expect(cartTotal([2])).toBe(2));\n-  it('cart case 3', () => expect(cartTotal([3])).toBe(3));\n-  it('cart case 4', () => expect(cartTotal([4])).toBe(4));\n-  it('cart case 5', () => expect(cartTotal([5])).toBe(5));\n-  it('cart case 6', () => expect(cartTotal([6])).toBe(6));\n-  it('cart case 7', () => expect(cartTotal([7])).toBe(7));\n-  it('cart case 8', () => expect(cartTotal([8])).toBe(8));\n-  it('cart case 9', () => expect(cartTotal([9])).toBe(9));\n-  it('cart case 10', () => expect(cartTotal([10])).toBe(10));\n-  it('cart case 11', () => expect(cartTotal([11])).toBe(11));\n-  it('cart case 12', () => expect(cartTotal([12])).toBe(12));\n-  it('cart case 13', () => expect(cartTotal([13])).toBe(13));\n-  it('cart case 14', () => expect(cartTotal([14])).toBe(14));\n-  it('cart case 15', () => expect(cartTotal([15])).toBe(15));\n-  it('cart case 16', () => expect(cartTotal([16])).toBe(16));\n-  it('cart case 17', () => expect(cartTotal([17])).toBe(17));\n-  it('cart case 18', () => expect(cartTotal([18])).toBe(18));\n-  it('cart case 19', () => expect(cartTotal([19])).toBe(19));\n-  it('cart case 20', () => expect(cartTotal([20])).toBe(20));\n-  it('cart case 21', () => expect(cartTotal([21])).toBe(21));\n-  it('cart case 22', () => expect(cartTotal([22])).toBe(22));\n-  it('cart case 23', () => expect(cartTotal([23])).toBe(23));\n-  it('cart case 24', () => expect(cartTotal([24])).toBe(24));\n-  it('cart case 25', () => expect(cartTotal([25])).toBe(25));\n-  it('cart case 26', () => expect(cartTotal([26])).toBe(26));\n-  it('cart case 27', () => expect(cartTotal([27])).toBe(27));\n-  it('cart case 28', () => expect(cartTotal([28])).toBe(28));\n-  it('cart case 29', () => expect(cartTotal([29])).toBe(29));\n-  it('cart case 30', () => expect(cartTotal([30])).toBe(30));"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Deletes the cart test file.",
+      "keyBehaviorChanges": [
+        "The cart behavior is no longer tested."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Remove the cart tests.",
+        "behavior_changes": [
+          "The cart tests no longer run."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Tests removed.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

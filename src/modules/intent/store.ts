@@ -188,14 +188,18 @@ export async function latestPublishedCard(
   ex: Executor,
   changeId: string,
 ): Promise<IntentCardRow | undefined> {
-  return ex
-    .selectFrom("intent_displays as d")
-    .innerJoin("intent_cards as c", "c.id", "d.card_id")
-    .selectAll("c")
-    .where("d.change_id", "=", changeId)
-    .orderBy("d.shown_at", "desc")
-    .orderBy("d.seq", "desc")
-    .executeTakeFirst();
+  return (
+    ex
+      .selectFrom("intent_displays as d")
+      .innerJoin("intent_cards as c", "c.id", "d.card_id")
+      .selectAll("c")
+      .where("d.change_id", "=", changeId)
+      // A "pending" display is the outdated note: the card on screen is the last real one.
+      .where("d.status", "<>", "pending")
+      .orderBy("d.shown_at", "desc")
+      .orderBy("d.seq", "desc")
+      .executeTakeFirst()
+  );
 }
 
 /** The check run already used for this head by a published card of the change. */
@@ -256,6 +260,21 @@ export async function markPublished(
       })
       .execute();
   }
+}
+
+/**
+ * The "outdated" note (D11) replaced the card on screen: record it as a display of the previous
+ * card in status `pending`, so reactions made while it is shown are dropped. Call inside the
+ * change lock, after the comment write.
+ */
+export async function recordPendingDisplay(
+  tx: Transaction<Database>,
+  o: { changeId: string; cardId: string; now: Date },
+): Promise<void> {
+  await tx
+    .insertInto("intent_displays")
+    .values({ change_id: o.changeId, card_id: o.cardId, status: "pending", shown_at: o.now })
+    .execute();
 }
 
 /** Every display of the change, oldest first (a card can appear more than once: A, B, A). */

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-005-policy-file",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "policy"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 105,
+      "title": "Require review for payments",
+      "body": "Tighten the policy for the payments directory.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "graft.yaml",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-    approvals: 1\n+    approvals: 2\n   - path: payments/**"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Raises the approvals required for the payments directory.",
+      "keyBehaviorChanges": [
+        "Two approvals are needed under payments."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Require approval for changes to the payments directory.",
+        "behavior_changes": [
+          "Changes under payments need an approval."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Policy file.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

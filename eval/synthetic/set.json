@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "setId": "synthetic",
+  "kind": "synthetic",
+  "description": "30 fictional cases with scripted fake-LLM replies",
+  "encrypted": false,
+  "keyId": null,
+  "consentRef": null,
+  "defaultFloorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "createdAt": "2026-10-15T00:00:00Z"
+}

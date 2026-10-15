@@ -109,8 +109,8 @@ const UP: string[] = [
 
 // The 0001 definition, verbatim.
 const DOWN: string[] = [
-  `DROP TABLE intent_displays`,
-  `DROP TABLE intent_spend`,
+  `DROP TABLE IF EXISTS intent_displays`,
+  `DROP TABLE IF EXISTS intent_spend`,
   `DROP TABLE intent_feedback`,
   `DROP TABLE intent_cards`,
   `CREATE TABLE intent_cards (

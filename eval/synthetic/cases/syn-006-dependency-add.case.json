@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-006-dependency-add",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "dependency"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 106,
+      "title": "Add decimal.js",
+      "body": "Needed for exact money arithmetic.",
+      "additions": 3,
+      "deletions": 0,
+      "changedFiles": 2
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "package.json",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0,
+        "patch": "@@ -10,1 +10,2 @@\n+    \"decimal.js\": \"^10.4.3\",\n   \"dependencies\": {"
+      },
+      {
+        "path": "pnpm-lock.yaml",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 2,
+        "deletions": 0,
+        "patch": "@@ -10,1 +10,3 @@\n+  decimal.js@10.4.3:\n+    resolution: {integrity: sha512-fictionalfictionalfictional}\n packages:"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Adds the decimal.js dependency.",
+      "keyBehaviorChanges": [
+        "A new runtime dependency is installed."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Add a decimal arithmetic library.",
+        "behavior_changes": [
+          "The project depends on a new decimal library."
+        ],
+        "risk_class": "sensitive",
+        "risk_reason": "Adds a dependency.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

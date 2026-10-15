@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-002-comment-typo",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "comment",
+    "trivial"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 102,
+      "title": "Fix comment typo in format helper",
+      "body": "Spelling fix in a comment. No code change.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/util/format.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-  // Convert cents to a decimal strng.\n+  // Convert cents to a decimal string.\n   const value = (cents / 100).toFixed(2);"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "trivial",
+      "outOfScope": [],
+      "goal": "Fixes a spelling mistake in a code comment.",
+      "keyBehaviorChanges": [
+        "No behavior changes."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Fix a spelling mistake in a code comment.",
+        "behavior_changes": [
+          "No observable behavior change."
+        ],
+        "risk_class": "trivial",
+        "risk_reason": "A comment changed.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

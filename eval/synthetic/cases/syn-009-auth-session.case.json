@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-009-auth-session",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "auth"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 109,
+      "title": "Extend session lifetime",
+      "body": "Users complained about frequent sign-ins.",
+      "additions": 1,
+      "deletions": 1,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/auth/session.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-const SESSION_TTL_SECONDS = 3600;\n+const SESSION_TTL_SECONDS = 86400;\n export const SESSION_COOKIE = 'sid';"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Makes sessions last 24 hours.",
+      "keyBehaviorChanges": [
+        "The session lifetime grows from one hour to one day."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Extend the session lifetime to one day.",
+        "behavior_changes": [
+          "Sessions last 24 hours instead of one hour."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Session handling.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

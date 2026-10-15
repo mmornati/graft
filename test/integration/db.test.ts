@@ -60,6 +60,7 @@ describe("database", () => {
       expect(rolled).toContain("0001_initial");
       expect(rolled).toContain("0002_provenance");
       expect(rolled).toContain("0003_intent");
+      expect(rolled).toContain("0004_intent_display_pending");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -68,7 +69,12 @@ describe("database", () => {
       }>`select count(*)::text n from pgboss.i_db_2_marker`.execute(db);
       expect(marker.rows[0]?.n).toBe("1");
 
-      expect(await migrateToLatest(db)).toEqual(["0001_initial", "0002_provenance", "0003_intent"]);
+      expect(await migrateToLatest(db)).toEqual([
+        "0001_initial",
+        "0002_provenance",
+        "0003_intent",
+        "0004_intent_display_pending",
+      ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
       for (const t of TABLE_NAMES) expect(again).toContain(t);
@@ -405,6 +411,8 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      const down4 = await migrator.migrateDown();
+      expect(down4.results?.[0]?.migrationName).toBe("0004_intent_display_pending");
       const down3 = await migrator.migrateDown();
       expect(down3.results?.[0]?.migrationName).toBe("0003_intent");
       const down = await migrator.migrateDown();
@@ -425,7 +433,11 @@ describe("database", () => {
       );
       expect(cols.rows.map((r) => r.column_name)).not.toContain("graft_comment_id");
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0002_provenance", "0003_intent"]);
+      expect(await migrateToLatest(db)).toEqual([
+        "0002_provenance",
+        "0003_intent",
+        "0004_intent_display_pending",
+      ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
     await sql`insert into provenance (change_id, source) values (${change.id}, 'pr_body')`.execute(
@@ -436,6 +448,9 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0004_intent_display_pending",
+      );
       const down = await migrator.migrateDown();
       expect(down.error).toBeUndefined();
       expect(down.results?.[0]?.migrationName).toBe("0003_intent");
@@ -457,7 +472,7 @@ describe("database", () => {
         "UNIQUE (change_id, head_sha, prompt_version)",
       ]);
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0003_intent"]);
+      expect(await migrateToLatest(db)).toEqual(["0003_intent", "0004_intent_display_pending"]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
     expect(await tableNames(db)).toContain("intent_spend");
@@ -467,6 +482,70 @@ describe("database", () => {
       db,
     );
     expect(cols.rows.map((r) => r.column_name)).toContain("input_hash");
+  });
+
+  it("I-DB-9 0004 up/down round trip; 0003 down works after intent_displays and intent_spend were dropped by hand", async () => {
+    await sql`insert into installations (id, account_id, account_login, account_type, repository_selection) values (1, 1, 'a', 'User', 'all')`.execute(
+      db,
+    );
+    await sql`insert into repositories (id, installation_id, full_name, private) values (2, 1, 'a/b', false)`.execute(
+      db,
+    );
+    const change = await db
+      .insertInto("changes")
+      .values({
+        repository_id: 2,
+        pr_number: 1,
+        pr_node_id: "n",
+        task_id: null,
+        head_sha: SHA,
+        base_ref: "main",
+        author_login: "x",
+        state: "open",
+        merge_commit_sha: null,
+        opened_at: new Date(),
+        closed_at: null,
+        merged_at: null,
+        pr_updated_at: null,
+        graft_comment_id: null,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const card = await db
+      .insertInto("intent_cards")
+      .values({ change_id: change.id, ...OK_CARD })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const display = (status: string) =>
+      sql`insert into intent_displays (change_id, card_id, status, shown_at) values (${change.id}, ${card.id}, ${status}, now())`.execute(
+        db,
+      );
+    const migrator = createMigrator(db);
+    try {
+      // up: 'pending' is accepted, anything else is not
+      await expect(display("pending")).resolves.toBeDefined();
+      await expect(display("ok")).resolves.toBeDefined();
+      await expect(display("bogus")).rejects.toThrow(/check constraint/);
+
+      // down: pending rows are deleted, the old constraint is back
+      const down4 = await migrator.migrateDown();
+      expect(down4.error).toBeUndefined();
+      expect(down4.results?.[0]?.migrationName).toBe("0004_intent_display_pending");
+      const left = await sql<{ status: string }>`select status from intent_displays`.execute(db);
+      expect(left.rows.map((r) => r.status)).toEqual(["ok"]);
+      await expect(display("pending")).rejects.toThrow(/check constraint/);
+
+      // 0003 down on a database where the two tables are already gone
+      await sql`drop table intent_displays`.execute(db);
+      await sql`drop table intent_spend`.execute(db);
+      const down3 = await migrator.migrateDown();
+      expect(down3.error).toBeUndefined();
+      expect(down3.results?.[0]?.migrationName).toBe("0003_intent");
+    } finally {
+      await migrateToLatest(db);
+    }
+    expect(await tableNames(db)).toContain("intent_displays");
+    expect(await tableNames(db)).toContain("intent_spend");
   });
 
   it("I-DB-6 a bigint above 2^53 read through createDb throws", async () => {

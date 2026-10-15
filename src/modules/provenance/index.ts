@@ -12,4 +12,6 @@ export type {
   ProvenanceResult,
   ResolvedField,
 } from "./compute.js";
+export { computeProvenance } from "./compute.js";
+export { fetchPrCommits } from "./fetch.js";
 export type { GraftField, ProvenanceWarning } from "./fields.js";

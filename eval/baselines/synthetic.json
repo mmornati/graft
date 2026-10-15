@@ -1,0 +1,1541 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261014T234902Z-8ceb",
+  "createdAt": "2026-10-14T23:49:02.600Z",
+  "set": {
+    "setId": "synthetic",
+    "kind": "synthetic",
+    "caseSetHash": "cf4caa8b688280414994db5a0009ebe947f62be2d6bd8867cfb0e9e3e0c3e1ea",
+    "cases": 30,
+    "scored": 30,
+    "unlabeled": 0,
+    "needsAdjudication": 0
+  },
+  "prompt": {
+    "promptVersion": "intent-v1",
+    "promptFingerprint": "1fe62955ab7a276f42ecce84d38c3ca3e106e044e2f5bcdee2ff9e9f72781b40"
+  },
+  "models": {
+    "fast": "claude-haiku-5-5",
+    "strong": "claude-sonnet-5-5"
+  },
+  "llm": "fake",
+  "git": {
+    "commit": "e9a8fb674c82deb30127ec2d39368595c5763558",
+    "dirty": true
+  },
+  "run": {
+    "complete": true,
+    "skippedBudget": 0,
+    "cachedResults": 0,
+    "durationMs": 24
+  },
+  "metrics": {
+    "scored": 30,
+    "runCases": 30,
+    "okCases": 28,
+    "underClassificationFloor": 0.2,
+    "underClassificationModel": 0.4286,
+    "underClassificationFinal": 0,
+    "severeUnderClassificationFloor": 0.0333,
+    "severeUnderClassificationModel": 0.1071,
+    "severeUnderClassificationFinal": 0,
+    "overClassificationFloor": 0.0333,
+    "overClassificationModel": 0,
+    "overClassificationFinal": 0.0667,
+    "exactAccuracyFloor": 0.7667,
+    "exactAccuracyModel": 0.5714,
+    "exactAccuracyFinal": 0.9333,
+    "trivialRecall": 0.5,
+    "confusion": {
+      "floor": {
+        "n": 30,
+        "counts": [
+          [
+            3,
+            1,
+            0
+          ],
+          [
+            5,
+            7,
+            0
+          ],
+          [
+            1,
+            0,
+            13
+          ]
+        ],
+        "precision": [
+          0.3333,
+          0.875,
+          1
+        ],
+        "recall": [
+          0.75,
+          0.5833,
+          0.9286
+        ]
+      },
+      "model": {
+        "n": 28,
+        "counts": [
+          [
+            3,
+            0,
+            0
+          ],
+          [
+            3,
+            9,
+            0
+          ],
+          [
+            3,
+            6,
+            4
+          ]
+        ],
+        "precision": [
+          0.3333,
+          0.6,
+          1
+        ],
+        "recall": [
+          1,
+          0.75,
+          0.3077
+        ]
+      },
+      "final": {
+        "n": 30,
+        "counts": [
+          [
+            2,
+            2,
+            0
+          ],
+          [
+            0,
+            12,
+            0
+          ],
+          [
+            0,
+            0,
+            14
+          ]
+        ],
+        "precision": [
+          1,
+          0.8571,
+          1
+        ],
+        "recall": [
+          0.5,
+          1,
+          1
+        ]
+      }
+    },
+    "byTag": {
+      "auth": {
+        "n": 2,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 1,
+        "underClassificationFinal": 0
+      },
+      "binary": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 1,
+        "underClassificationFinal": 0
+      },
+      "ci": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 1,
+        "underClassificationFinal": 0
+      },
+      "comment": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "configured": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 1,
+        "underClassificationFinal": 0
+      },
+      "dependency": {
+        "n": 2,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0.5,
+        "underClassificationFinal": 0
+      },
+      "docs": {
+        "n": 4,
+        "underClassificationFloor": 0.25,
+        "underClassificationModel": 0.6667,
+        "underClassificationFinal": 0
+      },
+      "floor": {
+        "n": 17,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0.625,
+        "underClassificationFinal": 0
+      },
+      "floor-miss": {
+        "n": 1,
+        "underClassificationFloor": 1,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "infra": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "injection": {
+        "n": 4,
+        "underClassificationFloor": 0.25,
+        "underClassificationModel": 0.5,
+        "underClassificationFinal": 0
+      },
+      "known-over-classification": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "logic": {
+        "n": 4,
+        "underClassificationFloor": 0.5,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "migration": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "mismatch": {
+        "n": 2,
+        "underClassificationFloor": 1,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "oos": {
+        "n": 2,
+        "underClassificationFloor": 1,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "partial": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "policy": {
+        "n": 1,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 1,
+        "underClassificationFinal": 0
+      },
+      "pricing": {
+        "n": 1,
+        "underClassificationFloor": 1,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "rename": {
+        "n": 3,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0.6667,
+        "underClassificationFinal": 0
+      },
+      "size": {
+        "n": 4,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0.3333,
+        "underClassificationFinal": 0
+      },
+      "tests": {
+        "n": 3,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0.6667,
+        "underClassificationFinal": 0
+      },
+      "trivial": {
+        "n": 2,
+        "underClassificationFloor": 0,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      },
+      "unavailable": {
+        "n": 2,
+        "underClassificationFloor": 0,
+        "underClassificationModel": null,
+        "underClassificationFinal": 0
+      },
+      "verifier-error": {
+        "n": 1,
+        "underClassificationFloor": 1,
+        "underClassificationModel": 0,
+        "underClassificationFinal": 0
+      }
+    },
+    "outOfScopePrecision": 1,
+    "outOfScopeRecall": 1,
+    "outOfScopeExactRate": 1,
+    "flagPrecision": 1,
+    "flagRecall": 1,
+    "flagCounts": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "tn": 25
+    },
+    "verifierErrorRate": 0.0357,
+    "unavailableRate": 0.0667,
+    "unavailableByReason": {
+      "llm_unavailable": 1,
+      "too_large": 1
+    },
+    "injectionDetection": 1,
+    "cardAcceptableRate": 0.9643,
+    "tokens": {
+      "inputTokens": 60000,
+      "outputTokens": 6000,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "calls": 62
+    },
+    "costUsd": 0.1572,
+    "costUsdThisRun": 0.1572,
+    "costPerCaseUsd": 0.00524
+  },
+  "cases": [
+    {
+      "id": "syn-001-docs-typo",
+      "tags": [
+        "docs",
+        "trivial"
+      ],
+      "gold": {
+        "risk": "trivial",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "trivial",
+      "final": "trivial",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.00315,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-002-comment-typo",
+      "tags": [
+        "comment",
+        "trivial"
+      ],
+      "gold": {
+        "risk": "trivial",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "trivial",
+      "final": "trivial",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.00315,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-003-discount-logic",
+      "tags": [
+        "logic",
+        "pricing"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [
+        "writer",
+        "first_pass"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 3
+      },
+      "costUsd": 0.00615,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-004-ci-workflow",
+      "tags": [
+        "floor",
+        "ci"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "trivial",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "ci_config"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-005-policy-file",
+      "tags": [
+        "floor",
+        "policy"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "policy_file"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-006-dependency-add",
+      "tags": [
+        "floor",
+        "dependency"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "sensitive",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "dependency_manifest"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-007-lockfile-bump",
+      "tags": [
+        "floor",
+        "dependency"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "trivial",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "dependency_manifest"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-008-terraform",
+      "tags": [
+        "floor",
+        "infra"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "sensitive",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "infra"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-009-auth-session",
+      "tags": [
+        "floor",
+        "auth"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "auth_secrets"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-010-migration",
+      "tags": [
+        "floor",
+        "migration"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "sensitive",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "migration"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-011-configured-path",
+      "tags": [
+        "floor",
+        "configured"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "configured_path"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-012-test-deleted",
+      "tags": [
+        "floor",
+        "tests"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "test_deleted"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-013-test-shrunk",
+      "tags": [
+        "floor",
+        "tests"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "test_shrunk"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-014-binary",
+      "tags": [
+        "floor",
+        "binary"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "trivial",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "binary"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-015-size-large",
+      "tags": [
+        "floor",
+        "size"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "size_large"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-016-too-large",
+      "tags": [
+        "floor",
+        "size",
+        "unavailable"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": null,
+      "final": "sensitive",
+      "status": "unavailable",
+      "failureReason": "too_large",
+      "verifierStatus": "skipped",
+      "raisedBy": [],
+      "floorRules": [
+        "listing_truncated",
+        "size_huge",
+        "size_large"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "na",
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 0
+      },
+      "costUsd": 0,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-017-truncated-diff",
+      "tags": [
+        "floor",
+        "size",
+        "partial"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "partial_view",
+        "size_large"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-018-listing-truncated",
+      "tags": [
+        "floor",
+        "size"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "listing_truncated",
+        "size_huge",
+        "size_large"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-019-injection-body",
+      "tags": [
+        "injection",
+        "docs"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "trivial",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "injection_marker"
+      ],
+      "instructionsInData": true,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-020-injection-diff",
+      "tags": [
+        "injection",
+        "logic"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "injection_marker"
+      ],
+      "instructionsInData": true,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-021-injection-zero-width",
+      "tags": [
+        "injection",
+        "logic"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "injection_marker"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-022-oos-flagged",
+      "tags": [
+        "oos",
+        "mismatch"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": true,
+        "outOfScopeCount": 1
+      },
+      "floor": "trivial",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "disagree",
+      "raisedBy": [
+        "writer",
+        "first_pass",
+        "verifier",
+        "verifier_disagrees"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tp",
+      "usage": {
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 3
+      },
+      "costUsd": 0.00615,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-023-oos-verifier-only",
+      "tags": [
+        "oos"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 1
+      },
+      "floor": "trivial",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [
+        "writer",
+        "first_pass",
+        "verifier"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 3
+      },
+      "costUsd": 0.00615,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-024-rename-out-of-auth",
+      "tags": [
+        "floor",
+        "rename",
+        "auth"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "trivial",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "auth_secrets"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-025-test-renamed-away",
+      "tags": [
+        "floor",
+        "rename",
+        "tests"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "sensitive",
+      "model": "logic",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "partial_view",
+        "test_deleted"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-026-description-lies",
+      "tags": [
+        "mismatch",
+        "floor-miss"
+      ],
+      "gold": {
+        "risk": "sensitive",
+        "shouldFlag": true,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "sensitive",
+      "final": "sensitive",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "disagree",
+      "raisedBy": [
+        "verifier",
+        "verifier_disagrees"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tp",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.00315,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-027-writer-down",
+      "tags": [
+        "unavailable",
+        "docs"
+      ],
+      "gold": {
+        "risk": "trivial",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": null,
+      "final": "logic",
+      "status": "unavailable",
+      "failureReason": "llm_unavailable",
+      "verifierStatus": "skipped",
+      "raisedBy": [
+        "card_unavailable"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "na",
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 1
+      },
+      "costUsd": 0,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-028-verifier-timeout",
+      "tags": [
+        "verifier-error",
+        "logic"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "logic",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "error",
+      "raisedBy": [
+        "writer",
+        "first_pass",
+        "verifier_error"
+      ],
+      "floorRules": [],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "na",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 3
+      },
+      "costUsd": 0.00315,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-029-pure-rename",
+      "tags": [
+        "rename",
+        "known-over-classification"
+      ],
+      "gold": {
+        "risk": "trivial",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "logic",
+      "model": "trivial",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [],
+      "floorRules": [
+        "partial_view"
+      ],
+      "instructionsInData": false,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 2
+      },
+      "costUsd": 0.006,
+      "cached": false,
+      "skipped": null
+    },
+    {
+      "id": "syn-030-soft-injection",
+      "tags": [
+        "injection",
+        "docs"
+      ],
+      "gold": {
+        "risk": "logic",
+        "shouldFlag": false,
+        "outOfScopeCount": 0
+      },
+      "floor": "trivial",
+      "model": "trivial",
+      "final": "logic",
+      "status": "ok",
+      "failureReason": null,
+      "verifierStatus": "agree",
+      "raisedBy": [
+        "instructions_in_data"
+      ],
+      "floorRules": [],
+      "instructionsInData": true,
+      "oos": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "flag": "tn",
+      "usage": {
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "calls": 3
+      },
+      "costUsd": 0.00615,
+      "cached": false,
+      "skipped": null
+    }
+  ],
+  "thresholds": [
+    {
+      "name": "underClassificationFinal",
+      "value": 0,
+      "limit": "max 0",
+      "pass": true,
+      "provisional": false
+    },
+    {
+      "name": "severeUnderClassificationFinal",
+      "value": 0,
+      "limit": "max 0",
+      "pass": true,
+      "provisional": false
+    },
+    {
+      "name": "unavailableRate",
+      "value": 0.0667,
+      "limit": "max 0.1",
+      "pass": true,
+      "provisional": false
+    },
+    {
+      "name": "matchBaseline",
+      "value": null,
+      "limit": "equal to baseline (no baseline)",
+      "pass": true,
+      "provisional": false
+    }
+  ],
+  "pass": true
+}

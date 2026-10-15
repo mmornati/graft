@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-023-oos-verifier-only",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "oos"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 123,
+      "title": "Include shipping in the cart total",
+      "body": "Shipping was missing from the total.",
+      "additions": 2,
+      "deletions": 2,
+      "changedFiles": 2
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "src/cart/total.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,2 +10,2 @@\n-  return sum;\n+  return sum + shipping;\n export function total(items: number[], shipping: number): number {"
+      },
+      {
+        "path": "src/logging/format.ts",
+        "previousPath": null,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "patch": "@@ -10,1 +10,1 @@\n-  return `[${level}] ${msg}`;\n+  return `${level.toUpperCase()}: ${msg}`;"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "logic",
+      "outOfScope": [
+        "src/logging/format.ts"
+      ],
+      "goal": "Adds shipping to the cart total.",
+      "keyBehaviorChanges": [
+        "Totals include shipping.",
+        "Log lines use a different format."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Include shipping in the cart total.",
+        "behavior_changes": [
+          "The cart total includes shipping."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "writerEscalated": {
+      "json": {
+        "goal": "Include shipping in the cart total.",
+        "behavior_changes": [
+          "The cart total includes shipping."
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Calculation.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": {
+      "json": {
+        "claims": [
+          {
+            "id": "goal",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          },
+          {
+            "id": "b1",
+            "verdict": "supported",
+            "reason": "Shown in the diff."
+          }
+        ],
+        "missing_behavior_changes": [],
+        "unexplained_files": [
+          "src/logging/format.ts"
+        ],
+        "risk_class": "logic",
+        "risk_reason": "Assessment of the diff.",
+        "instructions_in_data": false
+      }
+    }
+  }
+}

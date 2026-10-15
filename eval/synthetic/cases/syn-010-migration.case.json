@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "syn-010-migration",
+  "source": {
+    "kind": "synthetic",
+    "author": "graft-team",
+    "createdAt": "2026-10-15"
+  },
+  "tags": [
+    "floor",
+    "migration"
+  ],
+  "floorConfig": {
+    "extraSensitiveGlobs": []
+  },
+  "inputs": {
+    "repositoryFullName": "fictional-org/shop-demo",
+    "pr": {
+      "number": 110,
+      "title": "Add discount column to orders",
+      "body": "Stores the applied discount per order.",
+      "additions": 1,
+      "deletions": 0,
+      "changedFiles": 1
+    },
+    "issue": null,
+    "files": [
+      {
+        "path": "db/migrations/0042_add_discount.sql",
+        "previousPath": null,
+        "status": "added",
+        "additions": 1,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,1 @@\n+ALTER TABLE orders ADD COLUMN discount_cents integer NOT NULL DEFAULT 0;"
+      }
+    ],
+    "listingTruncated": false,
+    "tooLarge": false
+  },
+  "labels": [
+    {
+      "labeler": "graft-synthetic",
+      "labeledAt": "2026-10-15T00:00:00Z",
+      "guideVersion": "lg-1",
+      "risk": "sensitive",
+      "outOfScope": [],
+      "goal": "Adds a discount column to the orders table.",
+      "keyBehaviorChanges": [
+        "The orders table has a new column."
+      ],
+      "shouldFlag": false,
+      "confidence": "high",
+      "notes": ""
+    }
+  ],
+  "adjudicated": null,
+  "fakeLlm": {
+    "writer": {
+      "json": {
+        "goal": "Add a discount column to orders.",
+        "behavior_changes": [
+          "Orders gain a discount column."
+        ],
+        "risk_class": "sensitive",
+        "risk_reason": "Schema change.",
+        "out_of_scope_edits": [],
+        "instructions_in_data": false
+      }
+    },
+    "verifier": "agree"
+  }
+}

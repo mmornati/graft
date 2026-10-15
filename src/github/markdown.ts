@@ -38,6 +38,8 @@ export function escapeProse(text: string, maxChars: number): string {
   // GitHub turns GH-123 into an issue reference (and a back-reference on the issue).
   t = t.replace(/\b(GH)(?=-\d)/gi, `$1${WORD_JOINER}`);
   t = t.replace(/www\./gi, (m) => `${m.slice(0, 3)}${WORD_JOINER}.`);
+  // Unreachable: `<` and `!` are already escaped above; kept for defence in depth. The mutation
+  // check for this rule applies to `codeSpan`.
   t = t.replace(/<!--/g, `<${WORD_JOINER}!--`);
   return t;
 }
