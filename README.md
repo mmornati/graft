@@ -10,7 +10,7 @@
 ![pnpm 11](https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white)
 ![Phase 0: shadow mode](https://img.shields.io/badge/status-Phase%200%20%C2%B7%20shadow%20mode-orange)
 
-[Quickstart](#quickstart-offline-under-5-minutes) · [Features](#features) · [How it works](#how-it-works) · [Docs](docs/README.md) · [Status](#status-and-roadmap)
+[Website](https://mmornati.github.io/graft/) · [Quickstart](#quickstart-offline-under-5-minutes) · [Features](#features) · [How it works](#how-it-works) · [Docs](docs/README.md) · [Status](#status-and-roadmap)
 
 </div>
 
