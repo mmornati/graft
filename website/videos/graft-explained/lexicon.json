@@ -1,0 +1,5 @@
+{
+  "_doc": "Pronunciation fixes, applied to the spoken text only (subtitles keep the original). Keys are whole words, case-sensitive. A [[…]] value is raw IPA (Kokoro, Azure). '<lang>@<engine>' entries override '<lang>' for one engine. Use the narration-lexicon skill to find and verify entries.",
+  "en": {},
+  "_notes": "Verified with narration-lexicon (Whisper small) on 2026-10-16: no entry needed for Kokoro af_heart. Whisper hears 'Graft' as its homophone 'graphed' (/ɡɹæft/ either way, IPA included); that diff is Whisper's, not the voice's."
+}
