@@ -16,7 +16,7 @@ Teams are **not checked** until Phase 1. Phase 0 shows which teams a rule would 
 The valid example is [docs/examples/graft.yaml](examples/graft.yaml):
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json
 version: 1
 
 # Extra paths that set the intent risk floor to `sensitive` (step 3 rule R7).
@@ -159,7 +159,7 @@ pnpm graft policy check graft.yaml --json   # {"ok": false, "errors": [...]}
 pnpm graft policy schema --check            # is schema/graft.v1.schema.json up to date
 ```
 
-For editor completion and validation, start the file with the `yaml-language-server` comment shown in the example, pointing at `schema/graft.v1.schema.json`. (The URL has an `<org>` placeholder until the Graft repository's location is final.) The JSON Schema cannot express every rule (for example the `approve` restrictions); `pnpm graft policy check` can.
+For editor completion and validation, start the file with the `yaml-language-server` comment shown in the example, pointing at `schema/graft.v1.schema.json`. The JSON Schema cannot express every rule (for example the `approve` restrictions); `pnpm graft policy check` can.
 
 Lint the file in your own CI with this workflow. It uses `pull_request`, never `pull_request_target`, and the file is only parsed, never executed.
 
@@ -178,7 +178,7 @@ jobs:
       - uses: actions/checkout@v4                 # pin to a commit SHA per your org policy
       - uses: actions/checkout@v4
         with:
-          repository: <org>/graft                 # HUMAN-TODO: final location
+          repository: mmornati/graft
           ref: <pinned commit SHA>
           path: .graft-tool
           token: ${{ secrets.GRAFT_TOOL_TOKEN }}  # only while the Graft repo is private
@@ -189,6 +189,8 @@ jobs:
       - run: pnpm install --frozen-lockfile --dir .graft-tool
       - run: pnpm --dir .graft-tool graft policy check "$GITHUB_WORKSPACE/graft.yaml"
 ```
+
+Placeholders you fill in: `<pinned commit SHA>` is the Graft commit you want to lint with (pin a full SHA, not a branch), and `GRAFT_TOOL_TOKEN` is a repository secret in your repository holding a fine-grained, read-only token for `mmornati/graft`; it is needed only while the Graft repository is private, so drop the `token:` line once it is public.
 
 ## What Phase 0 does not do
 
