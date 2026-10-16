@@ -1,0 +1,114 @@
+{
+  "_doc": "Scenes and narration of the Graft explainer. One entry per scene; each language is a list of sentences (cues). Write numbers in words. Then run narrate.py on this folder. Every organisation, person and pull request shown is fictional.",
+  "langs": ["en"],
+  "engine": "kokoro",
+  "voices": {"kokoro": {"en": {"voice": "af_heart"}}},
+  "scenes": [
+    {
+      "id": "title", "min": 7, "lead": 1.4,
+      "chapter": {"en": "Graft"},
+      "en": [
+        "This is Graft.",
+        "It adds intent review and policy checks to pull requests written by coding agents."
+      ]
+    },
+    {
+      "id": "problem", "min": 10,
+      "chapter": {"en": "The problem"},
+      "en": [
+        "Coding agents now open pull requests faster than people can review them.",
+        "Reviewers read every diff, line by line.",
+        "And the description they start from was written by the agent being judged."
+      ]
+    },
+    {
+      "id": "cast", "min": 11,
+      "chapter": {"en": "Who is involved"},
+      "en": [
+        "Graft works with three roles.",
+        "The agent writes the code.",
+        "The reviewer decides what merges.",
+        "The platform owner sets the rules.",
+        "All of it runs on top of GitHub, with nothing to migrate."
+      ]
+    },
+    {
+      "id": "flow", "min": 14,
+      "chapter": {"en": "How it works"},
+      "en": [
+        "When a pull request opens, GitHub sends a signed webhook.",
+        "The server verifies it, removes duplicates, and queues a job.",
+        "The worker reads everything again from the GitHub API, and never trusts the webhook payload.",
+        "It publishes three check runs and one managed comment."
+      ]
+    },
+    {
+      "id": "provenance", "min": 12,
+      "chapter": {"en": "Who wrote it"},
+      "en": [
+        "First answer: who wrote it.",
+        "Agents add Graft trailers to their commits, and a git hook can add them automatically.",
+        "Bot accounts and agent co-authors count too.",
+        "The reviewer sees the agent, the model, the task, and the session."
+      ]
+    },
+    {
+      "id": "intent", "min": 13,
+      "chapter": {"en": "What it claims"},
+      "en": [
+        "Second answer: what it claims to do.",
+        "A writer model drafts an intent card.",
+        "A second model, the verifier, sees only the diff and the card, and checks every claim.",
+        "The pull request text is treated as data, never as instructions."
+      ]
+    },
+    {
+      "id": "floor", "min": 13.5,
+      "chapter": {"en": "The risk floor"},
+      "en": [
+        "Third answer: how risky it is.",
+        "Fixed rules over paths, size, tests, CI, auth, and migrations set a risk floor.",
+        "A model can raise the class, but never lower it."
+      ]
+    },
+    {
+      "id": "policy", "min": 13,
+      "chapter": {"en": "The policy"},
+      "en": [
+        "Fourth answer: what the policy says.",
+        "The repository's graft dot yaml file is read from the base branch only.",
+        "A block wins first, then a require, and then an approve."
+      ]
+    },
+    {
+      "id": "workflow", "min": 17,
+      "chapter": {"en": "A new way of working"},
+      "en": [
+        "This changes the reviewer's day.",
+        "They read the card before the diff.",
+        "Trivial changes could flow on their own, and sensitive ones go to the right people.",
+        "Agents keep working as before, plus a few trailers.",
+        "Reviewers rate each card, so its accuracy is measured."
+      ]
+    },
+    {
+      "id": "trust", "min": 15,
+      "chapter": {"en": "Privacy and shadow mode"},
+      "en": [
+        "Graft never stores file contents, diffs, or pull request text.",
+        "It keeps paths, commit hashes, and numbers.",
+        "Today it runs in shadow mode: every check is neutral.",
+        "Enforcement comes only after the cards prove ninety percent accurate."
+      ]
+    },
+    {
+      "id": "close", "min": 9, "tail": 2.0,
+      "chapter": {"en": "Get started"},
+      "en": [
+        "Read the card before you read the diff.",
+        "Graft runs offline in under five minutes.",
+        "Start with the documentation."
+      ]
+    }
+  ]
+}

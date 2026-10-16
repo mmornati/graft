@@ -24,3 +24,6 @@ site/
 # Impeccable review captures (regenerated)
 .impeccable/review/
 .impeccable/hook.cache.json
+
+# canvas-video stills, contact sheets and MP4 exports (website/videos)
+build/
