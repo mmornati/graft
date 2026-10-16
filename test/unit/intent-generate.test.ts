@@ -646,3 +646,77 @@ describe("spend cost (step 6)", () => {
     expect((await generateCard(inputs(), failing, OPTS)).costUsd).toBe(0);
   });
 });
+
+describe("client-side refusal fallback", () => {
+  const FALLBACK = "claude-opus-5-5";
+  const withFallback = genOptions({ models: { ...OPTS.models, refusalFallback: FALLBACK } });
+
+  it("U-GEN-32 a refused call is repeated once on the fallback model, which then shows as the writer", async () => {
+    const llm = scriptedLlm({
+      writer: (req) => (req.model === FAST ? { failure: "refusal" } : W()),
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, withFallback);
+    expect(r).toMatchObject({
+      status: "ok",
+      models: { writer: FALLBACK, verifier: STRONG },
+      usage: { calls: 3 },
+    });
+    expect(llm.calls.map((c) => [c.purpose, c.model])).toEqual([
+      ["writer", FAST],
+      ["writer", FALLBACK],
+      ["verifier", STRONG],
+    ]);
+  });
+
+  it("U-GEN-33 the switch is not one of the two attempts: invalid output on the fallback is repaired once", async () => {
+    const llm = scriptedLlm({
+      writer: (req, i) =>
+        req.model === FAST ? { failure: "refusal" } : i === 1 ? { json: { nope: 1 } } : W(),
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, withFallback);
+    expect(r.status).toBe("ok");
+    expect(llm.calls.map((c) => c.model)).toEqual([FAST, FALLBACK, FALLBACK, STRONG]);
+  });
+
+  it("U-GEN-34 no fallback without a model, on the same model, twice, or when the client fell back server-side", async () => {
+    const refuseAll = () => createFakeLlm(() => ({ failure: "refusal" }));
+
+    const none = refuseAll();
+    expect((await generateCard(inputs(), none, OPTS)).failureReason).toBe("llm_refusal");
+    expect(none.calls).toHaveLength(1);
+
+    // The fallback refuses too: one switch only.
+    const twice = refuseAll();
+    expect((await generateCard(inputs(), twice, withFallback)).failureReason).toBe("llm_refusal");
+    expect(twice.calls.map((c) => c.model)).toEqual([FAST, FALLBACK]);
+
+    // The fallback is the model that refused.
+    const same = refuseAll();
+    const sameOpts = genOptions({ models: { ...OPTS.models, refusalFallback: FAST } });
+    expect((await generateCard(inputs(), same, sameOpts)).failureReason).toBe("llm_refusal");
+    expect(same.calls).toHaveLength(1);
+
+    // The client already ran its server-side fallback for this model.
+    const server = Object.assign(refuseAll(), { serverRefusalFallback: () => true });
+    expect((await generateCard(inputs(), server, withFallback)).failureReason).toBe("llm_refusal");
+    expect(server.calls).toHaveLength(1);
+  });
+
+  it("U-GEN-35 every call is priced by the model that answered it", async () => {
+    const llm = scriptedLlm({
+      writer: (req) => (req.model === FAST ? { json: W().json, model: FAST } : W()),
+      verifier: (req, i) => (i === 1 ? { failure: "refusal" } : agreeingVerifier(req)),
+    });
+    const fallbackToSonnet = genOptions({ models: { ...OPTS.models, refusalFallback: FAST } });
+    const r = await generateCard(inputs(), llm, fallbackToSonnet);
+    // Haiku writer 0.00015, refused Sonnet verifier 0 (no tokens), Haiku verifier 0.00015.
+    expect(llm.calls.map((c) => [c.purpose, c.model])).toEqual([
+      ["writer", FAST],
+      ["verifier", STRONG],
+      ["verifier", FAST],
+    ]);
+    expect(r).toMatchObject({ status: "ok", costUsd: 0.0003, models: { verifier: FAST } });
+  });
+});

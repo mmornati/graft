@@ -196,6 +196,52 @@ describe("config", () => {
     const other = errorOf({ ...valid, PORT: "0", ANTHROPIC_API_KEY: "sk-ant-LEAKCHECK" }).message;
     expect(other).not.toContain("sk-ant-LEAKCHECK");
   });
+  it("U-CFG-33 gateway settings: base URL, bearer token, gateway model IDs, refusal fallback model", () => {
+    const d = loadConfig(valid);
+    expect(d).toMatchObject({
+      anthropicAuthToken: undefined,
+      anthropicBaseUrl: undefined,
+      llmRefusalFallbackModel: undefined,
+    });
+    const c = loadConfig({
+      ...valid,
+      ANTHROPIC_AUTH_TOKEN: "or-token-value",
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+      GRAFT_LLM_MODEL_FAST: "anthropic/claude-haiku-5.5",
+      GRAFT_LLM_MODEL_STRONG: "us.anthropic.claude-sonnet-5-5-v1:0",
+      GRAFT_LLM_REFUSAL_FALLBACK_MODEL: "claude-opus-5-5",
+    });
+    expect(c).toMatchObject({
+      anthropicApiKey: undefined,
+      anthropicAuthToken: "or-token-value",
+      anthropicBaseUrl: "https://openrouter.ai/api",
+      llmModelFast: "anthropic/claude-haiku-5.5",
+      llmModelStrong: "us.anthropic.claude-sonnet-5-5-v1:0",
+      llmRefusalFallbackModel: "claude-opus-5-5",
+    });
+
+    const both = errorOf({
+      ...valid,
+      ANTHROPIC_API_KEY: "sk-ant-KEYCANARY",
+      ANTHROPIC_AUTH_TOKEN: "TOKENCANARY",
+    }).message;
+    expect(both).toContain("ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN");
+    expect(both).not.toContain("KEYCANARY");
+    expect(both).not.toContain("TOKENCANARY");
+
+    const bad: [string, string][] = [
+      ["ANTHROPIC_BASE_URL", "not a SECRETVALUE url"],
+      ["ANTHROPIC_BASE_URL", "ftp://SECRETVALUE.example/"],
+      ["GRAFT_LLM_REFUSAL_FALLBACK_MODEL", "gpt-5-SECRETVALUE"],
+      ["GRAFT_LLM_MODEL_FAST", "openai/gpt-5-secretvalue"],
+      ["GRAFT_LLM_MODEL_FAST", "a.b.c.d.claude-secretvalue"],
+    ];
+    for (const [name, value] of bad) {
+      const msg = errorOf({ ...valid, [name]: value }).message;
+      expect(msg, `${name}=${value.slice(0, 10)}`).toContain(name);
+      expect(msg.toLowerCase()).not.toContain("secretvalue");
+    }
+  });
   it("U-CFG-30 an invalid env glob names its position and the reason, never the value", () => {
     const msg = errorOf({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "a/**,/**.pem" }).message;
     expect(msg).toContain("GRAFT_INTENT_SENSITIVE_PATHS: glob 2 is invalid");

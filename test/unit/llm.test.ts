@@ -1,8 +1,13 @@
 import { Writable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../../src/core/logger.js";
 import { agreeingVerifier, createFakeLlm, forbiddenLlm, scriptedLlm } from "../../src/llm/fake.js";
-import { createAnthropicLlm, createLlmClient, unconfiguredLlm } from "../../src/llm/index.js";
+import {
+  createAnthropicLlm,
+  createLlmClient,
+  isClaudeApi,
+  unconfiguredLlm,
+} from "../../src/llm/index.js";
 import type { LlmRequest } from "../../src/llm/types.js";
 import { testConfig } from "../helpers/config.js";
 import { expectDuration } from "../helpers/perf.js";
@@ -352,6 +357,86 @@ describe("anthropic client", () => {
     // Without the signal: 4 attempts of 150 ms plus backoff, well past a second.
     expectDuration(Date.now() - started, 700);
     expect(attempts).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("gateways and bearer tokens", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("U-LLM-13 a bearer token goes to the configured base URL, and the process env is never read", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-FROM-ENV");
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://env.example.test");
+    const f = fakeFetch([ok()]);
+    const llm = createAnthropicLlm({
+      authToken: "or-token-value",
+      baseURL: "https://openrouter.ai/api",
+      maxRetries: 0,
+      refusalFallback: false,
+      log: silentLog,
+      fetch: f.fn,
+    });
+    expect(await llm.complete(req({ model: "anthropic/claude-haiku-5.5" }))).toMatchObject({
+      ok: true,
+    });
+    expect(f.seen[0]?.url).toBe("https://openrouter.ai/api/v1/messages");
+    expect(f.seen[0]?.headers.get("authorization")).toBe("Bearer or-token-value");
+    expect(f.seen[0]?.headers.has("x-api-key")).toBe(false);
+    expect(f.seen[0]?.body.model).toBe("anthropic/claude-haiku-5.5");
+
+    // An API key alone sends only x-api-key, to the Claude API when no base URL is given.
+    const g = fakeFetch([ok()]);
+    await createAnthropicLlm({
+      apiKey: "sk-ant-config",
+      maxRetries: 0,
+      refusalFallback: false,
+      log: silentLog,
+      fetch: g.fn,
+    }).complete(req());
+    expect(g.seen[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(g.seen[0]?.headers.get("x-api-key")).toBe("sk-ant-config");
+    expect(g.seen[0]?.headers.has("authorization")).toBe(false);
+  });
+
+  it("U-LLM-14 the server-side refusal fallback is only offered on the Claude API", () => {
+    expect(isClaudeApi(undefined)).toBe(true);
+    expect(isClaudeApi("https://api.anthropic.com")).toBe(true);
+    expect(isClaudeApi("https://openrouter.ai/api")).toBe(false);
+    expect(isClaudeApi("https://bedrock-mantle.us-east-1.api.aws/anthropic")).toBe(false);
+
+    const direct = createLlmClient(testConfig({ ANTHROPIC_API_KEY: "sk-ant-x" }), silentLog);
+    expect(direct.serverRefusalFallback?.("claude-sonnet-5-5")).toBe(true);
+    expect(direct.serverRefusalFallback?.("claude-haiku-5-5")).toBe(false);
+    const gateway = createLlmClient(
+      testConfig({
+        ANTHROPIC_AUTH_TOKEN: "or-token",
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+      }),
+      silentLog,
+    );
+    expect(gateway.serverRefusalFallback?.("claude-sonnet-5-5")).toBe(false);
+  });
+
+  it("U-LLM-15 the client log names the gateway host, never the URL or the token", () => {
+    let lines = "";
+    const stream = new Writable({
+      write(chunk, _e, cb) {
+        lines += String(chunk);
+        cb();
+      },
+    });
+    const log = createLogger({ logLevel: "info" }, stream);
+    createLlmClient(
+      testConfig({
+        ANTHROPIC_AUTH_TOKEN: "TOKEN_CANARY",
+        ANTHROPIC_BASE_URL: "https://user:URL_CANARY@gateway.example.test/v1",
+      }),
+      log,
+    );
+    expect(lines).toContain('"host":"gateway.example.test"');
+    expect(lines).not.toContain("URL_CANARY");
+    expect(lines).not.toContain("TOKEN_CANARY");
   });
 });
 

@@ -170,8 +170,10 @@ export async function openSession(
   secrets.add(config.githubWebhookSecret);
   secrets.add(config.githubAppPrivateKey);
   secrets.add(config.anthropicApiKey);
+  secrets.add(config.anthropicAuthToken);
   secrets.add(config.smeeUrl);
   secrets.add(deps.env.ANTHROPIC_API_KEY);
+  secrets.add(deps.env.ANTHROPIC_AUTH_TOKEN);
   secrets.add(deps.env.SMEE_URL);
 
   let sandboxConfig: SandboxConfig;

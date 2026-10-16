@@ -9,15 +9,35 @@ import {
   ZERO_USAGE,
 } from "./types.js";
 
-export interface AnthropicLlmOptions {
-  apiKey: string;
+/**
+ * Exactly one of `apiKey` (sent as `x-api-key`) and `authToken` (sent as `Authorization: Bearer`).
+ * Neither falls back to the process environment: the validated config is the only source.
+ */
+export type AnthropicCredential =
+  | { apiKey: string; authToken?: undefined }
+  | { apiKey?: undefined; authToken: string };
+
+export interface AnthropicSettings {
   maxRetries: number;
+  /** Server-side refusal fallback; only the Claude API offers it (see `isClaudeApi`). */
   refusalFallback: boolean;
-  log: Logger;
-  /** Tests only. */
-  fetch?: typeof fetch;
-  /** Tests only. */
+  /** Messages API base URL; undefined means the Claude API. */
   baseURL?: string;
+}
+
+export type AnthropicLlmOptions = AnthropicCredential &
+  AnthropicSettings & {
+    log: Logger;
+    /** Tests only. */
+    fetch?: typeof fetch;
+  };
+
+/**
+ * Server-side refusal fallback is a Claude API feature: Bedrock, Google Cloud, Microsoft Foundry
+ * and the gateways do not offer it.
+ */
+export function isClaudeApi(baseURL: string | undefined): boolean {
+  return baseURL === undefined || new URL(baseURL).hostname === "api.anthropic.com";
 }
 
 /** D5: the server-side refusal fallback exists for Sonnet and Opus only. */
@@ -53,13 +73,16 @@ function classify(err: unknown): LlmFailure {
 
 export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
   const client = new Anthropic({
-    apiKey: o.apiKey,
+    apiKey: o.apiKey ?? null,
+    authToken: o.authToken ?? null,
+    baseURL: o.baseURL ?? null,
     maxRetries: o.maxRetries,
     ...(o.fetch ? { fetch: o.fetch } : {}),
-    ...(o.baseURL ? { baseURL: o.baseURL } : {}),
   });
+  const serverRefusalFallback = (model: string) => o.refusalFallback && FALLBACK_MODEL.test(model);
 
   return {
+    serverRefusalFallback,
     async complete(req: LlmRequest): Promise<LlmResult> {
       const started = Date.now();
       const finish = (
@@ -113,13 +136,12 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
 
       let res: ResponseLike;
       try {
-        res =
-          o.refusalFallback && FALLBACK_MODEL.test(req.model)
-            ? await client.beta.messages.create(
-                { ...body, betas: [FALLBACK_BETA], fallbacks: "default" },
-                reqOpts,
-              )
-            : await client.messages.create(body, reqOpts);
+        res = serverRefusalFallback(req.model)
+          ? await client.beta.messages.create(
+              { ...body, betas: [FALLBACK_BETA], fallbacks: "default" },
+              reqOpts,
+            )
+          : await client.messages.create(body, reqOpts);
       } catch (err) {
         const failure = classify(err); // rethrows anything that is not an API outcome
         o.log.warn(
