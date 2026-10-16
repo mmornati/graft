@@ -32,7 +32,7 @@ export function policyJsonSchema(): Record<string, unknown> {
   const { $schema, ...rest } = schema;
   return {
     $schema,
-    $id: "https://graft.dev/schema/graft.v1.schema.json",
+    $id: "https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json",
     title: "graft.yaml v1",
     description: `Generated from src/policy/schema.ts (pnpm graft policy schema --write). Rules a JSON Schema cannot express: ${POLICY_REFINEMENTS.join("; ")}.`,
     ...rest,

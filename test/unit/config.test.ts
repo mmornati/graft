@@ -103,6 +103,15 @@ describe("config", () => {
     );
   });
 
+  it("U-CFG-6b the .env.example webhook secret is refused in production only", () => {
+    const placeholder = { ...valid, GITHUB_WEBHOOK_SECRET: "change-me-dev-webhook-secret" };
+    expect(loadConfig(placeholder).githubWebhookSecret).toBe("change-me-dev-webhook-secret");
+    const msg = errorOf({ ...placeholder, NODE_ENV: "production" }).message;
+    expect(msg).toContain("GITHUB_WEBHOOK_SECRET");
+    expect(msg).not.toContain("change-me-dev-webhook-secret");
+    expect(loadConfig({ ...valid, NODE_ENV: "production" }).nodeEnv).toBe("production");
+  });
+
   it("U-CFG-7 agent logins and co-author emails: defaults, normalization, and rejection by name only", () => {
     const d = loadConfig(valid);
     expect(d.agentLogins).toEqual([]);

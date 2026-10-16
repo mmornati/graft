@@ -187,6 +187,9 @@ export interface Config {
   readonly metricsExcludedAuthors: readonly string[];
 }
 
+/** Placeholder secrets shipped in `.env.example`; refused in production. */
+const EXAMPLE_WEBHOOK_SECRETS = new Set(["change-me-dev-webhook-secret"]);
+
 function isPem(key: string): boolean {
   return key.includes("-----BEGIN") && key.includes("PRIVATE KEY-----");
 }
@@ -206,6 +209,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       const msg = issue.code === "invalid_type" ? "is required" : issue.message;
       problems.push(`${name}: ${msg}`);
     }
+  }
+
+  if (
+    parsed.success &&
+    parsed.data.NODE_ENV === "production" &&
+    EXAMPLE_WEBHOOK_SECRETS.has(parsed.data.GITHUB_WEBHOOK_SECRET)
+  ) {
+    problems.push("GITHUB_WEBHOOK_SECRET: is the .env.example placeholder; set the App's secret");
   }
 
   const inline = parsed.success
