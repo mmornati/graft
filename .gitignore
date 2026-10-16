@@ -17,3 +17,10 @@ e2e-runs/
 allow*.txt
 .DS_Store
 *.log
+
+# Documentation site build output (scripts/build-site.sh)
+site/
+
+# Impeccable review captures (regenerated)
+.impeccable/review/
+.impeccable/hook.cache.json

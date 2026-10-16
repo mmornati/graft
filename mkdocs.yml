@@ -1,0 +1,151 @@
+# Documentation site (MkDocs Material). Built by scripts/build-site.sh: the landing page (website/) at the root of
+# https://mmornati.github.io/graft/ and this documentation, from docs/, under /docs/. The Markdown in docs/ stays
+# readable on GitHub as it is; scripts/mkdocs_hooks.py rewrites the few links that point outside docs/ (README,
+# SECURITY, source files, folders) to the repository on GitHub at build time.
+
+site_name: Graft
+site_description: "Intent review and policy checks for pull requests written by coding agents. Phase 0: shadow mode, report only."
+site_author: Marco Mornati
+site_url: https://mmornati.github.io/graft/docs/
+
+repo_name: mmornati/graft
+repo_url: https://github.com/mmornati/graft
+edit_uri: edit/main/docs/
+
+copyright: >-
+  No license has been chosen yet; all rights reserved. Every organisation, person and pull request in the examples is
+  fictional. Not affiliated with GitHub or Anthropic.
+
+theme:
+  name: material
+  language: en
+  custom_dir: docs/overrides
+  font: false
+  logo: assets/brand/mark.svg
+  favicon: assets/brand/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+extra:
+  homepage: https://mmornati.github.io/graft/
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mmornati/graft
+
+extra_css:
+  - stylesheets/extra.css
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search:
+      separator: '[\s\-\.]+'
+
+# Not part of the site: the theme overrides and the e2e mutation helper script.
+exclude_docs: |
+  overrides/
+  /e2e/mutations.py
+
+# Built and searchable, reachable from the pages that link to them, but kept out of the navigation.
+not_in_nav: |
+  /phase-0/reviews/
+  /e2e/reviews/
+
+nav:
+  - Home: README.md
+  - Getting started:
+    - getting-started.md
+    - GitHub App: github-app.md
+    - Configuration: configuration.md
+    - Troubleshooting: troubleshooting.md
+  - Features:
+    - Provenance: features/provenance.md
+    - Intent cards: features/intent-cards.md
+    - Policy: features/policy.md
+    - graft.yaml reference: graft-yaml.md
+    - Evaluation set: features/evaluation.md
+    - Pilots and the gate: features/pilots-and-gate.md
+  - Operate:
+    - Live e2e scenarios: e2e.md
+    - E2E runbook: e2e/runbook.md
+    - E2E scenarios spec: e2e/live-scenarios-spec.md
+    - Pilot onboarding: pilots/onboarding.md
+    - Labeling guide: phase-0/labeling-guide.md
+  - Internals:
+    - Architecture: architecture.md
+    - Decisions: decisions.md
+  - Product:
+    - MVP spec: spec/mvp-spec.md
+    - Development plan: plan/development-plan.md
+    - Phase 0:
+      - phase-0/README.md
+      - "Step 1: Base setup": phase-0/step-1-base-setup.md
+      - "Step 2: Provenance": phase-0/step-2-provenance.md
+      - "Step 3: Intent service": phase-0/step-3-intent-service.md
+      - "Step 4: Evaluation set": phase-0/step-4-evaluation-set.md
+      - "Step 5: Policy engine": phase-0/step-5-policy-engine.md
+      - "Step 6: Pilots and gate": phase-0/step-6-pilots-and-gate.md
+      - Human to-do: phase-0/HUMAN-TODO.md

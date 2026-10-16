@@ -1,0 +1,127 @@
+/* The docs wear the landing page's herbarium world: mounting-board ground, iron-gall ink, one cambium green,
+   IM Fell for headings, Literata for reading, Courier Prime for code. Risk words keep a shape as well as a hue. */
+
+:root, [data-md-color-scheme="default"] {
+  --md-default-bg-color: #f6f7f2;
+  --md-default-fg-color: #16212a;
+  --md-default-fg-color--light: #3c4950;
+  --md-default-fg-color--lighter: #536066;
+  --md-default-fg-color--lightest: #cfd6c9;
+  --md-primary-fg-color: #e4e8df;
+  --md-primary-fg-color--light: #eef1ea;
+  --md-primary-fg-color--dark: #d6dcd0;
+  --md-primary-bg-color: #16212a;
+  --md-primary-bg-color--light: #3c4950;
+  --md-accent-fg-color: #2f8a22;
+  --md-accent-fg-color--transparent: rgb(47 138 34 / .1);
+  --md-typeset-a-color: #22681a;
+  --md-code-bg-color: #eceee6;
+  --md-code-fg-color: #16212a;
+  --md-code-hl-comment-color: #536066;
+  --md-code-hl-keyword-color: #22681a;
+  --md-code-hl-string-color: #8a5600;
+  --md-typeset-mark-color: rgb(47 138 34 / .18);
+  --md-footer-bg-color: #16212a;
+  --md-footer-bg-color--dark: #0e1613;
+  --md-footer-fg-color: #e8ede4;
+  --md-footer-fg-color--light: #b3bfb5;
+  --md-footer-fg-color--lighter: #95a296;
+  --md-text-font: "Literata";
+  --md-code-font: "Courier Prime";
+  --g-display: "IM Fell English", "Iowan Old Style", Georgia, serif;
+  --g-rule: #bcc5b8;
+  --g-board: #e4e8df;
+  --g-cambium: #2f8a22;
+  --g-tape: #e3d8b0;
+}
+[data-md-color-scheme="slate"] {
+  --md-hue: 150;
+  --md-default-bg-color: #15201b;
+  --md-default-fg-color: #e6ebe2;
+  --md-default-fg-color--light: #bac4b9;
+  --md-default-fg-color--lighter: #9aa69c;
+  --md-default-fg-color--lightest: #2e3d35;
+  --md-primary-fg-color: #0e1613;
+  --md-primary-fg-color--light: #15201b;
+  --md-primary-fg-color--dark: #08100c;
+  --md-primary-bg-color: #e6ebe2;
+  --md-primary-bg-color--light: #bac4b9;
+  --md-accent-fg-color: #93d963;
+  --md-accent-fg-color--transparent: rgb(147 217 99 / .12);
+  --md-typeset-a-color: #93d963;
+  --md-code-bg-color: #111a16;
+  --md-code-fg-color: #e6ebe2;
+  --md-code-hl-comment-color: #9aa69c;
+  --md-code-hl-keyword-color: #93d963;
+  --md-code-hl-string-color: #f0b84a;
+  --md-typeset-mark-color: rgb(147 217 99 / .2);
+  --md-footer-bg-color: #08100c;
+  --md-footer-bg-color--dark: #050a08;
+  --g-rule: #2e3d35;
+  --g-board: #0e1613;
+  --g-cambium: #7cc94a;
+  --g-tape: #4d4834;
+}
+
+body { font-optical-sizing: auto; }
+::selection { background: var(--md-accent-fg-color); color: var(--md-default-bg-color); }
+
+/* header and tabs: the mounting board, not a coloured bar */
+.md-header { box-shadow: none; border-bottom: 1px solid var(--g-rule); }
+.md-header__title { font-family: var(--g-display); font-size: 1.25rem; letter-spacing: 0; }
+.md-tabs { background: var(--md-primary-fg-color); border-bottom: 1px solid var(--g-rule); }
+.md-tabs__link { font-family: var(--md-code-font-family); font-weight: 700; font-size: .72rem; opacity: .78; }
+.md-tabs__link--active, .md-tabs__link:hover { opacity: 1; color: var(--md-typeset-a-color); }
+.md-banner { background: var(--g-tape); color: #16212a; font-family: var(--md-code-font-family); font-size: .72rem; }
+[data-md-color-scheme="slate"] .md-banner { color: #e6ebe2; }
+.md-banner a { color: inherit; text-decoration: underline; text-underline-offset: .2em; margin-left: .6em; }
+.md-banner code { background: transparent; padding: 0; color: inherit; }
+@media screen and (min-width: 60em) {
+  .md-search__form { background-color: color-mix(in srgb, var(--md-default-fg-color) 8%, transparent); }
+  .md-search__form:hover { background-color: color-mix(in srgb, var(--md-default-fg-color) 12%, transparent); }
+  .md-search__input::placeholder, .md-search__icon { color: var(--md-default-fg-color--light); }
+}
+
+/* type */
+.md-typeset { font-size: .84rem; line-height: 1.72; }
+/* IM Fell has only old-style figures ("Step 1" reads as "Step I"), so headings with step numbers use Literata at display size */
+.md-typeset h1, .md-typeset h2, .md-typeset h3 { font-family: "Literata", "Iowan Old Style", Georgia, serif; font-optical-sizing: auto; font-weight: 400; color: var(--md-default-fg-color); letter-spacing: 0; }
+.md-typeset h1 { font-size: 2.4em; line-height: 1.08; letter-spacing: -.01em; margin-bottom: .9em; }
+.md-typeset h2 { font-size: 1.75em; line-height: 1.1; margin-top: 2.1em; padding-top: .6em; border-top: 2px solid var(--md-default-fg-color); }
+.md-typeset h3 { font-size: 1.32em; font-style: italic; }
+.md-typeset h4 { font-family: var(--md-code-font-family); font-weight: 700; }
+.md-nav__title, .md-nav__item--section > .md-nav__link { font-family: var(--md-code-font-family); }
+.md-nav__link--active { font-weight: 700; }
+.md-typeset a { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .2em; }
+.md-typeset a.headerlink { text-decoration: none; }
+.md-typeset a:hover { text-decoration-thickness: 2px; }
+
+/* code: typed labels */
+.md-typeset code { border-radius: 3px; font-size: .9em; }
+.md-typeset pre > code { border-radius: 4px; border: 1px solid var(--md-default-fg-color--lightest); }
+
+/* tables: an accession ledger, ruled not boxed */
+.md-typeset table:not([class]) { border: 0; border-top: 2px solid var(--md-default-fg-color); border-radius: 0; font-size: .78rem; box-shadow: none; }
+.md-typeset table:not([class]) th { background: transparent; font-family: var(--md-code-font-family); font-weight: 700; border-bottom: 1px solid var(--md-default-fg-color); }
+.md-typeset table:not([class]) td { border-top: 1px solid var(--g-rule); }
+.md-typeset table:not([class]) tr:hover { background: var(--md-accent-fg-color--transparent); box-shadow: none; }
+
+/* admonitions: field-note slips */
+.md-typeset .admonition, .md-typeset details { border-radius: 2px; box-shadow: none; border-width: 1px; font-size: .8rem; }
+
+/* blockquotes (the managed-comment sample): a mounted sheet */
+.md-typeset blockquote { border-left: 0; padding: .8em 1.2em; color: var(--md-default-fg-color); background: var(--g-board); border: 1px solid var(--md-default-fg-color--lightest); }
+
+/* mermaid diagrams sit on the sheet */
+.md-typeset .mermaid { background: var(--g-board); padding: 1em; border: 1px solid var(--md-default-fg-color--lightest); }
+
+.md-footer-meta { background: var(--md-footer-bg-color--dark); }
+.md-copyright { font-size: .62rem; }
+[data-md-color-scheme="slate"] .md-logo img { filter: invert(1) hue-rotate(180deg) brightness(1.1); }
+.md-header__button.md-logo img { height: 1.6rem; width: auto; }
+/* risk words and other short codes in a table's first column never break mid-word */
+.md-typeset table:not([class]) td:first-child code { white-space: nowrap; }
+.md-typeset table:not([class]) td:first-child { min-width: 7em; }
+/* mermaid diagrams render at their natural size and scroll sideways instead of shrinking their text */
+.md-typeset .mermaid { overflow-x: auto; }
+.md-typeset .mermaid svg { max-width: none !important; width: auto !important; height: auto; }
