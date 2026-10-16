@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json
 #
 # Starter policy for a library or SDK with a public API.
 # Copy it to `graft.yaml` on the default branch through a normal reviewed pull request, replace
