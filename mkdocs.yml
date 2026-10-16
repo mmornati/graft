@@ -116,6 +116,7 @@ not_in_nav: |
 
 nav:
   - Home: README.md
+  - Video: video.md
   - Getting started:
     - getting-started.md
     - GitHub App: github-app.md

@@ -111,6 +111,7 @@ html { scrollbar-color: var(--rule) var(--board); }
 .btn--primary:hover { transform: translateY(-1px); box-shadow: 0 1px 0 rgb(0 0 0 / .2), 0 10px 18px -8px rgb(0 0 0 / .4); }
 .btn--ghost { color: var(--ink); border: 1.5px solid var(--ink); }
 .btn--ghost:hover { background: var(--ink); color: var(--board); }
+.btn--video svg { margin-right: 10px; flex: none; }
 .textlink { font-family: var(--f-body); font-weight: 600; font-size: 1rem; }
 .textlink::after { content: " \2192"; }
 

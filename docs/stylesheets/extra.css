@@ -125,3 +125,7 @@ body { font-optical-sizing: auto; }
 /* mermaid diagrams render at their natural size and scroll sideways instead of shrinking their text */
 .md-typeset .mermaid { overflow-x: auto; }
 .md-typeset .mermaid svg { max-width: none !important; width: auto !important; height: auto; }
+
+/* the explainer video (docs/video.md): a mounted 16:9 stage plus the player's 40px control bar */
+.video-embed { container-type: inline-size; margin: 1.2em 0 .6em; }
+.video-embed iframe { display: block; width: 100%; height: calc(56.25cqw + 40px); border: 0; }
