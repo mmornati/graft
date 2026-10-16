@@ -11,6 +11,12 @@
         ],
         "createdAt": "2026-10-16T06:47:46.289Z",
         "reason": "false positives after fixing the real ones (flow steps, stamps): full-bleed sections hold a .wrap with a 16-48px gutter and 72-136px vertical padding; ledger columns compute 24px 32px 12px padding (checked in the browser at 1440px); cramped-padding has no extractable value to ignore more narrowly"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "noto sans",
+        "createdAt": "2026-10-16T06:54:47.218Z",
+        "reason": "Claude: .gh mock of GitHub's PR comment uses GitHub's system font stack on purpose for fidelity"
       }
     ]
   }
