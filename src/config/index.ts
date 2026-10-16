@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { MODEL_ID } from "../llm/types.js";
 import { GLOB_REASONS } from "../policy/errors.js";
 import { validateGlob } from "../policy/globs.js";
 
@@ -46,8 +47,14 @@ const emailList = z
   });
 
 const url = z.string().refine((v) => URL.canParse(v), "must be a URL");
+const httpUrl = z
+  .string()
+  .refine(
+    (v) => URL.canParse(v) && /^https?:$/.test(new URL(v).protocol),
+    "must be an http(s) URL",
+  );
 
-const modelId = z.string().regex(/^claude-[a-z0-9-]{1,60}$/, "must match ^claude-[a-z0-9-]{1,60}$");
+const modelId = z.string().regex(MODEL_ID, "must be a Claude model ID");
 
 const boolString = z
   .enum(["true", "false"], { error: "must be true or false" })
@@ -133,11 +140,14 @@ const EnvSchema = z.object({
     z.string().regex(/^[A-Za-z0-9-]+$/, "must be the App slug (letters, digits, '-')"),
   ),
   ANTHROPIC_API_KEY: opt(z.string().min(1)),
+  ANTHROPIC_AUTH_TOKEN: opt(z.string().min(1)),
+  ANTHROPIC_BASE_URL: opt(httpUrl),
   GRAFT_LLM_MODEL_FAST: withDefault(modelId, "claude-haiku-5-5"),
   GRAFT_LLM_MODEL_STRONG: withDefault(modelId, "claude-sonnet-5-5"),
   GRAFT_LLM_TIMEOUT_MS: withDefault(intString(5_000, 600_000), "120000"),
   GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
   GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
+  GRAFT_LLM_REFUSAL_FALLBACK_MODEL: opt(modelId),
   GRAFT_LLM_DAILY_TOKEN_BUDGET: withDefault(intString(0, Number.MAX_SAFE_INTEGER), "2000000"),
   GRAFT_INTENT_SENSITIVE_PATHS: withDefault(globList, ""),
   GRAFT_FEEDBACK_POLL_CRON: withDefault(cronOrOff, "*/15 * * * *"),
@@ -166,13 +176,23 @@ export interface Config {
   readonly agentCoauthorEmails: readonly string[];
   /** The App's slug; enables the `<slug>[bot]` fallback for recognising Graft's comment. */
   readonly githubAppSlug: string | undefined;
-  /** Anthropic API key; without it the intent service writes "unavailable" cards (step 3). */
+  /**
+   * Anthropic API key (`x-api-key`). Without it or `anthropicAuthToken` the intent service writes
+   * "unavailable" cards (step 3).
+   */
   readonly anthropicApiKey: string | undefined;
+  /** Bearer token instead of the API key, for gateways that expect one (OpenRouter, Bedrock). */
+  readonly anthropicAuthToken: string | undefined;
+  /** Messages API base URL; undefined means the Claude API. */
+  readonly anthropicBaseUrl: string | undefined;
   readonly llmModelFast: string;
   readonly llmModelStrong: string;
   readonly llmTimeoutMs: number;
   readonly llmMaxRetries: number;
+  /** Server-side refusal fallback (Claude API, Sonnet and Opus only). */
   readonly llmRefusalFallback: boolean;
+  /** Model retried once, client-side, when a call is refused and no server-side fallback ran. */
+  readonly llmRefusalFallbackModel: string | undefined;
   /** Per-repository daily token budget; 0 = unlimited. */
   readonly llmDailyTokenBudget: number;
   /** Extra globs that set the risk floor to `sensitive`. */
@@ -209,6 +229,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       const msg = issue.code === "invalid_type" ? "is required" : issue.message;
       problems.push(`${name}: ${msg}`);
     }
+  }
+
+  if (
+    parsed.success &&
+    parsed.data.ANTHROPIC_API_KEY !== undefined &&
+    parsed.data.ANTHROPIC_AUTH_TOKEN !== undefined
+  ) {
+    problems.push("ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN: set at most one, not both");
   }
 
   if (
@@ -274,11 +302,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
     githubAppSlug: d.GITHUB_APP_SLUG,
     anthropicApiKey: d.ANTHROPIC_API_KEY,
+    anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+    anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
     llmModelFast: d.GRAFT_LLM_MODEL_FAST,
     llmModelStrong: d.GRAFT_LLM_MODEL_STRONG,
     llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,
     llmMaxRetries: d.GRAFT_LLM_MAX_RETRIES,
     llmRefusalFallback: d.GRAFT_LLM_REFUSAL_FALLBACK,
+    llmRefusalFallbackModel: d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
     llmDailyTokenBudget: d.GRAFT_LLM_DAILY_TOKEN_BUDGET,
     intentSensitivePaths: Object.freeze([...d.GRAFT_INTENT_SENSITIVE_PATHS]),
     feedbackPollCron: d.GRAFT_FEEDBACK_POLL_CRON,

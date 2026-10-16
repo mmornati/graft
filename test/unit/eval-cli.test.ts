@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadEvalDotEnv, main } from "../../src/bin/eval.js";
 import { generateKey } from "../../src/eval/crypto.js";
 import { evalReportSchema } from "../../src/eval/report-schema.js";
+import { createFakeLlm } from "../../src/llm/fake.js";
 import { cleanupTmpDirs, linesIn, REPO_ROOT, sink, tmpDir } from "../helpers/eval-fixtures.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
 import {
@@ -58,6 +59,28 @@ describe("eval cli", () => {
     );
     expect(report.llm).toBe("fake");
     expect(await fs.readFile(path.join(out, "report.md"), "utf8")).toContain("# Eval report");
+  });
+
+  it("U-CLI-1b run --live through a gateway: bearer token and base URL reach the client, the server-side fallback does not", async () => {
+    const out = await tmpDir();
+    const llmFactory = vi.fn(() => createFakeLlm(() => ({ failure: "unavailable" })));
+    const argv = ["run", "--set", "eval/synthetic", "--live", "--yes", "--out", out];
+    const r = await cli([...argv, "--cases", "syn-001-docs-typo"], {
+      env: { ANTHROPIC_AUTH_TOKEN: "or-token", ANTHROPIC_BASE_URL: "https://openrouter.ai/api" },
+      llmFactory,
+    });
+    expect(r.err).not.toContain("needs ANTHROPIC");
+    expect(llmFactory).toHaveBeenCalledWith({
+      authToken: "or-token",
+      baseURL: "https://openrouter.ai/api",
+      maxRetries: 2,
+      refusalFallback: false,
+    });
+    const both = await cli(["run", "--set", "eval/synthetic", "--live"], {
+      env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "t" },
+    });
+    expect(both.code).toBe(2);
+    expect(both.err).toContain("set at most one");
   });
 
   it("U-CLI-2 run --live on a non-TTY without --yes prints the estimate and exits 3 without a call", async () => {

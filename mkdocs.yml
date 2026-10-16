@@ -141,6 +141,7 @@ nav:
   - Product:
     - MVP spec: spec/mvp-spec.md
     - Development plan: plan/development-plan.md
+    - LLM provider expansion: plan/llm-provider-expansion.md
     - Phase 0:
       - phase-0/README.md
       - "Step 1: Base setup": phase-0/step-1-base-setup.md

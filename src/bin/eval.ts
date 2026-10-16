@@ -52,12 +52,19 @@ import {
   writePlain,
 } from "../eval/store.js";
 import { renderCase } from "../eval/terminal.js";
-import { createAnthropicLlm } from "../llm/anthropic.js";
+import {
+  type AnthropicCredential,
+  type AnthropicSettings,
+  createAnthropicLlm,
+  isClaudeApi,
+} from "../llm/anthropic.js";
 import type { LlmClient, LlmRequest, LlmResult } from "../llm/types.js";
 import { prepareCardInputs } from "../modules/intent/index.js";
 import { loadDotEnv } from "./env.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+type AnthropicLlmFactoryOptions = AnthropicCredential & AnthropicSettings;
 
 export interface CliDeps {
   env: Record<string, string | undefined>;
@@ -68,7 +75,7 @@ export interface CliDeps {
   fetch: typeof fetch | undefined;
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
-  llmFactory: (o: { apiKey: string; maxRetries: number; refusalFallback: boolean }) => LlmClient;
+  llmFactory: (o: AnthropicLlmFactoryOptions) => LlmClient;
   git: () => { commit: string | null; dirty: boolean | null };
   cwd: string;
 }
@@ -597,8 +604,8 @@ async function runCommand(
   openIt: () => Promise<CaseSet>,
 ): Promise<number> {
   const live = Boolean(a.live);
-  if (live && !env.anthropicApiKey) {
-    throw new EvalConfigError("--live needs ANTHROPIC_API_KEY");
+  if (live && !env.anthropicApiKey && !env.anthropicAuthToken) {
+    throw new EvalConfigError("--live needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
   }
   const set = await openIt();
   const maxCostUsd = numFlag("max-cost-usd", a["max-cost-usd"], 10, 0, 100000);
@@ -610,9 +617,12 @@ async function runCommand(
   const lazy: LlmClient = {
     complete(req: LlmRequest): Promise<LlmResult> {
       client ??= deps.llmFactory({
-        apiKey: env.anthropicApiKey as string,
+        ...(env.anthropicApiKey
+          ? { apiKey: env.anthropicApiKey }
+          : { authToken: env.anthropicAuthToken as string }),
+        ...(env.anthropicBaseUrl ? { baseURL: env.anthropicBaseUrl } : {}),
         maxRetries: env.llmMaxRetries,
-        refusalFallback: env.llmRefusalFallback,
+        refusalFallback: env.llmRefusalFallback && isClaudeApi(env.anthropicBaseUrl),
       });
       return client.complete(req);
     },
@@ -642,7 +652,11 @@ async function runCommand(
     set,
     mode: live ? "live" : "fake",
     ...(live ? { llm: lazy } : {}),
-    models: { fast: env.modelFast, strong: env.modelStrong },
+    models: {
+      fast: env.modelFast,
+      strong: env.modelStrong,
+      ...(env.llmRefusalFallbackModel ? { refusalFallback: env.llmRefusalFallbackModel } : {}),
+    },
     timeoutMs: env.llmTimeoutMs,
     concurrency,
     maxCostUsd,
@@ -765,7 +779,7 @@ async function runCommand(
 }
 
 /**
- * `.env` supplies ANTHROPIC_API_KEY and the GitHub App settings, but never the case-set key
+ * `.env` supplies ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and the GitHub App settings, but never the case-set key
  * (E6: the key lives in the password manager and the shell). A `GRAFT_EVAL_KEY` that only
  * `.env` provided is dropped with a warning on stderr.
  */

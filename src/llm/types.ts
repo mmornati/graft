@@ -5,6 +5,12 @@
  *
  * Never log `system`, `user` or `value`: they contain diffs, PR text and model output.
  */
+/**
+ * A Claude model ID, optionally with the vendor prefix and version suffix a gateway or cloud uses:
+ * `claude-sonnet-5-5`, `anthropic/claude-sonnet-5.5` (OpenRouter), `us.anthropic.claude-...:0`.
+ */
+export const MODEL_ID = /^(?:[a-z0-9-]{1,30}[./]){0,3}claude-[a-z0-9.-]{1,60}(?::[a-z0-9]{1,10})?$/;
+
 export type LlmPurpose = "writer" | "writer_escalated" | "verifier";
 export type LlmEffort = "low" | "medium" | "high";
 
@@ -52,6 +58,11 @@ export type LlmResult =
 
 export interface LlmClient {
   complete(req: LlmRequest): Promise<LlmResult>;
+  /**
+   * True when this client already retries a refused call on another model server-side, so the
+   * caller must not add its own refusal fallback. Absent means false.
+   */
+  serverRefusalFallback?(model: string): boolean;
 }
 
 export const ZERO_USAGE: LlmUsage = Object.freeze({

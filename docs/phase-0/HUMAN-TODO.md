@@ -22,7 +22,7 @@ Every Phase 0 step appends to this checklist. Each item says who does it, what i
 
 ## Step 3: Intent service
 
-- [ ] **Create an Anthropic API key.** Use a dedicated workspace for Graft with a monthly spend limit. Who: repo owner. Produces: `ANTHROPIC_API_KEY`. Goes into: the deployment secret (never committed); `.env` for local runs.
+- [ ] **Create an Anthropic API key.** Use a dedicated workspace for Graft with a monthly spend limit. Who: repo owner. Produces: `ANTHROPIC_API_KEY`. Goes into: the deployment secret (never committed); `.env` for local runs. If the owner has a Max or Team plan, link that Console org to claim the plan's monthly API credits ([API credits for subscribers](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)); read the credit terms on serving third parties first.
 - [ ] **Confirm model access.** Check that the workspace can call `claude-haiku-5-5` and `claude-sonnet-5-5` (one manual card on a sandbox PR). Who: repo owner. <!-- e2e:s3-model-access -->
 - [ ] **Data retention decision.** Diffs, PR descriptions and issue text are sent to the Anthropic API and are never stored by Graft. Confirm the org's API data-retention terms with Anthropic: standard retention, or a zero-data-retention agreement. Decide whether pilots require ZDR, and write the answer into `docs/plan/development-plan.md` ("How long diffs sent to the model are kept") and into the pilot agreement. Who: product owner.
 - [ ] **Pilot consent.** Each pilot team agrees in writing that its code diffs are sent to Anthropic for card generation. Who: product owner.
