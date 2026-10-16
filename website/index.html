@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graft · intent review for agent-written pull requests</title>
+<meta name="description" content="Graft is a GitHub App that puts four answers on every pull request written by a coding agent: who wrote it, what it claims, whether the diff matches, and what your policy says. Phase 0: shadow mode, report only.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#e4e8df" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1613" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="Graft · intent review for agent-written pull requests">
+<meta property="og:description" content="Who wrote it, what it claims, whether the diff matches, what your policy says. Report-only in Phase 0.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=IM+Fell+English:ital@0;1&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=swap">
+<link rel="stylesheet" href="css/site.css">
+<script>try{var t=localStorage.getItem("graft-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="top__inner">
+    <a class="wordmark" href="./" aria-label="Graft, home">
+      <img src="assets/mark.svg" alt="" width="30" height="30">
+      <span>Graft</span>
+    </a>
+    <nav class="top__nav" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#comment">The comment</a>
+      <a href="#floor">Risk floor</a>
+      <a href="#policy">Policy</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#quickstart">Quickstart</a>
+    </nav>
+    <div class="top__end">
+      <a class="top__link" href="docs/">Docs</a>
+      <a class="top__link" href="https://github.com/mmornati/graft">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch colour theme" title="Switch colour theme">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9A7 7 0 0 1 12 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- Plate I -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero__copy">
+    <h1 id="hero-title">Know what was grafted onto&nbsp;<span class="mono-name">main</span>.</h1>
+    <p class="lead">Coding agents open pull requests faster than people can review them, and a description written by the agent being reviewed is not evidence of anything. Graft is a GitHub App that mounts every pull request like a specimen: who wrote it, what it claims, whether the diff agrees, and what your policy would say.</p>
+    <div class="actions">
+      <a class="btn btn--primary" href="docs/">Read the docs</a>
+      <a class="btn btn--ghost" href="https://github.com/mmornati/graft">View on GitHub</a>
+    </div>
+    <p class="status"><span class="status__dot" aria-hidden="true"></span>Phase 0, shadow mode: one managed comment and three check runs per pull request, and every check concludes <code>neutral</code>. Graft reports; it never enforces.</p>
+  </div>
+
+  <figure class="plate plate--hero" aria-labelledby="plate1-cap">
+    <div class="sheet">
+      <span class="crop crop--tl" aria-hidden="true"></span><span class="crop crop--tr" aria-hidden="true"></span>
+      <span class="crop crop--bl" aria-hidden="true"></span><span class="crop crop--br" aria-hidden="true"></span>
+      <svg class="specimen" viewBox="0 0 600 560" role="img" aria-labelledby="spec-title spec-desc">
+        <title id="spec-title">A pull request drawn as a graft</title>
+        <desc id="spec-desc">The rootstock stem is the main branch with three commits. A scion, the branch feat/login-rate-limit with two commits, is set into it at an angle and bound with tape at the graft union.</desc>
+        <g class="ink-thin"><path d="M190 556c-8-16-28-22-50-22M192 556c-2-12 6-22 3-36M186 556c-18-6-38-2-54 8M194 556c10-8 26-10 40-6"/></g>
+        <path class="stock" d="M190 556C188 480 194 410 190 340 189 326 190 314 192 300"/>
+        <g class="bud"><circle cx="190" cy="488" r="8"/><circle cx="191" cy="424" r="8"/><circle cx="190" cy="362" r="8"/></g>
+        <g class="tag-text">
+          <text x="168" y="493" text-anchor="end">a41c0d2</text>
+          <text x="169" y="429" text-anchor="end">e07b9f1</text>
+          <text x="168" y="367" text-anchor="end">9d8c7b6 · base</text>
+        </g>
+        <text class="sheet-label" x="168" y="546" text-anchor="end">rootstock · main</text>
+        <path class="scion" d="M196 296C230 240 280 180 330 132 370 94 410 64 452 36"/>
+        <path class="sap" d="M196 296C230 240 280 180 330 132 370 94 410 64 452 36"/>
+        <g class="leaf"><path d="M250 226Q262 183 222 150Q213 201 250 226z"/><path d="M300 166Q310 116 262 82Q256 140 300 166z"/><path d="M352 116Q374 73 340 30Q319 81 352 116z"/><path d="M452 36Q494 52 530 16Q481 2 452 36z"/><path d="M330 140Q370 160 410 128Q362 109 330 140z"/></g>
+        <g class="ink-thin leaf-vein"><path d="M250 226L226 161 M300 166L268 95 M352 116L342 43 M452 36L518 19 M330 140L398 130"/></g>
+        <g class="bud bud--scion"><circle cx="271" cy="194" r="8"/><circle cx="390" cy="80" r="8"/></g>
+        <g class="tag-text">
+          <text x="288" y="214">c51e7a0</text>
+          <text x="406" y="98">4c9e1f2 · head</text>
+        </g>
+        <text class="sheet-label" x="372" y="176">scion · feat/</text>
+        <text class="sheet-label" x="372" y="194">login-rate-limit</text>
+        <path class="cambium" d="M182 314C188 300 194 290 206 278"/>
+        <g class="tape" transform="rotate(-14 194 300)">
+          <rect x="166" y="278" width="56" height="46" rx="3"/>
+          <path d="M168 290h52M168 301h52M168 312h52"/>
+        </g>
+        <path class="leader" d="M228 302h64"/>
+        <text class="sheet-label" x="298" y="307">graft union</text>
+        <rect class="strip" x="172" y="446" width="40" height="13" transform="rotate(-6 192 452)"/>
+        <rect class="strip" x="314" y="140" width="38" height="13" transform="rotate(38 333 146)"/>
+      </svg>
+
+      <div class="slip" aria-label="Determination slip">
+        <p class="slip__head">Det. <em>verifier</em></p>
+        <p><code>claude-sonnet-5-5</code> supported <strong>3 of 3</strong> claims</p>
+        <p class="slip__fine">saw the diff, the file list and the card only</p>
+      </div>
+
+      <div class="label" aria-label="Accession label">
+        <p class="label__head">Graft herbarium <span>· acme, fictional</span></p>
+        <dl>
+          <div><dt>Authored by</dt><dd>Agent (Graft trailers)</dd></div>
+          <div><dt>Agent</dt><dd>claude-code</dd></div>
+          <div><dt>Model</dt><dd>claude-sonnet-5-5</dd></div>
+          <div><dt>Task</dt><dd>#128</dd></div>
+          <div><dt>Opened by</dt><dd>acme-agent[bot]</dd></div>
+        </dl>
+        <p class="label__goal"><em>Goal:</em> Limit failed login attempts to 5 per account per 15 minutes and lock the account for 15 minutes after that.</p>
+      </div>
+
+      <div class="stamp stamp--sensitive" aria-label="Risk class: sensitive"><span>sensitive</span><small>rules floor</small></div>
+    </div>
+    <figcaption id="plate1-cap"><span class="plate-no">Plate I.</span> A fictional pull request in a fictional <code>acme</code> organisation, mounted with its provenance label and the verifier's slip.</figcaption>
+  </figure>
+</section>
+
+<!-- the problem -->
+<section class="problem" aria-labelledby="problem-title">
+  <div class="wrap">
+    <h2 id="problem-title" class="problem__line">The pull request description comes from the agent being judged. <span>Graft treats it as data, not evidence.</span></h2>
+    <div class="problem__cols">
+      <p>Dozens of agent pull requests a day, each read line by line, each introduced by prose its own author wrote. CODEOWNERS can say who reviews a path. It cannot say that the change touching <code>src/auth/</code> was written by an agent, under which task, and that it does more than its description admits.</p>
+      <p>Graft sits on your existing GitHub repositories, with nothing to migrate. It reads the commits and the diff through the GitHub API, writes down what it finds, and leaves the decision with your reviewers.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Plate II: how it works -->
+<section id="how" class="band" aria-labelledby="how-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <h2 id="how-title">Four answers, each signed by whoever produced it.</h2>
+      <p class="sec-lead">Like a specimen's chain of custody, every answer on the pull request names its source, and a later hand can only add caution, never remove it.</p>
+    </header>
+
+    <ol class="custody">
+      <li class="custody__row">
+        <p class="custody__q">Who wrote it?</p>
+        <div class="custody__body">
+          <p>An agent (which one, which model, which task, which session) or a human. Read from <code>Graft-Agent</code>, <code>Graft-Model</code>, <code>Graft-Task</code> and <code>Graft-Session</code> git trailers or the PR description, bot accounts, configured logins and agent co-authors.</p>
+          <p class="custody__by">Signed by <strong>the commits</strong> · check run <code>graft/provenance</code></p>
+        </div>
+      </li>
+      <li class="custody__row">
+        <p class="custody__q">What does it claim?</p>
+        <div class="custody__body">
+          <p>An intent card: the goal in one sentence, the observable behavior changes, and the edits the goal does not explain. A writer model drafts it from the title, description, linked issue and diff; the untrusted PR text is fenced as data.</p>
+          <p class="custody__by">Signed by <strong>the writer model</strong> · check run <code>graft/intent</code></p>
+        </div>
+      </li>
+      <li class="custody__row">
+        <p class="custody__q">Does the diff match?</p>
+        <div class="custody__body">
+          <p>A second model call, the verifier, sees only the diff, the file list and the card, never the title, description or issue, and checks every claim. Fixed rules set a risk floor that no model can lower.</p>
+          <p class="custody__by">Signed by <strong>the verifier and the rules</strong> · in <code>graft/intent</code></p>
+        </div>
+      </li>
+      <li class="custody__row">
+        <p class="custody__q">What does the policy say?</p>
+        <div class="custody__body">
+          <p>Your <code>graft.yaml</code>, read from the base branch only, says whether the change would be auto-approved, need humans or a team, or be blocked. In Phase 0 it reports and decides nothing.</p>
+          <p class="custody__by">Signed by <strong>your policy</strong> · check run <code>graft/policy</code></p>
+        </div>
+      </li>
+    </ol>
+
+    <figure class="flow" aria-labelledby="flow-cap">
+      <ol class="flow__steps">
+        <li><strong>GitHub</strong><span>signed webhook</span></li>
+        <li><strong>Server</strong><span>verifies, deduplicates, enqueues in one transaction</span></li>
+        <li><strong>Postgres 17 + pg-boss</strong><span>delivery row and job</span></li>
+        <li><strong>Worker</strong><span>re-reads the PR, commits, diff and <code>graft.yaml</code> from the API; calls the writer and the verifier</span></li>
+        <li><strong>GitHub</strong><span>three neutral check runs and one managed comment</span></li>
+      </ol>
+      <figcaption id="flow-cap"><span class="plate-no">Plate II.</span> The worker never trusts the webhook payload: it re-reads everything from the GitHub API and publishes under a per-change lock. <a href="docs/architecture/">Architecture</a></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Plate III: the comment -->
+<section id="comment" class="comment-sec" aria-labelledby="comment-title">
+  <div class="wrap wrap--split">
+    <header class="sec-head sec-head--side">
+      <h2 id="comment-title">What a reviewer sees.</h2>
+      <p class="sec-lead">An agent adds a login rate limiter; the shipped example policy applies; one reviewer has approved. This is the managed comment as Graft's renderers produce it, for a fictional pull request in a fictional <code>acme</code> organisation.</p>
+      <p class="sec-lead">Reviewers rate the card with a reaction or with the buttons on the <code>graft/intent</code> check. Those votes feed the Phase 0 accuracy gate.</p>
+      <div class="checks" role="group" aria-label="Check runs on the pull request">
+        <p class="checks__title">Checks</p>
+        <ul>
+          <li><span class="neutral-mark" aria-hidden="true"></span><code>graft/provenance</code><span class="checks__state">Neutral</span></li>
+          <li><span class="neutral-mark" aria-hidden="true"></span><code>graft/intent</code><span class="checks__state">Neutral</span>
+            <span class="checks__btns"><span class="fakebtn">Card is accurate</span><span class="fakebtn">Card is wrong</span></span></li>
+          <li><span class="neutral-mark" aria-hidden="true"></span><code>graft/policy</code><span class="checks__state">Neutral</span></li>
+        </ul>
+      </div>
+    </header>
+
+    <article class="gh" aria-label="Rendition of the Graft managed comment">
+      <div class="gh__bar"><img src="assets/mark.svg" alt="" width="20" height="20"><strong>Graft</strong><span>managed comment · fictional example</span></div>
+      <div class="gh__body">
+        <p class="gh__title">Graft</p>
+
+        <h3>Intent</h3>
+        <p><strong>Goal:</strong> Limit failed login attempts to 5 per account per 15 minutes and lock the account for 15 minutes after that.</p>
+        <p><strong>Risk:</strong> <code>sensitive</code> · rules <code>sensitive</code> · writer <code>logic</code> · verifier <code>logic</code></p>
+        <p><strong>Behavior changes</strong></p>
+        <ul>
+          <li>The sixth failed login for an account within 15 minutes returns 429 with a Retry-After header.</li>
+          <li>A successful login resets the failure counter for that account.</li>
+        </ul>
+        <p><strong>Out-of-scope edits:</strong> none</p>
+        <details>
+          <summary>How this card was made</summary>
+          <ul>
+            <li>Rules set the floor to <code>sensitive</code>: authentication, security or secrets (<code>src/auth/rate-limit.ts</code>, <code>src/auth/login.ts</code>)</li>
+            <li>Writer <code>claude-sonnet-5-5</code>; verifier <code>claude-sonnet-5-5</code> supported 3 of 3 claims</li>
+            <li>Inputs: PR title and description, issue #128, 3 of 3 files in full</li>
+            <li>Model usage: 7,421 input tokens, 913 output tokens, 2 calls</li>
+          </ul>
+        </details>
+        <p class="gh__meta">Card <code>0b6f3a52</code> · head <code>4c9e1f2</code> · Rate this card with 👍 or 👎 on this comment, or with the buttons on the <code>graft/intent</code> check.</p>
+
+        <h3>Provenance</h3>
+        <table>
+          <tbody>
+            <tr><th scope="row">Authored by</th><td>Agent (Graft trailers)</td></tr>
+            <tr><th scope="row">Agent</th><td><code>claude-code</code></td></tr>
+            <tr><th scope="row">Model</th><td><code>claude-sonnet-5-5</code></td></tr>
+            <tr><th scope="row">Task</th><td><code>#128</code></td></tr>
+            <tr><th scope="row">Session</th><td><span class="gh__link">agents.example.com</span></td></tr>
+            <tr><th scope="row">Opened by</th><td><code>acme-agent[bot]</code></td></tr>
+          </tbody>
+        </table>
+        <p class="gh__meta">Head <code>4c9e1f2</code> · 2 commits, 2 with Graft trailers.</p>
+
+        <h3>Policy</h3>
+        <p><strong>Would require 2 humans (1 from <code>@acme/security</code>)</strong> · report only</p>
+        <ul>
+          <li>Rule 3 infra-and-auth: paths match <code>src/auth/login.ts</code>, <code>src/auth/rate-limit.ts</code>, <code>test/auth/rate-limit.test.ts</code></li>
+          <li>Rule 4 agent-sensitive: risk <code>sensitive</code> (card), author agent <code>claude-code</code></li>
+        </ul>
+        <p><strong>Approvals so far:</strong> 1 on this head (<code>dana</code>). Team membership is not checked in Phase 0.</p>
+        <p class="gh__meta">Policy <code>graft.yaml</code> on <code>main</code> at <code>9d8c7b6</code> · head <code>4c9e1f2</code> · Graft only reports in Phase 0; it approves and blocks nothing.</p>
+        <p class="gh__sub">Maintained by Graft; edits to this comment are overwritten.</p>
+      </div>
+      <p class="gh__cap"><span class="plate-no">Plate III.</span> The managed comment, from the sample in the README. Hidden section markers are left out.</p>
+    </article>
+  </div>
+</section>
+
+<!-- Plate IV: the risk floor -->
+<section id="floor" class="cabinet" aria-labelledby="floor-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <h2 id="floor-title">The risk floor. Rules set it; a model can only raise it.</h2>
+      <p class="sec-lead">Every pull request gets a class: <code>trivial</code>, <code>logic</code> or <code>sensitive</code>. Fixed rules over paths, size, deleted tests, CI, dependency, infrastructure, auth and migration files set the floor. The final class is the highest of the floor and every model opinion. Try it.</p>
+    </header>
+
+    <div class="floor" data-floor>
+      <fieldset class="floor__files">
+        <legend>Files in the pull request <span>(fictional)</span></legend>
+        <label><input type="checkbox" value="trivial" data-why="nothing in the rules matched" checked> <code>docs/login.md</code> <small>+12 lines</small></label>
+        <label><input type="checkbox" value="trivial" data-why="nothing in the rules matched"> <code>src/http/retry-after.ts</code> <small>+40 lines</small></label>
+        <label><input type="checkbox" value="logic" data-why="a test lost 10 or more lines"> <code>test/http/retry.test.ts</code> <small>−12 lines</small></label>
+        <label><input type="checkbox" value="logic" data-why="an added binary"> <code>assets/lock.png</code> <small>added binary</small></label>
+        <label><input type="checkbox" value="sensitive" data-why="authentication, security or secrets"> <code>src/auth/rate-limit.ts</code> <small>+88 lines</small></label>
+        <label><input type="checkbox" value="sensitive" data-why="CI and repository config"> <code>.github/workflows/ci.yml</code> <small>+3 lines</small></label>
+        <label><input type="checkbox" value="sensitive" data-why="a dependency lockfile"> <code>pnpm-lock.yaml</code> <small>+210 lines</small></label>
+        <label><input type="checkbox" value="sensitive" data-why="a deleted test"> <code>test/auth/login.test.ts</code> <small>deleted</small></label>
+      </fieldset>
+
+      <div class="floor__models">
+        <fieldset>
+          <legend>What the models say</legend>
+          <label class="sel">Writer
+            <select data-model="writer"><option>trivial</option><option>logic</option><option>sensitive</option></select>
+          </label>
+          <label class="sel">Verifier
+            <select data-model="verifier"><option>trivial</option><option>logic</option><option>sensitive</option></select>
+          </label>
+          <label class="check"><input type="checkbox" data-disagree> The verifier finds an unsupported claim <small>(at least <code>logic</code>)</small></label>
+        </fieldset>
+
+        <div class="gauge" aria-hidden="true">
+          <div class="gauge__track">
+            <span data-step="trivial">trivial</span><span data-step="logic">logic</span><span data-step="sensitive">sensitive</span>
+          </div>
+          <div class="gauge__floor" data-floor-mark></div>
+          <div class="gauge__needle" data-needle></div>
+        </div>
+
+        <output class="verdict" data-verdict aria-live="polite">
+          <span class="stamp stamp--trivial" data-stamp><span>trivial</span><small>final</small></span>
+          <span class="verdict__text" data-verdict-text>Floor <code>trivial</code>: nothing in the rules matched.</span>
+        </output>
+      </div>
+    </div>
+    <p class="floor__note"><span class="plate-no">Plate IV.</span> A simplified subset of the floor rules in <a href="docs/features/intent-cards/">Intent cards</a>, for illustration. Without a checked card (no API key, model down, budget used up) the risk is at least <code>logic</code>.</p>
+  </div>
+</section>
+
+<!-- Plate V: graft.yaml -->
+<section id="policy" class="band" aria-labelledby="policy-title">
+  <div class="wrap wrap--split wrap--policy">
+    <header class="sec-head sec-head--side">
+      <h2 id="policy-title">Policy you can read in one sitting.</h2>
+      <p class="sec-lead"><code>graft.yaml</code> lives in the repository and is read from the base branch only, so a pull request cannot rewrite the rules it is judged by. Block wins, then require, then approve; with no match, the default applies.</p>
+      <ul class="facts">
+        <li>A <code>graft/policy</code> check and a policy section in the managed comment.</li>
+        <li><code>pnpm graft policy check</code> on the command line and as a CI lint.</li>
+        <li>A JSON Schema for editor completion.</li>
+        <li>Report only in Phase 0: the check always concludes <code>neutral</code>.</li>
+      </ul>
+      <a class="textlink" href="docs/graft-yaml/">The full graft.yaml reference</a>
+    </header>
+
+    <figure class="code-plate" aria-labelledby="yaml-cap">
+      <div class="code-plate__tab"><span>graft.yaml</span><span>docs/examples, abridged</span></div>
+<pre><code><span class="c"># Extra paths that set the intent risk floor to `sensitive`.</span>
+<span class="k">version</span>: 1
+<span class="k">sensitive_paths</span>:
+  - services/billing/**
+  - <span class="s">"**/payments/**"</span>
+
+<span class="c"># Used when no rule matches. Must be a `require`.</span>
+<span class="k">default</span>:
+  <span class="k">require</span>: { humans: 1 }
+
+<span class="k">rules</span>:
+  - <span class="k">name</span>: docs-only
+    <span class="k">match</span>: { risk: trivial, only_paths: [<span class="s">"docs/**"</span>, <span class="s">"*.md"</span>] }
+    <span class="k">approve</span>: auto
+
+  - <span class="k">name</span>: infra-and-auth
+    <span class="k">match</span>: { paths: [<span class="s">"infra/**"</span>, <span class="s">"**/auth/**"</span>] }
+    <span class="k">require</span>: { humans: 1, team: security }
+
+  - <span class="k">name</span>: agent-sensitive
+    <span class="k">match</span>: { author: agent, risk: sensitive }
+    <span class="k">require</span>: { humans: 2 }
+
+  - <span class="k">name</span>: no-agent-secrets
+    <span class="k">match</span>: { paths: [<span class="s">"secrets/**"</span>], author: agent }
+    <span class="k">block</span>: true</code></pre>
+      <figcaption id="yaml-cap"><span class="plate-no">Plate V.</span> Five of the example policy's eight rules. In Plate III, <em>infra-and-auth</em> and <em>agent-sensitive</em> both matched, and the comment reports what they require together: 2 humans, 1 from security.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Plate VI: privacy -->
+<section id="privacy" class="privacy" aria-labelledby="privacy-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <h2 id="privacy-title">Pressed, not preserved. Graft keeps the label, not the specimen.</h2>
+    </header>
+    <div class="ledger">
+      <div class="ledger__col">
+        <h3>Never stored or logged</h3>
+        <p>File contents, diffs, patches, PR titles and bodies. Patches and commit messages are read in memory; only the parsed <code>Graft-*</code> trailers are kept.</p>
+      </div>
+      <div class="ledger__col">
+        <h3>Stored</h3>
+        <p>Ids, numbers, SHAs, file paths, counts, and the model's own prose (goal, behavior changes, reasons). Logs carry metadata only: ids, counts, codes.</p>
+      </div>
+      <div class="ledger__col ledger__col--out">
+        <h3>Sent to Anthropic</h3>
+        <p>To write and verify a card, the diff, the PR text and the linked issue text go to the Anthropic API. Pilot teams agree to this before onboarding. Without an API key, Graft runs with the rule-based floor only.</p>
+      </div>
+      <div class="ledger__col">
+        <h3>Kept briefly</h3>
+        <p>Webhook payloads sit in the job queue and are deleted one hour after their job completes or finally fails.</p>
+      </div>
+    </div>
+    <p class="privacy__more"><a class="textlink" href="docs/pilots/onboarding/">What Graft reads, stores and sends, table by table</a></p>
+  </div>
+</section>
+
+<!-- Phase 0 note -->
+<section class="phase" aria-labelledby="phase-title">
+  <div class="wrap">
+    <div class="fieldnote">
+      <p class="fieldnote__stamp" aria-hidden="true">Report only</p>
+      <h2 id="phase-title">A field note on shadow mode.</h2>
+      <p>Graft is in <strong>shadow mode</strong>. It reports and never enforces: every Graft check concludes <code>neutral</code>, a "would approve" is not an approval, and team membership is not checked. Keep your branch protection as it is.</p>
+      <p>Phase 0 ends at a gate measured from data: at least <strong>90%</strong> of eligible reviewer votes must say the intent cards are accurate, with enough votes, voters, installations and days behind the number, decided with a Wilson interval. The steps are built; the gate awaits pilot data from two pilot teams.</p>
+      <p>Phase 1, where the policy check becomes required, is planned. None of it is implemented yet.</p>
+      <a class="textlink" href="docs/plan/development-plan/">The development plan</a>
+    </div>
+  </div>
+</section>
+
+<!-- Quickstart -->
+<section id="quickstart" class="band band--quick" aria-labelledby="qs-title">
+  <div class="wrap wrap--split">
+    <header class="sec-head sec-head--side">
+      <h2 id="qs-title">Running offline in under five minutes.</h2>
+      <p class="sec-lead">Node 24, pnpm 11 and Docker. Only <code>pnpm install</code> and the image pull touch the network; no GitHub App or API key is needed.</p>
+      <a class="textlink" href="docs/getting-started/">Getting started, step by step</a>
+    </header>
+    <div class="term" aria-label="Quickstart commands">
+      <div class="term__bar"><span></span><span></span><span></span><em>shell</em></div>
+<pre><code>pnpm install
+pnpm db:up            <span class="c"># Postgres 17 on 127.0.0.1:55432</span>
+cp .env.example .env
+openssl genrsa -out dev.pem 2048
+pnpm db:migrate
+pnpm dev:server       <span class="c"># terminal 1</span>
+pnpm dev:worker       <span class="c"># terminal 2</span>
+pnpm webhook:send installation.created --delivery smoke-1
+<span class="o">202 {"status":"enqueued"}</span>
+curl localhost:3000/readyz
+<span class="o">{"status":"ready","db":"ok","queue":"ok"}</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- Close -->
+<section class="close" aria-labelledby="close-title">
+  <div class="wrap close__inner">
+    <h2 id="close-title">Read the card before you read the diff.</h2>
+    <div class="actions">
+      <a class="btn btn--primary" href="docs/">Read the docs</a>
+      <a class="btn btn--ghost" href="https://github.com/mmornati/graft">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__inner">
+    <p class="wordmark wordmark--foot"><img src="assets/mark.svg" alt="" width="22" height="22"><span>Graft</span></p>
+    <p>No license has been chosen yet; all rights reserved. Every organisation, person and pull request on this page is fictional. Not affiliated with GitHub or Anthropic. This site sets no cookies and loads no trackers.</p>
+    <nav aria-label="Footer"><a href="docs/">Docs</a><a href="https://github.com/mmornati/graft">GitHub</a><a href="https://github.com/mmornati/graft/blob/main/SECURITY.md">Security</a></nav>
+  </div>
+</footer>
+
+<script src="js/site.js" defer></script>
+</body>
+</html>
