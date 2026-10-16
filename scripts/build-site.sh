@@ -15,4 +15,8 @@ done
 for href in $(grep -oE 'href="docs/[^"#]*' website/index.html | sed 's/^href="//' | sort -u); do
   test -f "site/${href%/}/index.html" || test -f "site/$href" || { echo "landing links to $href, which was not built" >&2; exit 1; }
 done
+for href in $(grep -oE 'href="videos/[^"#]*' website/index.html | sed 's/^href="//' | sort -u); do
+  test -f "site/${href%/}/index.html" || { echo "landing links to $href, which was not built" >&2; exit 1; }
+done
+test -f site/videos/graft-explained/timing.js && test -f site/videos/graft-explained/audio/en.m4a || { echo "the explainer video is missing its narration" >&2; exit 1; }
 echo "site/ ready: $(du -sh site | cut -f1)"

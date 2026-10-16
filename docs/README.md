@@ -2,6 +2,8 @@
 
 [Back to the project README](../README.md)
 
+New to Graft? Start with the [two-and-a-half-minute video](video.md): how it works, who is involved and what changes for reviewers and agents.
+
 ## Use and run Graft
 
 | Page | What is in it |
