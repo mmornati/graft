@@ -385,6 +385,9 @@ describe("daily rollup", () => {
       // The feedback cron is independent of the rollup cron.
       expect(await queue.boss.getSchedules(feedbackSweepJob.name)).toHaveLength(1);
     } finally {
+      // The schedules persist in the database: a later file's supervising worker would otherwise
+      // send the sweep for a missed occurrence and call GitHub in the middle of its test.
+      await applyCronSchedules(queue, { feedbackPollCron: null, metricsRollupCron: null });
       await queue.stop();
       await sql`delete from pgboss.job where name in (${metricsRollupJob.name}, ${feedbackSweepJob.name})`.execute(
         t.db,
