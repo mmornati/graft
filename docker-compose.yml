@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: graft
       POSTGRES_DB: graft
     ports:
-      - "55432:5432"
+      # Loopback only: the dev credentials below must not be reachable from the network.
+      - "127.0.0.1:55432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U graft -d graft"]
       interval: 2s
