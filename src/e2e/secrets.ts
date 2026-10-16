@@ -4,6 +4,7 @@
  * replaces each with `[REDACTED]` and then applies patterns for secrets the registry has not seen.
  * Every sink (output, report, state, capture, error messages) goes through it.
  */
+import { readFile } from "node:fs/promises";
 import { toTerminalSafe } from "../eval/terminal.js";
 
 export const REDACTED = "[REDACTED]";
@@ -71,6 +72,22 @@ export class SecretRegistry {
   /** Redacts every string inside a JSON-like value. Keys are kept. */
   redactJson<T>(value: T): T {
     return JSON.parse(this.redact(JSON.stringify(value))) as T;
+  }
+}
+
+/**
+ * Registers the current contents of the federation identity token file. The file rotates, so the
+ * `jwt` pattern covers later tokens; an unreadable file is the client's problem, not the runner's.
+ */
+export async function addIdentityToken(
+  secrets: SecretRegistry,
+  file: string | undefined,
+): Promise<void> {
+  if (!file) return;
+  try {
+    secrets.add(await readFile(file, "utf8"));
+  } catch {
+    // Nothing to register.
   }
 }
 

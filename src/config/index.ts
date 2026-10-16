@@ -1,5 +1,11 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import {
+  type AnthropicFederation,
+  credentialProblems,
+  FEDERATION_FIELDS,
+  federationFrom,
+} from "../llm/federation.js";
 import { MODEL_ID } from "../llm/types.js";
 import { GLOB_REASONS } from "../policy/errors.js";
 import { validateGlob } from "../policy/globs.js";
@@ -142,6 +148,11 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: opt(z.string().min(1)),
   ANTHROPIC_AUTH_TOKEN: opt(z.string().min(1)),
   ANTHROPIC_BASE_URL: opt(httpUrl),
+  ANTHROPIC_FEDERATION_RULE_ID: opt(FEDERATION_FIELDS.ANTHROPIC_FEDERATION_RULE_ID),
+  ANTHROPIC_ORGANIZATION_ID: opt(FEDERATION_FIELDS.ANTHROPIC_ORGANIZATION_ID),
+  ANTHROPIC_SERVICE_ACCOUNT_ID: opt(FEDERATION_FIELDS.ANTHROPIC_SERVICE_ACCOUNT_ID),
+  ANTHROPIC_WORKSPACE_ID: opt(FEDERATION_FIELDS.ANTHROPIC_WORKSPACE_ID),
+  ANTHROPIC_IDENTITY_TOKEN_FILE: opt(FEDERATION_FIELDS.ANTHROPIC_IDENTITY_TOKEN_FILE),
   GRAFT_LLM_MODEL_FAST: withDefault(modelId, "claude-haiku-5-5"),
   GRAFT_LLM_MODEL_STRONG: withDefault(modelId, "claude-sonnet-5-5"),
   GRAFT_LLM_TIMEOUT_MS: withDefault(intString(5_000, 600_000), "120000"),
@@ -183,6 +194,8 @@ export interface Config {
   readonly anthropicApiKey: string | undefined;
   /** Bearer token instead of the API key, for gateways that expect one (OpenRouter, Bedrock). */
   readonly anthropicAuthToken: string | undefined;
+  /** Workload Identity Federation, the third way to authenticate (never with a key or token). */
+  readonly anthropicFederation: AnthropicFederation | undefined;
   /** Messages API base URL; undefined means the Claude API. */
   readonly anthropicBaseUrl: string | undefined;
   readonly llmModelFast: string;
@@ -231,13 +244,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     }
   }
 
-  if (
-    parsed.success &&
-    parsed.data.ANTHROPIC_API_KEY !== undefined &&
-    parsed.data.ANTHROPIC_AUTH_TOKEN !== undefined
-  ) {
-    problems.push("ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN: set at most one, not both");
-  }
+  if (parsed.success) problems.push(...credentialProblems(parsed.data));
 
   if (
     parsed.success &&
@@ -303,6 +310,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     githubAppSlug: d.GITHUB_APP_SLUG,
     anthropicApiKey: d.ANTHROPIC_API_KEY,
     anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+    anthropicFederation: federationFrom(d),
     anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
     llmModelFast: d.GRAFT_LLM_MODEL_FAST,
     llmModelStrong: d.GRAFT_LLM_MODEL_STRONG,

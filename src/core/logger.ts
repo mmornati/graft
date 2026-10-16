@@ -16,6 +16,15 @@ export const REDACT_PATHS = [
   "*.anthropicAuthToken",
   "*.apiKey",
   "*.authToken",
+  // Federation: everything but the rule ID, which is logged on purpose.
+  "*.anthropicFederation",
+  "*.federation",
+  "*.organizationId",
+  "*.serviceAccountId",
+  "*.identityTokenFile",
+  "*.identityToken",
+  "*.assertion",
+  "*.access_token",
   'req.headers["x-api-key"]',
 ];
 
