@@ -7,3 +7,13 @@ coverage
 eval/synthetic/cache/
 eval/synthetic/runs/
 e2e-runs/
+
+# Local secrets and artefacts that must never be committed
+.env.*
+!.env.example
+*.key
+*.p12
+*.pfx
+allow*.txt
+.DS_Store
+*.log
