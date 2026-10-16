@@ -68,13 +68,15 @@
         <desc id="spec-desc">The rootstock stem is the main branch with three commits. A scion, the branch feat/login-rate-limit with two commits, is set into it at an angle and bound with tape at the graft union.</desc>
         <g class="ink-thin"><path d="M190 556c-8-16-28-22-50-22M192 556c-2-12 6-22 3-36M186 556c-18-6-38-2-54 8M194 556c10-8 26-10 40-6"/></g>
         <path class="stock" d="M190 556C188 480 194 410 190 340 189 326 190 314 192 300"/>
+        <path class="string" d="M196 492C226 500 214 528 246 540 262 546 270 556 282 560"/>
         <g class="bud"><circle cx="190" cy="488" r="8"/><circle cx="191" cy="424" r="8"/><circle cx="190" cy="362" r="8"/></g>
         <g class="tag-text">
           <text x="168" y="493" text-anchor="end">a41c0d2</text>
           <text x="169" y="429" text-anchor="end">e07b9f1</text>
           <text x="168" y="367" text-anchor="end">9d8c7b6 · base</text>
         </g>
-        <text class="sheet-label" x="168" y="546" text-anchor="end">rootstock · main</text>
+        <text class="sheet-label" x="168" y="526" text-anchor="end">rootstock ·</text>
+        <text class="sheet-label" x="168" y="546" text-anchor="end">main</text>
         <path class="scion" d="M196 296C230 240 280 180 330 132 370 94 410 64 452 36"/>
         <path class="sap" d="M196 296C230 240 280 180 330 132 370 94 410 64 452 36"/>
         <g class="leaf"><path d="M250 226Q262 183 222 150Q213 201 250 226z"/><path d="M300 166Q310 116 262 82Q256 140 300 166z"/><path d="M352 116Q374 73 340 30Q319 81 352 116z"/><path d="M452 36Q494 52 530 16Q481 2 452 36z"/><path d="M330 140Q370 160 410 128Q362 109 330 140z"/></g>
@@ -93,6 +95,11 @@
         </g>
         <path class="leader" d="M228 302h64"/>
         <text class="sheet-label" x="298" y="307">graft union</text>
+        <g class="scale" transform="translate(30 392)" aria-hidden="true">
+          <path d="M0 0v100M-6 0h12M-4 20h8M-4 40h8M-4 60h8M-4 80h8M-6 100h12"/>
+          <rect x="-3" y="0" width="6" height="20"/><rect x="-3" y="40" width="6" height="20"/><rect x="-3" y="80" width="6" height="20"/>
+          <text x="10" y="6">0</text><text x="10" y="104">5 cm</text>
+        </g>
         <rect class="strip" x="172" y="446" width="40" height="13" transform="rotate(-6 192 452)"/>
         <rect class="strip" x="314" y="140" width="38" height="13" transform="rotate(38 333 146)"/>
       </svg>
@@ -293,7 +300,6 @@
             <span data-step="trivial">trivial</span><span data-step="logic">logic</span><span data-step="sensitive">sensitive</span>
           </div>
           <div class="gauge__floor" data-floor-mark></div>
-          <div class="gauge__needle" data-needle></div>
         </div>
 
         <output class="verdict" data-verdict aria-live="polite">

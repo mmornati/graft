@@ -119,3 +119,9 @@ body { font-optical-sizing: auto; }
 .md-copyright { font-size: .62rem; }
 [data-md-color-scheme="slate"] .md-logo img { filter: invert(1) hue-rotate(180deg) brightness(1.1); }
 .md-header__button.md-logo img { height: 1.6rem; width: auto; }
+/* risk words and other short codes in a table's first column never break mid-word */
+.md-typeset table:not([class]) td:first-child code { white-space: nowrap; }
+.md-typeset table:not([class]) td:first-child { min-width: 7em; }
+/* mermaid diagrams render at their natural size and scroll sideways instead of shrinking their text */
+.md-typeset .mermaid { overflow-x: auto; }
+.md-typeset .mermaid svg { max-width: none !important; width: auto !important; height: auto; }
