@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://graft.dev/schema/graft.v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json",
   "title": "graft.yaml v1",
   "description": "Generated from src/policy/schema.ts (pnpm graft policy schema --write). Rules a JSON Schema cannot express: approve: auto may use only risk, only_paths and size (not author, agent, labels or paths); size: min is not above max; rule names are unique; globs use only letters, digits and _ . - / * ? [ ] @ + = ~ # % , and space, with no .. or empty segment, at most 4 ** segments, at most 3 * per segment, at most 200 characters, at most 48 characters other than * in a segment and 96 in a glob, no / inside [ ], no run of three stars and no ]+; a path over 1,024 characters or 128 segments is treated as matching every sensitive and require rule and no approve rule; at most 500 globs in the file.",
   "type": "object",

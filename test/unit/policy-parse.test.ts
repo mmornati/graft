@@ -473,7 +473,7 @@ describe("policy schema", () => {
     expect(JSON.parse(committed)).toEqual(policyJsonSchema());
     expect(committed).toBe(`${JSON.stringify(policyJsonSchema(), null, 2)}\n`);
     expect(policyJsonSchema()).toMatchObject({
-      $id: "https://graft.dev/schema/graft.v1.schema.json",
+      $id: "https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json",
       title: "graft.yaml v1",
       $schema: "https://json-schema.org/draft/2020-12/schema",
     });
