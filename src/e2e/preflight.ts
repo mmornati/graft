@@ -21,7 +21,7 @@ import {
   type SandboxEntry,
 } from "./guard.js";
 import { readInstallationFacts, scopeMessage, scopeProblems } from "./scope.js";
-import { SecretRegistry } from "./secrets.js";
+import { addIdentityToken, SecretRegistry } from "./secrets.js";
 import type { Actor, E2eDeps, IoLike } from "./types.js";
 
 /** An aborted command: `code` 2 is usage/configuration, 3 is a refusal or failed precondition. */
@@ -175,6 +175,7 @@ export async function openSession(
   secrets.add(deps.env.ANTHROPIC_API_KEY);
   secrets.add(deps.env.ANTHROPIC_AUTH_TOKEN);
   secrets.add(deps.env.SMEE_URL);
+  await addIdentityToken(secrets, config.anthropicFederation?.identityTokenFile);
 
   let sandboxConfig: SandboxConfig;
   let sandbox: SandboxEntry;

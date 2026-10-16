@@ -83,6 +83,36 @@ describe("eval cli", () => {
     expect(both.err).toContain("set at most one");
   });
 
+  it("U-CLI-1c run --live with workload identity federation hands the federation settings to the client", async () => {
+    const out = await tmpDir();
+    const llmFactory = vi.fn(() => createFakeLlm(() => ({ failure: "unavailable" })));
+    const fed = {
+      ANTHROPIC_FEDERATION_RULE_ID: "fdrl_01R",
+      ANTHROPIC_ORGANIZATION_ID: "00000000-0000-4000-8000-000000000000",
+      ANTHROPIC_SERVICE_ACCOUNT_ID: "svac_01S",
+      ANTHROPIC_IDENTITY_TOKEN_FILE: "/var/run/secrets/anthropic.com/token",
+    };
+    const argv = ["run", "--set", "eval/synthetic", "--live", "--yes", "--out", out];
+    const r = await cli([...argv, "--cases", "syn-001-docs-typo"], { env: fed, llmFactory });
+    expect(r.err).not.toContain("needs ANTHROPIC");
+    expect(llmFactory).toHaveBeenCalledWith({
+      federation: {
+        ruleId: "fdrl_01R",
+        organizationId: "00000000-0000-4000-8000-000000000000",
+        serviceAccountId: "svac_01S",
+        workspaceId: undefined,
+        identityTokenFile: "/var/run/secrets/anthropic.com/token",
+      },
+      maxRetries: 2,
+      refusalFallback: true,
+    });
+    const partial = await cli(["run", "--set", "eval/synthetic", "--live"], {
+      env: { ANTHROPIC_FEDERATION_RULE_ID: "fdrl_01R" },
+    });
+    expect(partial.code).toBe(2);
+    expect(partial.err).toContain("federation needs all of");
+  });
+
   it("U-CLI-2 run --live on a non-TTY without --yes prints the estimate and exits 3 without a call", async () => {
     const out = await tmpDir();
     const r = await cli(["run", "--set", "eval/synthetic", "--live", "--out", out], {

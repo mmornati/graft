@@ -55,6 +55,7 @@ import { renderCase } from "../eval/terminal.js";
 import {
   type AnthropicCredential,
   type AnthropicSettings,
+  anthropicCredential,
   createAnthropicLlm,
   isClaudeApi,
 } from "../llm/anthropic.js";
@@ -604,8 +605,11 @@ async function runCommand(
   openIt: () => Promise<CaseSet>,
 ): Promise<number> {
   const live = Boolean(a.live);
-  if (live && !env.anthropicApiKey && !env.anthropicAuthToken) {
-    throw new EvalConfigError("--live needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
+  const credential = anthropicCredential(env);
+  if (live && !credential) {
+    throw new EvalConfigError(
+      "--live needs ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or the ANTHROPIC_FEDERATION_* settings",
+    );
   }
   const set = await openIt();
   const maxCostUsd = numFlag("max-cost-usd", a["max-cost-usd"], 10, 0, 100000);
@@ -617,9 +621,7 @@ async function runCommand(
   const lazy: LlmClient = {
     complete(req: LlmRequest): Promise<LlmResult> {
       client ??= deps.llmFactory({
-        ...(env.anthropicApiKey
-          ? { apiKey: env.anthropicApiKey }
-          : { authToken: env.anthropicAuthToken as string }),
+        ...(credential as AnthropicCredential),
         ...(env.anthropicBaseUrl ? { baseURL: env.anthropicBaseUrl } : {}),
         maxRetries: env.llmMaxRetries,
         refusalFallback: env.llmRefusalFallback && isClaudeApi(env.anthropicBaseUrl),
@@ -779,7 +781,7 @@ async function runCommand(
 }
 
 /**
- * `.env` supplies ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) and the GitHub App settings, but never the case-set key
+ * `.env` supplies the Anthropic credential (key, token or federation) and the GitHub App settings, but never the case-set key
  * (E6: the key lives in the password manager and the shell). A `GRAFT_EVAL_KEY` that only
  * `.env` provided is dropped with a warning on stderr.
  */

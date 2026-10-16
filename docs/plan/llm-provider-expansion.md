@@ -203,6 +203,7 @@ Each step is shippable on its own and gated by `pnpm eval:ci` plus a live `pnpm 
 2. **Done.** `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` (bearer, for gateways), and model IDs with a gateway prefix. This enables OpenRouter, Vercel, Requesty, LiteLLM and Bedrock Mantle in Anthropic format.
 3. **Done.** The server-side fallback beta is sent only to the Claude API. `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` adds a client-side retry on refusal.
 4. **Dropped.** Diff filtering already exists (3.3 B).
+5. **Done.** Workload Identity Federation as a third way to authenticate to the Claude API (`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_IDENTITY_TOKEN_FILE`, optional `ANTHROPIC_WORKSPACE_ID`): no long-lived key on hosts that issue OIDC tokens. See [decisions](../decisions.md#workload-identity-federation) and [Deploying with federation](../configuration.md#deploying-with-federation).
 
 Details are in [decisions.md](../decisions.md#llm-gateways-and-client-side-refusal-fallback).
 

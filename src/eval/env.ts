@@ -4,6 +4,12 @@
  * webhook secret.
  */
 import { z } from "zod";
+import {
+  type AnthropicFederation,
+  credentialProblems,
+  FEDERATION_FIELDS,
+  federationFrom,
+} from "../llm/federation.js";
 import { MODEL_ID } from "../llm/types.js";
 
 export class EvalEnvError extends Error {
@@ -58,6 +64,11 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: opt(z.string().min(1)),
   ANTHROPIC_AUTH_TOKEN: opt(z.string().min(1)),
   ANTHROPIC_BASE_URL: opt(httpUrl),
+  ANTHROPIC_FEDERATION_RULE_ID: opt(FEDERATION_FIELDS.ANTHROPIC_FEDERATION_RULE_ID),
+  ANTHROPIC_ORGANIZATION_ID: opt(FEDERATION_FIELDS.ANTHROPIC_ORGANIZATION_ID),
+  ANTHROPIC_SERVICE_ACCOUNT_ID: opt(FEDERATION_FIELDS.ANTHROPIC_SERVICE_ACCOUNT_ID),
+  ANTHROPIC_WORKSPACE_ID: opt(FEDERATION_FIELDS.ANTHROPIC_WORKSPACE_ID),
+  ANTHROPIC_IDENTITY_TOKEN_FILE: opt(FEDERATION_FIELDS.ANTHROPIC_IDENTITY_TOKEN_FILE),
   GRAFT_LLM_MODEL_FAST: withDefault(modelId, "claude-haiku-5-5"),
   GRAFT_LLM_MODEL_STRONG: withDefault(modelId, "claude-sonnet-5-5"),
   GRAFT_LLM_TIMEOUT_MS: withDefault(intString(5_000, 600_000), "120000"),
@@ -80,6 +91,7 @@ export interface EvalEnv {
   githubToken: string | undefined;
   anthropicApiKey: string | undefined;
   anthropicAuthToken: string | undefined;
+  anthropicFederation: AnthropicFederation | undefined;
   anthropicBaseUrl: string | undefined;
   modelFast: string;
   modelStrong: string;
@@ -105,10 +117,9 @@ export function parseEvalEnv(env: Record<string, string | undefined>): EvalEnv {
     throw new EvalEnvError(`Invalid configuration:\n- ${problems.join("\n- ")}`);
   }
   const d = res.data;
-  if (d.ANTHROPIC_API_KEY !== undefined && d.ANTHROPIC_AUTH_TOKEN !== undefined) {
-    throw new EvalEnvError(
-      "Invalid configuration:\n- ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN: set at most one, not both",
-    );
+  const problems = credentialProblems(d);
+  if (problems.length > 0) {
+    throw new EvalEnvError(`Invalid configuration:\n- ${problems.join("\n- ")}`);
   }
   return {
     evalDir: d.GRAFT_EVAL_DIR,
@@ -116,6 +127,7 @@ export function parseEvalEnv(env: Record<string, string | undefined>): EvalEnv {
     githubToken: d.GRAFT_EVAL_GITHUB_TOKEN,
     anthropicApiKey: d.ANTHROPIC_API_KEY,
     anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+    anthropicFederation: federationFrom(d),
     anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
     modelFast: d.GRAFT_LLM_MODEL_FAST,
     modelStrong: d.GRAFT_LLM_MODEL_STRONG,
