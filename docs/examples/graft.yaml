@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/<org>/graft/main/schema/graft.v1.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json
 version: 1
 
 # Extra paths that set the intent risk floor to `sensitive` (step 3 rule R7).
