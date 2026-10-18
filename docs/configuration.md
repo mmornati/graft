@@ -27,12 +27,15 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_AGENT_LOGINS` | empty | Comma-separated GitHub logins that always count as agent accounts (letters, digits, `-`, optional `[bot]`; lowercased). Also excluded from gate votes. |
 | `GRAFT_AGENT_COAUTHOR_EMAILS` | `noreply@anthropic.com` | Comma-separated `Co-authored-by` emails that mark a commit as agent-written (default: Claude Code's). |
 | `GITHUB_APP_SLUG` | unset | The App's slug. Enables the `<slug>[bot]` fallback for recognising Graft's own PR comment when `performed_via_github_app` is missing (decision D13). |
-| `ANTHROPIC_API_KEY` | unset | Without it the service still runs and every card shows as unavailable with the rule-based risk floor. Never commit a real key. |
-| `GRAFT_LLM_MODEL_FAST` | `claude-haiku-5-5` | First-pass writer when the rule-based floor is `trivial`. `^claude-[a-z0-9-]{1,60}$`. |
+| `ANTHROPIC_API_KEY` | unset | Sent as `x-api-key`. Without it (or `ANTHROPIC_AUTH_TOKEN`) the service still runs and every card shows as unavailable with the rule-based risk floor. Never commit a real key. |
+| `ANTHROPIC_AUTH_TOKEN` | unset | Sent as `Authorization: Bearer`, for gateways that expect a bearer token (OpenRouter, Vercel AI Gateway, Bedrock Mantle). Set at most one of this and `ANTHROPIC_API_KEY`. |
+| `ANTHROPIC_BASE_URL` | unset (the Claude API) | An http(s) URL of any service that speaks the Anthropic Messages API, for example `https://openrouter.ai/api`. Diffs go to that service: check its data retention first. Only the host is logged. |
+| `GRAFT_LLM_MODEL_FAST` | `claude-haiku-5-5` | First-pass writer when the rule-based floor is `trivial`. A Claude model ID, optionally with a gateway's vendor prefix or version suffix (`anthropic/claude-haiku-5.5`, `us.anthropic.claude-haiku-5-5-v1:0`). |
 | `GRAFT_LLM_MODEL_STRONG` | `claude-sonnet-5-5` | Writer for everything else, and always the verifier. Same pattern. |
 | `GRAFT_LLM_TIMEOUT_MS` | `120000` | Per-call timeout, 5,000 to 600,000 ms. |
 | `GRAFT_LLM_MAX_RETRIES` | `2` | SDK retries, 0 to 5. |
-| `GRAFT_LLM_REFUSAL_FALLBACK` | `true` | `true` or `false`: let the API retry a refused request on a substitute model (Sonnet and Opus only). |
+| `GRAFT_LLM_REFUSAL_FALLBACK` | `true` | `true` or `false`: let the API retry a refused request on a substitute model (Sonnet and Opus only). Applies only on the Claude API: with an `ANTHROPIC_BASE_URL` other than `api.anthropic.com` it is never sent. |
+| `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` | unset (off) | A model Graft itself retries once when a call is refused and no server-side fallback ran: on a gateway or cloud, and for Haiku on the Claude API. The card names the model that answered. Same pattern as the model settings. |
 | `GRAFT_LLM_DAILY_TOKEN_BUDGET` | `2000000` | Per-repository daily token budget (UTC day, from the `intent_spend` ledger); `0` means unlimited. |
 | `GRAFT_INTENT_SENSITIVE_PATHS` | empty | Extra comma-separated globs that set the risk floor to `sensitive`, for example `services/billing/**`. 1 to 200 characters each, no leading `!`, no `..` segment, and the same checks as `graft.yaml` globs (validated at startup). |
 | `GRAFT_FEEDBACK_POLL_CRON` | `*/15 * * * *` | Cron for polling 👍/👎 reactions on the managed comment, or `off`. Checked for shape only (5 fields). |

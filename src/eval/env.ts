@@ -4,6 +4,7 @@
  * webhook secret.
  */
 import { z } from "zod";
+import { MODEL_ID } from "../llm/types.js";
 
 export class EvalEnvError extends Error {
   constructor(message: string) {
@@ -39,7 +40,13 @@ const emailList = z
   .refine((l) => l.every((x) => x.split("@").length === 2 && !/\s/.test(x)), {
     message: "must be comma-separated emails, each with exactly one '@'",
   });
-const modelId = z.string().regex(/^claude-[a-z0-9-]{1,60}$/, "must match ^claude-[a-z0-9-]{1,60}$");
+const modelId = z.string().regex(MODEL_ID, "must be a Claude model ID");
+const httpUrl = z
+  .string()
+  .refine(
+    (v) => URL.canParse(v) && /^https?:$/.test(new URL(v).protocol),
+    "must be an http(s) URL",
+  );
 const boolString = z
   .enum(["true", "false"], { error: "must be true or false" })
   .transform((v) => v === "true");
@@ -49,11 +56,14 @@ const EnvSchema = z.object({
   GRAFT_EVAL_KEY: opt(z.string()),
   GRAFT_EVAL_GITHUB_TOKEN: opt(z.string()),
   ANTHROPIC_API_KEY: opt(z.string().min(1)),
+  ANTHROPIC_AUTH_TOKEN: opt(z.string().min(1)),
+  ANTHROPIC_BASE_URL: opt(httpUrl),
   GRAFT_LLM_MODEL_FAST: withDefault(modelId, "claude-haiku-5-5"),
   GRAFT_LLM_MODEL_STRONG: withDefault(modelId, "claude-sonnet-5-5"),
   GRAFT_LLM_TIMEOUT_MS: withDefault(intString(5_000, 600_000), "120000"),
   GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
   GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
+  GRAFT_LLM_REFUSAL_FALLBACK_MODEL: opt(modelId),
   GRAFT_AGENT_LOGINS: withDefault(loginList, ""),
   GRAFT_AGENT_COAUTHOR_EMAILS: withDefault(emailList, "noreply@anthropic.com"),
   GITHUB_APP_ID: opt(intString(1, Number.MAX_SAFE_INTEGER)),
@@ -69,11 +79,14 @@ export interface EvalEnv {
   evalKey: string | undefined;
   githubToken: string | undefined;
   anthropicApiKey: string | undefined;
+  anthropicAuthToken: string | undefined;
+  anthropicBaseUrl: string | undefined;
   modelFast: string;
   modelStrong: string;
   llmTimeoutMs: number;
   llmMaxRetries: number;
   llmRefusalFallback: boolean;
+  llmRefusalFallbackModel: string | undefined;
   agentLogins: readonly string[];
   agentCoauthorEmails: readonly string[];
   githubAppId: number | undefined;
@@ -92,16 +105,24 @@ export function parseEvalEnv(env: Record<string, string | undefined>): EvalEnv {
     throw new EvalEnvError(`Invalid configuration:\n- ${problems.join("\n- ")}`);
   }
   const d = res.data;
+  if (d.ANTHROPIC_API_KEY !== undefined && d.ANTHROPIC_AUTH_TOKEN !== undefined) {
+    throw new EvalEnvError(
+      "Invalid configuration:\n- ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN: set at most one, not both",
+    );
+  }
   return {
     evalDir: d.GRAFT_EVAL_DIR,
     evalKey: d.GRAFT_EVAL_KEY,
     githubToken: d.GRAFT_EVAL_GITHUB_TOKEN,
     anthropicApiKey: d.ANTHROPIC_API_KEY,
+    anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+    anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
     modelFast: d.GRAFT_LLM_MODEL_FAST,
     modelStrong: d.GRAFT_LLM_MODEL_STRONG,
     llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,
     llmMaxRetries: d.GRAFT_LLM_MAX_RETRIES,
     llmRefusalFallback: d.GRAFT_LLM_REFUSAL_FALLBACK,
+    llmRefusalFallbackModel: d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
     agentLogins: Object.freeze([...d.GRAFT_AGENT_LOGINS]),
     agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
     githubAppId: d.GITHUB_APP_ID,

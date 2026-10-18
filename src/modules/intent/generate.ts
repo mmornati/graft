@@ -58,7 +58,11 @@ export type FailureReason =
   | "deadline_exceeded";
 
 export interface GenerateOptions {
-  models: { fast: string; strong: string };
+  /**
+   * `refusalFallback`: retried once when a call is refused and the client has no server-side
+   * fallback for that model (gateways, clouds, Haiku).
+   */
+  models: { fast: string; strong: string; refusalFallback?: string };
   floor: FloorConfig;
   /** Per call. */
   timeoutMs: number;
@@ -154,7 +158,13 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export function defaultGenerateOptions(config: Config, floor: FloorConfig): GenerateOptions {
   return {
-    models: { fast: config.llmModelFast, strong: config.llmModelStrong },
+    models: {
+      fast: config.llmModelFast,
+      strong: config.llmModelStrong,
+      ...(config.llmRefusalFallbackModel
+        ? { refusalFallback: config.llmRefusalFallbackModel }
+        : {}),
+    },
     floor,
     timeoutMs: config.llmTimeoutMs,
     deadlineMs: 600_000,
@@ -362,7 +372,11 @@ export async function runCard(
 
   type Called<T> = { ok: true; out: T; model: string } | { ok: false; reason: FailureReason };
 
-  /** One call, repeated once when the output is unusable (D6). Usage of every call is summed. */
+  /**
+   * One call, repeated once when the output is unusable (D6). A refusal switches, once, to the
+   * refusal fallback model when the client did not already fall back server-side; that switch is
+   * not one of the two attempts. Usage of every call is summed, each priced by its own model.
+   */
   async function callValidated<T>(
     base: {
       purpose: LlmPurpose;
@@ -374,11 +388,14 @@ export async function runCard(
     },
     validate: (value: unknown) => { ok: true; out: T } | { ok: false },
   ): Promise<Called<T>> {
+    let model = base.model;
+    let fellBack = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       const remaining = deadlineAt - o.nowMs();
       if (remaining < MIN_REMAINING_MS) return { ok: false, reason: "deadline_exceeded" };
       const res = await llm.complete({
         ...base,
+        model,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         timeoutMs: Math.min(o.timeoutMs, remaining),
         deadlineMs: remaining,
@@ -400,6 +417,20 @@ export async function runCard(
         continue;
       }
       if (res.failure === "invalid_json" || res.failure === "max_tokens") {
+        continue;
+      }
+      const fallback = o.models.refusalFallback;
+      if (
+        res.failure === "refusal" &&
+        !fellBack &&
+        fallback !== undefined &&
+        fallback !== model &&
+        !llm.serverRefusalFallback?.(model)
+      ) {
+        o.log?.info({ purpose: base.purpose, from: model, to: fallback }, "llm refusal fallback");
+        model = fallback;
+        fellBack = true;
+        attempt--;
         continue;
       }
       return { ok: false, reason: FAILURE_MAP[res.failure] };

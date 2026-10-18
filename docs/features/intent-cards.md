@@ -41,7 +41,7 @@ Without a checked card (no API key, model down, budget used up) the risk is at l
 
 **Sensitive paths.** Add globs (comma-separated, for example `services/billing/**,**/payments/**`) to `GRAFT_INTENT_SENSITIVE_PATHS`; since step 5 the `sensitive_paths` of the base branch's `graft.yaml` extend the list (the pull request's own copy is ignored; a missing or invalid file leaves the environment value alone). A glob without `/` matches at any depth; a leading `/` anchors it at the repository root. Since step 6 the value is validated at startup with the same checks as `graft.yaml` (a failure names the glob's position and the reason, never the value, and the process exits), including the lookalike check described in [docs/graft-yaml.md](../graft-yaml.md); a glob with non-ASCII characters logs one warning.
 
-**Without an API key** (`ANTHROPIC_API_KEY` unset) the service runs and every card shows as unavailable with the rule-based floor.
+**Without an API key** (neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN` set) the service runs and every card shows as unavailable with the rule-based floor.
 
 ## Feedback internals
 
@@ -50,6 +50,6 @@ Without a checked card (no API key, model down, budget used up) the risk is at l
 ## Related
 
 - The LLM contract (no prompt or diff is ever logged or stored, token accounting, prompt caching): [architecture.md](../architecture.md#llm-contract-step-3).
-- Model, budget and polling settings: `ANTHROPIC_API_KEY`, `GRAFT_LLM_*`, `GRAFT_INTENT_SENSITIVE_PATHS`, `GRAFT_FEEDBACK_POLL_CRON` in [configuration.md](../configuration.md).
+- Model, budget and polling settings: `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` for a gateway), `GRAFT_LLM_*`, `GRAFT_INTENT_SENSITIVE_PATHS`, `GRAFT_FEEDBACK_POLL_CRON` in [configuration.md](../configuration.md).
 - Measuring card quality: [evaluation.md](evaluation.md). The 90% accuracy gate: [pilots-and-gate.md](pilots-and-gate.md#the-gate).
 - Implementation choices: [decisions.md, step 3](../decisions.md#step-3-intent-service). The step spec: [docs/phase-0/step-3-intent-service.md](../phase-0/step-3-intent-service.md).

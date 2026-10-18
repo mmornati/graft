@@ -578,7 +578,13 @@ async function runOffline(deps: E2eDeps, rawIo: IoLike, opts: RunOptions): Promi
   // The child's output can echo anything in the environment: redact the tokens we hold.
   const secrets = new SecretRegistry();
   for (const [k, v] of Object.entries(deps.env)) {
-    if (k.startsWith("GRAFT_E2E_") || k === "ANTHROPIC_API_KEY" || k === "SMEE_URL") secrets.add(v);
+    if (
+      k.startsWith("GRAFT_E2E_") ||
+      k === "ANTHROPIC_API_KEY" ||
+      k === "ANTHROPIC_AUTH_TOKEN" ||
+      k === "SMEE_URL"
+    )
+      secrets.add(v);
   }
   const io = safeIo(rawIo, secrets);
   const random = deps.random ?? ((n: number) => new Uint8Array(randomBytes(n)));

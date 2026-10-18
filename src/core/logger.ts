@@ -13,7 +13,9 @@ export const REDACT_PATHS = [
   "*.databaseUrl",
   "*.token",
   "*.anthropicApiKey",
+  "*.anthropicAuthToken",
   "*.apiKey",
+  "*.authToken",
   'req.headers["x-api-key"]',
 ];
 

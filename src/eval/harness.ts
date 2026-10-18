@@ -44,7 +44,7 @@ export interface RunOptions {
   mode: "fake" | "live";
   /** The live client, injected by the CLI (tests inject a fake). */
   llm?: LlmClient;
-  models: { fast: string; strong: string };
+  models: { fast: string; strong: string; refusalFallback?: string };
   timeoutMs: number;
   concurrency: number;
   maxCostUsd: number;
@@ -163,7 +163,8 @@ export async function runEval(o: RunOptions): Promise<RunOutcome> {
   const live = o.mode === "live";
   if (live) {
     if (!o.llm) throw new EvalConfigError("live mode needs an LLM client");
-    for (const m of [o.models.fast, o.models.strong]) {
+    for (const m of [o.models.fast, o.models.strong, o.models.refusalFallback]) {
+      if (m === undefined) continue;
       if (!priceFor(m))
         throw new EvalConfigError(`no price for model ${m}: update src/eval/pricing.ts`);
     }
