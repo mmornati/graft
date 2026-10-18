@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Logger } from "../core/logger.js";
+import { type AnthropicFederation, FederationError, federatedCredentials } from "./federation.js";
 import {
   type LlmClient,
   type LlmFailure,
@@ -10,12 +11,28 @@ import {
 } from "./types.js";
 
 /**
- * Exactly one of `apiKey` (sent as `x-api-key`) and `authToken` (sent as `Authorization: Bearer`).
- * Neither falls back to the process environment: the validated config is the only source.
+ * Exactly one of `apiKey` (sent as `x-api-key`), `authToken` (sent as `Authorization: Bearer`) and
+ * `federation` (an OIDC token exchanged for a short-lived bearer token). None falls back to the
+ * process environment: the validated config is the only source.
  */
 export type AnthropicCredential =
-  | { apiKey: string; authToken?: undefined }
-  | { apiKey?: undefined; authToken: string };
+  | { apiKey: string; authToken?: undefined; federation?: undefined }
+  | { apiKey?: undefined; authToken: string; federation?: undefined }
+  | { apiKey?: undefined; authToken?: undefined; federation: AnthropicFederation };
+
+/** The configured credential, or null when none is (the config allows at most one). */
+export function anthropicCredential(c: {
+  anthropicApiKey: string | undefined;
+  anthropicAuthToken: string | undefined;
+  anthropicFederation: AnthropicFederation | undefined;
+}): AnthropicCredential | null {
+  if (c.anthropicApiKey) return { apiKey: c.anthropicApiKey };
+  if (c.anthropicAuthToken) return { authToken: c.anthropicAuthToken };
+  if (c.anthropicFederation) return { federation: c.anthropicFederation };
+  return null;
+}
+
+const CLAUDE_API = "https://api.anthropic.com";
 
 export interface AnthropicSettings {
   maxRetries: number;
@@ -57,6 +74,7 @@ interface ResponseLike {
 }
 
 function classify(err: unknown): LlmFailure {
+  if (err instanceof FederationError) return err.failure; // the token exchange, before the call
   if (err instanceof Anthropic.APIConnectionTimeoutError) return "timeout";
   if (err instanceof Anthropic.APIUserAbortError) return "timeout"; // our deadline signal
   if (err instanceof Anthropic.APIConnectionError) return "unavailable";
@@ -76,6 +94,16 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
     apiKey: o.apiKey ?? null,
     authToken: o.authToken ?? null,
     baseURL: o.baseURL ?? null,
+    // The token is exchanged against the same host as the calls and cached until near expiry.
+    ...(o.federation
+      ? {
+          credentials: federatedCredentials(
+            o.federation,
+            o.baseURL ?? CLAUDE_API,
+            o.fetch ?? fetch,
+          ),
+        }
+      : {}),
     maxRetries: o.maxRetries,
     ...(o.fetch ? { fetch: o.fetch } : {}),
   });
@@ -148,7 +176,10 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
           {
             purpose: req.purpose,
             model: req.model,
-            status: err instanceof Anthropic.APIError ? err.status : undefined,
+            status:
+              err instanceof Anthropic.APIError || err instanceof FederationError
+                ? err.status
+                : undefined,
             name: err instanceof Error ? err.name : "unknown",
           },
           "llm call failed",

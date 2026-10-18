@@ -1,6 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLogger } from "../../src/core/logger.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger, type Logger } from "../../src/core/logger.js";
 import { agreeingVerifier, createFakeLlm, forbiddenLlm, scriptedLlm } from "../../src/llm/fake.js";
 import {
   createAnthropicLlm,
@@ -437,6 +440,213 @@ describe("gateways and bearer tokens", () => {
     expect(lines).toContain('"host":"gateway.example.test"');
     expect(lines).not.toContain("URL_CANARY");
     expect(lines).not.toContain("TOKEN_CANARY");
+  });
+});
+
+describe("workload identity federation", () => {
+  const RULE = "fdrl_01TestRule";
+  const ORG = "00000000-0000-4000-8000-000000000000";
+  const SVAC = "svac_01TestAccount";
+  const WORKSPACE = "wrkspc_01TestWorkspace";
+  let dir = "";
+  let tokenFile = "";
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "graft-wif-"));
+    tokenFile = path.join(dir, "token");
+    await writeFile(tokenFile, "eyJhbGciOiJSUzI1NiJ9.ONE.sig\n");
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const federation = (over: { workspaceId?: string } = {}) => ({
+    ruleId: RULE,
+    organizationId: ORG,
+    serviceAccountId: SVAC,
+    workspaceId: over.workspaceId,
+    identityTokenFile: tokenFile,
+  });
+  const exchanged = (token: string, expiresIn = 3600) =>
+    ok({ access_token: token, token_type: "Bearer", expires_in: expiresIn });
+  const fedClient = (f: typeof fetch, o: { maxRetries?: number; log?: Logger } = {}) =>
+    createAnthropicLlm({
+      federation: federation({ workspaceId: WORKSPACE }),
+      maxRetries: o.maxRetries ?? 0,
+      refusalFallback: false,
+      log: o.log ?? silentLog,
+      fetch: f,
+    });
+
+  it("U-LLM-16 the identity token is exchanged (jwt-bearer) and the minted token is the Bearer; the env is never read", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-FROM-ENV");
+    vi.stubEnv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_FROM_ENV");
+    const f = fakeFetch([exchanged("sk-ant-oat01-MINTED"), ok(), ok()]);
+    const llm = fedClient(f.fn);
+    expect(await llm.complete(req())).toMatchObject({ ok: true });
+
+    expect(f.seen[0]?.url).toBe("https://api.anthropic.com/v1/oauth/token");
+    expect(f.seen[0]?.body).toEqual({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: "eyJhbGciOiJSUzI1NiJ9.ONE.sig",
+      federation_rule_id: RULE,
+      organization_id: ORG,
+      service_account_id: SVAC,
+      workspace_id: WORKSPACE,
+    });
+    expect(f.seen[0]?.headers.get("anthropic-beta")).toContain("oidc-federation-2026-04-01");
+    expect(f.seen[1]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(f.seen[1]?.headers.get("authorization")).toBe("Bearer sk-ant-oat01-MINTED");
+    expect(f.seen[1]?.headers.has("x-api-key")).toBe(false);
+    expect(f.seen[1]?.headers.get("anthropic-beta")).toContain("oauth-2025-04-20");
+
+    // The minted token is cached: the next call goes straight to the Messages API.
+    expect(await llm.complete(req())).toMatchObject({ ok: true });
+    expect(f.seen.map((s) => new URL(s.url).pathname)).toEqual([
+      "/v1/oauth/token",
+      "/v1/messages",
+      "/v1/messages",
+    ]);
+
+    // A base URL is the host of both the exchange and the calls.
+    const g = fakeFetch([exchanged("sk-ant-oat01-B"), ok()]);
+    await createAnthropicLlm({
+      federation: federation(),
+      baseURL: "https://proxy.example.test/",
+      maxRetries: 0,
+      refusalFallback: false,
+      log: silentLog,
+      fetch: g.fn,
+    }).complete(req());
+    expect(g.seen[0]?.url).toBe("https://proxy.example.test/v1/oauth/token");
+    expect(g.seen[0]?.body).not.toHaveProperty("workspace_id");
+    expect(g.seen[1]?.url).toBe("https://proxy.example.test/v1/messages");
+  });
+
+  it("U-LLM-17 every refresh re-reads the token file (expiry and a 401 alike)", async () => {
+    const f = fakeFetch([
+      exchanged("sk-ant-oat01-FIRST", 10), // inside the mandatory refresh window
+      ok(),
+      exchanged("sk-ant-oat01-SECOND"),
+      ok(),
+      status(401),
+      exchanged("sk-ant-oat01-THIRD"),
+      ok(),
+    ]);
+    const llm = fedClient(f.fn, { maxRetries: 1 });
+    expect(await llm.complete(req())).toMatchObject({ ok: true });
+    await writeFile(tokenFile, "eyJhbGciOiJSUzI1NiJ9.TWO.sig");
+    expect(await llm.complete(req())).toMatchObject({ ok: true });
+    await writeFile(tokenFile, "eyJhbGciOiJSUzI1NiJ9.THREE.sig");
+    expect(await llm.complete(req())).toMatchObject({ ok: true });
+
+    const exchanges = f.seen.filter((s) => s.url.endsWith("/v1/oauth/token"));
+    expect(exchanges.map((s) => s.body.assertion)).toEqual([
+      "eyJhbGciOiJSUzI1NiJ9.ONE.sig",
+      "eyJhbGciOiJSUzI1NiJ9.TWO.sig",
+      "eyJhbGciOiJSUzI1NiJ9.THREE.sig",
+    ]);
+    const calls = f.seen.filter((s) => s.url.endsWith("/v1/messages"));
+    expect(calls.map((s) => s.headers.get("authorization"))).toEqual([
+      "Bearer sk-ant-oat01-FIRST",
+      "Bearer sk-ant-oat01-SECOND",
+      "Bearer sk-ant-oat01-SECOND",
+      "Bearer sk-ant-oat01-THIRD",
+    ]);
+  });
+
+  it("U-LLM-18 a failed exchange is an LLM failure, not a programmer error, and leaks nothing", async () => {
+    let lines = "";
+    const stream = new Writable({
+      write(chunk, _e, cb) {
+        lines += String(chunk);
+        cb();
+      },
+    });
+    const log = createLogger({ logLevel: "info" }, stream);
+    const cases: [string, () => Response | Promise<Response>, string][] = [
+      ["401", status(401), "auth"],
+      ["400", status(400), "auth"],
+      ["403", status(403), "auth"],
+      ["429", status(429), "rate_limited"],
+      ["503", status(503), "unavailable"],
+      [
+        "network",
+        () => {
+          throw new TypeError("fetch failed");
+        },
+        "unavailable",
+      ],
+      ["no access_token", ok({ token_type: "Bearer", expires_in: 60 }), "auth"],
+    ];
+    for (const [name, response, failure] of cases) {
+      const f = fakeFetch([response, ok()]);
+      const r = await fedClient(f.fn, { log }).complete(req());
+      expect(r, name).toMatchObject({ ok: false, failure });
+      expect(
+        f.seen.some((s) => s.url.endsWith("/v1/messages")),
+        name,
+      ).toBe(false);
+    }
+
+    // An unreadable or empty token file never reaches the network.
+    for (const content of [null, "  \n"]) {
+      if (content === null) await rm(tokenFile);
+      else await writeFile(tokenFile, content);
+      const f = fakeFetch([exchanged("sk-ant-oat01-X"), ok()]);
+      expect(await fedClient(f.fn, { log }).complete(req())).toMatchObject({
+        ok: false,
+        failure: "auth",
+      });
+      expect(f.seen).toHaveLength(0);
+    }
+
+    expect(lines).toContain('"name":"FederationError"');
+    expect(lines).not.toContain("SECRET_ERROR_BODY");
+    expect(lines).not.toContain("eyJhbGciOiJSUzI1NiJ9");
+    expect(lines).not.toContain(tokenFile);
+  });
+
+  it("U-LLM-19 the client log names the rule and the host, never the token, its path or the other IDs", async () => {
+    let lines = "";
+    const stream = new Writable({
+      write(chunk, _e, cb) {
+        lines += String(chunk);
+        cb();
+      },
+    });
+    const log = createLogger({ logLevel: "info" }, stream);
+    const llm = createLlmClient(
+      testConfig({
+        ANTHROPIC_FEDERATION_RULE_ID: RULE,
+        ANTHROPIC_ORGANIZATION_ID: ORG,
+        ANTHROPIC_SERVICE_ACCOUNT_ID: SVAC,
+        ANTHROPIC_WORKSPACE_ID: WORKSPACE,
+        ANTHROPIC_IDENTITY_TOKEN_FILE: tokenFile,
+      }),
+      log,
+    );
+    expect(llm.serverRefusalFallback?.("claude-sonnet-5-5")).toBe(true);
+    expect(lines).toContain(`"federationRuleId":"${RULE}"`);
+    expect(lines).toContain('"auth":"federation"');
+    expect(lines).toContain('"host":"default"');
+    for (const v of [ORG, SVAC, WORKSPACE, tokenFile]) expect(lines).not.toContain(v);
+
+    // Redaction covers the federation settings wherever a config object is logged.
+    lines = "";
+    log.info(
+      {
+        config: testConfig({
+          ANTHROPIC_FEDERATION_RULE_ID: RULE,
+          ANTHROPIC_ORGANIZATION_ID: ORG,
+          ANTHROPIC_SERVICE_ACCOUNT_ID: SVAC,
+          ANTHROPIC_IDENTITY_TOKEN_FILE: tokenFile,
+        }),
+      },
+      "x",
+    );
+    for (const v of [ORG, SVAC, tokenFile]) expect(lines).not.toContain(v);
   });
 });
 

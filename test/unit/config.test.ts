@@ -242,6 +242,79 @@ describe("config", () => {
       expect(msg.toLowerCase()).not.toContain("secretvalue");
     }
   });
+  it("U-CFG-34 workload identity federation: all-or-nothing, one way to authenticate, names only", () => {
+    const fed = {
+      ANTHROPIC_FEDERATION_RULE_ID: "fdrl_01RULECANARY",
+      ANTHROPIC_ORGANIZATION_ID: "00000000-0000-4000-8000-00000000cafe",
+      ANTHROPIC_SERVICE_ACCOUNT_ID: "svac_01SVACCANARY",
+      ANTHROPIC_IDENTITY_TOKEN_FILE: "/var/run/secrets/PATHCANARY/token",
+    };
+    expect(loadConfig(valid).anthropicFederation).toBeUndefined();
+    expect(loadConfig({ ...valid, ...fed }).anthropicFederation).toEqual({
+      ruleId: "fdrl_01RULECANARY",
+      organizationId: "00000000-0000-4000-8000-00000000cafe",
+      serviceAccountId: "svac_01SVACCANARY",
+      workspaceId: undefined,
+      identityTokenFile: "/var/run/secrets/PATHCANARY/token",
+    });
+    expect(
+      loadConfig({ ...valid, ...fed, ANTHROPIC_WORKSPACE_ID: "wrkspc_01W" }).anthropicFederation
+        ?.workspaceId,
+    ).toBe("wrkspc_01W");
+    // Loopback http is fine for a local proxy; empty values count as unset.
+    expect(
+      loadConfig({ ...valid, ...fed, ANTHROPIC_BASE_URL: "http://localhost:8080" })
+        .anthropicFederation,
+    ).toBeDefined();
+    expect(loadConfig({ ...valid, ANTHROPIC_FEDERATION_RULE_ID: " " }).anthropicFederation).toBe(
+      undefined,
+    );
+
+    const canaries = ["RULECANARY", "00000000cafe", "SVACCANARY", "PATHCANARY", "KEYCANARY"];
+    const noLeak = (msg: string) => {
+      for (const c of canaries) expect(msg).not.toContain(c);
+    };
+
+    for (const missing of Object.keys(fed)) {
+      const partial: Record<string, string> = { ...valid, ...fed };
+      delete partial[missing];
+      const msg = errorOf(partial).message;
+      expect(msg, missing).toContain(`${missing}: federation needs all of`);
+      noLeak(msg);
+    }
+    const onlyWorkspace = errorOf({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_01W" }).message;
+    expect(onlyWorkspace).toContain("ANTHROPIC_FEDERATION_RULE_ID / ANTHROPIC_ORGANIZATION_ID");
+
+    for (const other of [
+      { ANTHROPIC_API_KEY: "sk-ant-KEYCANARY" },
+      { ANTHROPIC_AUTH_TOKEN: "KEYCANARY-token" },
+    ]) {
+      const msg = errorOf({ ...valid, ...fed, ...other }).message;
+      expect(msg).toContain("ANTHROPIC_FEDERATION_*: set at most one way to authenticate");
+      expect(msg).toContain(Object.keys(other)[0]);
+      noLeak(msg);
+    }
+
+    const bad: [string, string][] = [
+      ["ANTHROPIC_FEDERATION_RULE_ID", "rule-RULECANARY"],
+      ["ANTHROPIC_ORGANIZATION_ID", "org-00000000cafe"],
+      ["ANTHROPIC_SERVICE_ACCOUNT_ID", "fdrl_SVACCANARY"],
+      ["ANTHROPIC_WORKSPACE_ID", "ws-SVACCANARY"],
+      ["ANTHROPIC_IDENTITY_TOKEN_FILE", "relative/PATHCANARY"],
+    ];
+    for (const [name, value] of bad) {
+      const msg = errorOf({ ...valid, ...fed, [name]: value }).message;
+      expect(msg, name).toContain(`${name}: must be`);
+      noLeak(msg);
+    }
+    const cleartext = errorOf({
+      ...valid,
+      ...fed,
+      ANTHROPIC_BASE_URL: "http://proxy.example.test",
+    }).message;
+    expect(cleartext).toContain("ANTHROPIC_BASE_URL: must be https with federation");
+    noLeak(cleartext);
+  });
   it("U-CFG-30 an invalid env glob names its position and the reason, never the value", () => {
     const msg = errorOf({ ...valid, GRAFT_INTENT_SENSITIVE_PATHS: "a/**,/**.pem" }).message;
     expect(msg).toContain("GRAFT_INTENT_SENSITIVE_PATHS: glob 2 is invalid");

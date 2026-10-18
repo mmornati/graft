@@ -25,7 +25,7 @@ import { buildReport, scenarioFails, writeReport } from "./report.js";
 import type { InvariantResult, ScenarioResult, SkipReason } from "./report-schema.js";
 import type { PlanContext, ScenarioDef } from "./scenarios/common.js";
 import { selectScenarios } from "./scenarios/index.js";
-import { describeError, SecretRegistry, safeIo } from "./secrets.js";
+import { addIdentityToken, describeError, SecretRegistry, safeIo } from "./secrets.js";
 import { newSentinels } from "./sentinels.js";
 import { loadState, newRunId, type RunState, runDirOf, saveState } from "./state.js";
 import type { E2eDeps, IoLike, RunCtx, RunOptions } from "./types.js";
@@ -586,6 +586,7 @@ async function runOffline(deps: E2eDeps, rawIo: IoLike, opts: RunOptions): Promi
     )
       secrets.add(v);
   }
+  await addIdentityToken(secrets, deps.env.ANTHROPIC_IDENTITY_TOKEN_FILE);
   const io = safeIo(rawIo, secrets);
   const random = deps.random ?? ((n: number) => new Uint8Array(randomBytes(n)));
   const id = newRunId(deps.now(), random);

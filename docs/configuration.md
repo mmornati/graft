@@ -27,9 +27,14 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_AGENT_LOGINS` | empty | Comma-separated GitHub logins that always count as agent accounts (letters, digits, `-`, optional `[bot]`; lowercased). Also excluded from gate votes. |
 | `GRAFT_AGENT_COAUTHOR_EMAILS` | `noreply@anthropic.com` | Comma-separated `Co-authored-by` emails that mark a commit as agent-written (default: Claude Code's). |
 | `GITHUB_APP_SLUG` | unset | The App's slug. Enables the `<slug>[bot]` fallback for recognising Graft's own PR comment when `performed_via_github_app` is missing (decision D13). |
-| `ANTHROPIC_API_KEY` | unset | Sent as `x-api-key`. Without it (or `ANTHROPIC_AUTH_TOKEN`) the service still runs and every card shows as unavailable with the rule-based risk floor. Never commit a real key. |
-| `ANTHROPIC_AUTH_TOKEN` | unset | Sent as `Authorization: Bearer`, for gateways that expect a bearer token (OpenRouter, Vercel AI Gateway, Bedrock Mantle). Set at most one of this and `ANTHROPIC_API_KEY`. |
-| `ANTHROPIC_BASE_URL` | unset (the Claude API) | An http(s) URL of any service that speaks the Anthropic Messages API, for example `https://openrouter.ai/api`. Diffs go to that service: check its data retention first. Only the host is logged. |
+| `ANTHROPIC_API_KEY` | unset | Sent as `x-api-key`. Without a credential (this, `ANTHROPIC_AUTH_TOKEN` or federation) the service still runs and every card shows as unavailable with the rule-based risk floor. Never commit a real key. |
+| `ANTHROPIC_AUTH_TOKEN` | unset | Sent as `Authorization: Bearer`, for gateways that expect a bearer token (OpenRouter, Vercel AI Gateway, Bedrock Mantle). Set at most one way to authenticate: the key, this token or federation. |
+| `ANTHROPIC_FEDERATION_RULE_ID` | unset | Workload Identity Federation: the federation rule (`fdrl_...`). Federation needs this, `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_IDENTITY_TOKEN_FILE`, all or none, and no key or token. The only federation value that is logged. See [Deploying with federation](#deploying-with-federation). |
+| `ANTHROPIC_ORGANIZATION_ID` | unset | Federation: the organization UUID (Claude Console, Settings, Organization). |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | unset | Federation: the service account (`svac_...`) the minted token acts as. |
+| `ANTHROPIC_WORKSPACE_ID` | unset | Federation, optional: the workspace (`wrkspc_...`) to scope the token to. Required when the rule is enabled for more than one workspace. |
+| `ANTHROPIC_IDENTITY_TOKEN_FILE` | unset | Federation: absolute path to the OIDC JWT your platform writes (for example a projected Kubernetes token). Read on every exchange, never at startup, and never logged. |
+| `ANTHROPIC_BASE_URL` | unset (the Claude API) | An http(s) URL of any service that speaks the Anthropic Messages API, for example `https://openrouter.ai/api`. Diffs go to that service: check its data retention first. Only the host is logged. With federation the token exchange goes to the same host, so it must be https (or loopback). |
 | `GRAFT_LLM_MODEL_FAST` | `claude-haiku-5-5` | First-pass writer when the rule-based floor is `trivial`. A Claude model ID, optionally with a gateway's vendor prefix or version suffix (`anthropic/claude-haiku-5.5`, `us.anthropic.claude-haiku-5-5-v1:0`). |
 | `GRAFT_LLM_MODEL_STRONG` | `claude-sonnet-5-5` | Writer for everything else, and always the verifier. Same pattern. |
 | `GRAFT_LLM_TIMEOUT_MS` | `120000` | Per-call timeout, 5,000 to 600,000 ms. |
@@ -42,6 +47,15 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_INCIDENT_LABEL` | `incident` | Label that marks a revert or fix PR as an incident, or `off`. 1 to 50 characters of `[A-Za-z0-9 ._:/-]`. |
 | `GRAFT_METRICS_ROLLUP_CRON` | `15 2 * * *` | Cron for the daily metrics rollup (recomputes the last 7 UTC days), or `off`. |
 | `GRAFT_METRICS_EXCLUDED_AUTHORS` | `dependabot[bot],renovate[bot]` | Logins left out of the baseline, the rollup PR counts and the gate coverage. |
+
+## Deploying with federation
+
+Workload Identity Federation lets Graft authenticate to the Claude API without a long-lived key: the platform it runs on issues an OIDC JWT, Graft exchanges it at `POST /v1/oauth/token` for a token that lasts as long as the federation rule says (one hour by default), and the SDK exchanges again shortly before it expires or after a 401. Set it up in the Claude Console (an issuer, a service account and a federation rule; see Anthropic's [Workload Identity Federation guide](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation)), then set the four required variables above.
+
+- **The host must issue OIDC tokens.** Kubernetes (projected service account tokens, including GKE and EKS), Google Cloud Run, Azure (managed identity or workload identity), GitHub Actions and Fly.io (custom OIDC tokens) do. The token has to reach Graft as a file: a projected volume on Kubernetes, or a small sidecar or startup script that fetches it from the metadata service and rewrites the file on other platforms. Render and similar hosts that issue no OIDC token cannot use federation: keep `ANTHROPIC_API_KEY` there.
+- **Tokens are single use.** An assertion with a `jti` claim can be exchanged only once, so the file must hold a fresh token before every exchange. Kubernetes rotates projected tokens on its own (set `expirationSeconds` well below the rule's maximum lifetime); a script that writes the file must refresh it more often than the minted token expires. A replayed token fails with a 401 and shows as `jti_reused` in the Console's authentication history; Graft reports the call as `auth`.
+- **Remove the old key.** Graft refuses to start when `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set alongside federation, rather than letting the key silently win. Unset the variable (do not leave it empty in a secret store that other tools also read: the SDK and Claude Code treat an empty key as set).
+- **Failures.** A rejected token, rule or ID and an unreadable token file map to `auth`; an unreachable token endpoint or a 5xx to `unavailable`. The card shows "unavailable" either way; the log line carries the HTTP status, never the token or the response body.
 
 ## Tool and shell-only variables
 
