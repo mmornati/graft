@@ -8,7 +8,11 @@ import { type RawBuilder, sql } from "kysely";
 import type { Db } from "../db/client.js";
 import type { TABLE_NAMES } from "../db/schema.js";
 
-export type PurgedTable = Exclude<(typeof TABLE_NAMES)[number], "pilot_purges">;
+/**
+ * `pilot_purges` records the purge itself. `service_state` holds server facts (the ceiling the
+ * worker last published) and no installation data, so there is nothing of an installation in it.
+ */
+export type PurgedTable = Exclude<(typeof TABLE_NAMES)[number], "pilot_purges" | "service_state">;
 
 const repos = (i: number) => sql`(select id from repositories where installation_id = ${i})`;
 const changes = (i: number) =>
@@ -17,7 +21,8 @@ const changes = (i: number) =>
 /**
  * Per table, the rows that belong to an installation. This map is the purge's verification: its
  * type (and I-PURGE-2) require an entry for every table in `TABLE_NAMES` except `pilot_purges`
- * (no personal data; it records the purge), so a future table without a purge path fails.
+ * (no personal data; it records the purge) and `service_state` (no installation data), so a future
+ * table without a purge path fails.
  */
 export const OWNED_ROWS: Record<PurgedTable, (installationId: number) => RawBuilder<unknown>> = {
   installations: (i) => sql`select count(*) as n from installations where id = ${i}`,
@@ -50,6 +55,8 @@ export const OWNED_ROWS: Record<PurgedTable, (installationId: number) => RawBuil
   incidents: (i) => sql`select count(*) as n from incidents where repository_id in ${repos(i)}`,
   metrics_daily: (i) =>
     sql`select count(*) as n from metrics_daily where repository_id in ${repos(i)}`,
+  mode_changes: (i) =>
+    sql`select count(*) as n from mode_changes where repository_id in ${repos(i)}`,
 };
 
 export class PurgeRefused extends Error {

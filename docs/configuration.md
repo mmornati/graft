@@ -47,6 +47,9 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_INCIDENT_LABEL` | `incident` | Label that marks a revert or fix PR as an incident, or `off`. 1 to 50 characters of `[A-Za-z0-9 ._:/-]`. |
 | `GRAFT_METRICS_ROLLUP_CRON` | `15 2 * * *` | Cron for the daily metrics rollup (recomputes the last 7 UTC days), or `off`. |
 | `GRAFT_METRICS_EXCLUDED_AUTHORS` | `dependabot[bot],renovate[bot]` | Logins left out of the baseline, the rollup PR counts and the gate coverage. |
+| `GRAFT_MODE_CEILING` | `report` | `report` or `enforce`. The most any repository can be set to; `report` makes every repository report/off whatever `graft mode set` recorded. Read by the worker at start; see [Modes](features/modes.md). Leave it at `report` until the Phase 1 rollout runbook says otherwise. |
+| `GRAFT_MODE_APPLY_CRON` | `* * * * *` | Cron for the worker job that republishes the policy check of a repository after `graft mode set`, or `off`. |
+| `GRAFT_PERMISSIONS_REFRESH_CRON` | `30 3 * * *` | Cron for the daily refresh of each installation's permissions from the GitHub API, or `off`. |
 
 ## Deploying with federation
 

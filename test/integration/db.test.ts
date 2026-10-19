@@ -43,10 +43,10 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, all twenty tables exist", async () => {
+  it("I-DB-1 after migration, all twenty-two tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(20);
+    expect(TABLE_NAMES).toHaveLength(22);
     expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
   });
@@ -64,6 +64,7 @@ describe("database", () => {
       expect(rolled).toContain("0005_policy");
       expect(rolled).toContain("0006_pilot");
       expect(rolled).toContain("0007_vote_eligibility");
+      expect(rolled).toContain("0008_modes");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -80,6 +81,7 @@ describe("database", () => {
         "0005_policy",
         "0006_pilot",
         "0007_vote_eligibility",
+        "0008_modes",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -347,6 +349,22 @@ describe("database", () => {
       .values({ installation_id: 1, rows_deleted: JSON.stringify({ changes: 1 }), purged_at: now })
       .execute();
 
+    await db
+      .insertInto("mode_changes")
+      .values({
+        repository_id: 2,
+        key: "policy_mode",
+        from_value: "report",
+        to_value: "enforce",
+        actor: "op",
+        reason: "test",
+      })
+      .execute();
+    await db
+      .insertInto("service_state")
+      .values({ key: "mode_ceiling", value: "report", updated_at: now })
+      .execute();
+
     for (const t of TABLE_NAMES) {
       const rows = await db.selectFrom(t).selectAll().execute();
       expect(rows, t).toHaveLength(t === "provenance" ? 2 : 1);
@@ -498,6 +516,7 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0007_vote_eligibility",
       );
@@ -533,6 +552,7 @@ describe("database", () => {
         "0005_policy",
         "0006_pilot",
         "0007_vote_eligibility",
+        "0008_modes",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -544,6 +564,7 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0007_vote_eligibility",
       );
@@ -579,6 +600,7 @@ describe("database", () => {
         "0005_policy",
         "0006_pilot",
         "0007_vote_eligibility",
+        "0008_modes",
       ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
@@ -629,6 +651,7 @@ describe("database", () => {
       );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       // up: 'pending' is accepted, anything else is not
       await expect(display("pending")).resolves.toBeDefined();
       await expect(display("ok")).resolves.toBeDefined();
@@ -694,6 +717,7 @@ describe("database", () => {
 
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0007_vote_eligibility",
       );
@@ -728,6 +752,7 @@ describe("database", () => {
         "0005_policy",
         "0006_pilot",
         "0007_vote_eligibility",
+        "0008_modes",
       ]);
     }
     expect(await policyColumns()).toEqual(upColumns);
@@ -755,6 +780,7 @@ describe("database", () => {
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0007_vote_eligibility",
       );
@@ -770,7 +796,11 @@ describe("database", () => {
       const left = await sql<{ tokens: number }>`select tokens from intent_spend`.execute(db);
       expect(left.rows.map((r) => r.tokens)).toEqual([1500]);
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0006_pilot", "0007_vote_eligibility"]);
+      expect(await migrateToLatest(db)).toEqual([
+        "0006_pilot",
+        "0007_vote_eligibility",
+        "0008_modes",
+      ]);
     }
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const rows = await sql<{ tokens: number; cost_usd: string | null }>`
@@ -807,6 +837,7 @@ describe("database", () => {
       .executeTakeFirstOrThrow();
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       const down = await migrator.migrateDown();
       expect(down.error).toBeUndefined();
       expect(down.results?.[0]?.migrationName).toBe("0007_vote_eligibility");
@@ -818,7 +849,7 @@ describe("database", () => {
       await sql`insert into pr_reviewers (change_id, user_id, reason, first_seen_at)
         values (${change.id}, 7, 'reviewed', now())`.execute(db);
     } finally {
-      expect(await migrateToLatest(db)).toEqual(["0007_vote_eligibility"]);
+      expect(await migrateToLatest(db)).toEqual(["0007_vote_eligibility", "0008_modes"]);
     }
     const rows = await sql<{ user_id: number; verified: boolean }>`
       select user_id, verified from pr_reviewers`.execute(db);

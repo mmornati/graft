@@ -1,0 +1,97 @@
+/**
+ * Modes (Phase 1 step 1, spec §6). Pure: no database, no GitHub, no clock. The effective mode of a
+ * repository is the lower of what the operator asked for and the server ceiling, lowered further
+ * whenever the installation lacks a permission the mode needs. Every rule fails toward report/off.
+ * Nothing here is read from a repository: `graft.yaml`, labels and PR text cannot change a mode.
+ */
+
+export type Mode = "report" | "enforce";
+export type Switch = "off" | "on";
+export type ModeKey = "policy_mode" | "guard_mode" | "mcp_write";
+export type PermissionLevel = "read" | "write" | "admin";
+
+export type ModeReason =
+  /** effective = requested */
+  | "repository"
+  /** lowered by GRAFT_MODE_CEILING */
+  | "ceiling"
+  /** a needed permission is absent or too low */
+  | "permission_missing"
+  /** permissions never read */
+  | "permissions_unknown"
+  | "installation_inactive"
+  | "repository_removed";
+
+export interface ModeState<V> {
+  requested: V;
+  effective: V;
+  reason: ModeReason;
+  /** `"contents:write"`: the first permission that is missing, for `permission_missing`. */
+  missing?: string;
+}
+
+export interface EffectiveModes {
+  ceiling: Mode;
+  policy: ModeState<Mode>;
+  guard: ModeState<Mode>;
+  mcpWrite: ModeState<Switch>;
+}
+
+/** The permissions each mode needs on top of Phase 0's. `policy_mode` needs none in step 1. */
+export const PERMISSION_NEEDS = {
+  policy_mode: [],
+  guard_mode: [["contents", "write"]],
+  mcp_write: [["pull_requests", "write"]],
+} as const satisfies Record<ModeKey, readonly (readonly [string, PermissionLevel])[]>;
+
+const LEVEL: Record<PermissionLevel, number> = { read: 1, write: 2, admin: 3 };
+
+/** The lower of two values; both orders are `low < high` (report < enforce, off < on). */
+export function lowest<V extends string>(order: readonly [V, V], a: V, b: V): V {
+  return order.indexOf(a) <= order.indexOf(b) ? a : b;
+}
+
+export interface EffectiveModesInput {
+  ceiling: Mode;
+  requested: { policy_mode: Mode; guard_mode: Mode; mcp_write: Switch };
+  /** null: never read. */
+  permissions: Readonly<Record<string, PermissionLevel>> | null;
+  installationActive: boolean;
+  repositoryActive: boolean;
+}
+
+function state<V extends string>(
+  key: ModeKey,
+  floor: V,
+  requested: V,
+  i: EffectiveModesInput,
+): ModeState<V> {
+  const lowered = (reason: ModeReason, missing?: string): ModeState<V> => ({
+    requested,
+    effective: floor,
+    reason,
+    ...(missing === undefined ? {} : { missing }),
+  });
+  if (!i.installationActive) return lowered("installation_inactive");
+  if (!i.repositoryActive) return lowered("repository_removed");
+  if (requested === floor) return { requested, effective: floor, reason: "repository" };
+  if (i.ceiling === "report") return lowered("ceiling");
+  for (const [name, level] of PERMISSION_NEEDS[key]) {
+    if (i.permissions === null) return lowered("permissions_unknown");
+    const have = i.permissions[name];
+    if (have === undefined || LEVEL[have] < LEVEL[level]) {
+      return lowered("permission_missing", `${name}:${level}`);
+    }
+  }
+  return { requested, effective: requested, reason: "repository" };
+}
+
+export function effectiveModes(input: EffectiveModesInput): EffectiveModes {
+  const r = input.requested;
+  return {
+    ceiling: input.ceiling,
+    policy: state("policy_mode", "report", r.policy_mode, input),
+    guard: state("guard_mode", "report", r.guard_mode, input),
+    mcpWrite: state("mcp_write", "off", r.mcp_write, input),
+  };
+}
