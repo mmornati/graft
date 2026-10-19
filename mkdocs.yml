@@ -129,6 +129,7 @@ nav:
     - graft.yaml reference: graft-yaml.md
     - Evaluation set: features/evaluation.md
     - Pilots and the gate: features/pilots-and-gate.md
+    - Modes: features/modes.md
   - Operate:
     - Live e2e scenarios: e2e.md
     - E2E runbook: e2e/runbook.md
@@ -154,3 +155,4 @@ nav:
     - Phase 1:
       - phase-1/README.md
       - "Step 1: Modes": phase-1/step-1-modes.md
+      - Human to-do: phase-1/HUMAN-TODO.md
