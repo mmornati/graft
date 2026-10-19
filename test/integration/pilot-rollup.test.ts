@@ -294,6 +294,9 @@ const EXPECTED: MetricsCounts = {
   deliveries: 4,
 };
 
+// This queue registers the feedback and rollup jobs only; the modes crons have their own test.
+const OTHER_CRONS_OFF = { GRAFT_MODE_APPLY_CRON: "off", GRAFT_PERMISSIONS_REFRESH_CRON: "off" };
+
 describe("daily rollup", () => {
   it("I-ROLL-1 every counter of a seeded day equals a hand count (latest verdict at the merge head, excluded authors left out)", async () => {
     await seedDay();
@@ -371,23 +374,34 @@ describe("daily rollup", () => {
     });
     await queue.start();
     try {
-      await applyCronSchedules(queue, testConfig());
+      await applyCronSchedules(queue, testConfig(OTHER_CRONS_OFF));
       const rollup = await queue.boss.getSchedules(metricsRollupJob.name);
       expect(rollup).toHaveLength(1);
       expect(rollup[0]?.cron).toBe("15 2 * * *");
       expect(await queue.boss.getSchedules(feedbackSweepJob.name)).toHaveLength(1);
 
-      await applyCronSchedules(queue, testConfig({ GRAFT_METRICS_ROLLUP_CRON: "30 3 * * *" }));
+      await applyCronSchedules(
+        queue,
+        testConfig({ ...OTHER_CRONS_OFF, GRAFT_METRICS_ROLLUP_CRON: "30 3 * * *" }),
+      );
       expect((await queue.boss.getSchedules(metricsRollupJob.name))[0]?.cron).toBe("30 3 * * *");
 
-      await applyCronSchedules(queue, testConfig({ GRAFT_METRICS_ROLLUP_CRON: "off" }));
+      await applyCronSchedules(
+        queue,
+        testConfig({ ...OTHER_CRONS_OFF, GRAFT_METRICS_ROLLUP_CRON: "off" }),
+      );
       expect(await queue.boss.getSchedules(metricsRollupJob.name)).toEqual([]);
       // The feedback cron is independent of the rollup cron.
       expect(await queue.boss.getSchedules(feedbackSweepJob.name)).toHaveLength(1);
     } finally {
       // The schedules persist in the database: a later file's supervising worker would otherwise
       // send the sweep for a missed occurrence and call GitHub in the middle of its test.
-      await applyCronSchedules(queue, { feedbackPollCron: null, metricsRollupCron: null });
+      await applyCronSchedules(queue, {
+        feedbackPollCron: null,
+        metricsRollupCron: null,
+        modeApplyCron: null,
+        permissionsRefreshCron: null,
+      });
       await queue.stop();
       await sql`delete from pgboss.job where name in (${metricsRollupJob.name}, ${feedbackSweepJob.name})`.execute(
         t.db,

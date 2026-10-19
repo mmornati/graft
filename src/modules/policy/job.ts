@@ -22,6 +22,7 @@ import {
   getActiveRepository,
 } from "../installations/index.js";
 import { latestPublishedCard } from "../intent/index.js";
+import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
 import { buildFacts, listChangedPaths, listReviews } from "./facts.js";
 import {
@@ -49,6 +50,7 @@ export const POLICY_TRIGGERS = [
   "intent",
   "provenance",
   "base_push",
+  "mode",
 ] as const;
 export const FANOUT_MAX = 100;
 const FANOUT_BATCH = 10;
@@ -68,16 +70,40 @@ export const evaluateSchema = z.object({
 });
 export type EvaluateData = z.infer<typeof evaluateSchema>;
 
-export const fanoutSchema = z.object({
+const fanoutBase = {
   installationId: z.number().int().positive(),
   repositoryId: z.number().int().positive(),
   owner: z.string().regex(NAME_PART),
   repo: z.string().regex(NAME_PART),
-  branch: z.string().min(1).max(255),
-  afterSha: z.string().regex(/^[0-9a-f]{40}$/),
-  deliveryId: z.string().max(100),
-});
+};
+
+/**
+ * `branch`: the open PRs of one base branch after a push (the Phase 0 path). `repository`: every
+ * open PR of the repository after a mode change (a `mode_changes` row) or a ceiling change.
+ */
+export const fanoutSchema = z.preprocess(
+  // Jobs queued before Phase 1 have no `scope`; they are branch fan-outs.
+  (v) => (typeof v === "object" && v !== null && !("scope" in v) ? { ...v, scope: "branch" } : v),
+  z.discriminatedUnion("scope", [
+    z.object({
+      scope: z.literal("branch"),
+      ...fanoutBase,
+      branch: z.string().min(1).max(255),
+      afterSha: z.string().regex(/^[0-9a-f]{40}$/),
+      deliveryId: z.string().max(100),
+    }),
+    z.object({
+      scope: z.literal("repository"),
+      ...fanoutBase,
+      reason: z.enum(["mode_change", "ceiling_change"]),
+      changeId: z.uuid().nullable(),
+      /** Epoch ms of the ceiling change, so that a later change back to a value is not deduplicated. */
+      ceilingAt: z.number().int().nonnegative().nullable(),
+    }),
+  ]),
+);
 export type FanoutData = z.infer<typeof fanoutSchema>;
+export type RepositoryFanoutData = Extract<FanoutData, { scope: "repository" }>;
 
 export type PolicyOutcomeResult = "published" | "unchanged" | "stale" | "closed" | "skipped";
 
@@ -124,6 +150,9 @@ export async function evaluatePolicyJobRun(
   if ((await ensureRepository(ctx.db, data.installationId, pull.base.repo, now)) === "removed") {
     return done("skipped", { reason: "repository removed" });
   }
+  // Read once, outside the lock. It decides only the mode line and the facts hash (D8, D9): the
+  // conclusion below is never derived from it.
+  const modes = await getEffectiveModes(ctx.db, data.repositoryId, config);
   const { change, applied } = await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now);
   if (!applied) return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
   if (pull.state === "closed") return done("closed", { changeId: change.id });
@@ -168,6 +197,7 @@ export async function evaluatePolicyJobRun(
     errors: loaded.status === "invalid" ? loaded.errors : [],
     warnings: loaded.status === "ok" ? loaded.warnings : [],
     addsPolicyFile: false,
+    mode: { effective: modes.policy.effective },
   };
   try {
     if (loaded.status === "ok") {
@@ -233,6 +263,8 @@ export async function evaluatePolicyJobRun(
     headSha,
     baseRef,
     commitSha: view.commitSha,
+    // Without this a mode change would leave the hash equal and nothing would be republished (D8).
+    policyMode: modes.policy.effective,
     // What reviewers read depends on more than the verdict (author name, labels, size ...).
     rendered: { title, summary, details },
   });
@@ -273,6 +305,7 @@ export async function evaluatePolicyJobRun(
       required: storedRequired(view),
       approvals: view.approvals ? { ...view.approvals } : {},
       errors: view.errors.map(({ key: _key, ...rest }) => rest),
+      policyMode: modes.policy.effective,
       factsHash,
       factsReadAt,
       checkRunId,
@@ -298,7 +331,7 @@ export async function evaluatePolicyJobRun(
         conclusion: "neutral" as const,
         external_id: change.id,
         completed_at: stamp.toISOString(),
-        output: { title, summary, ...(details !== null ? { text: details } : {}) },
+        output: { title, summary, text: details },
       };
       let checkRunId = await checkRunIdForHead(tx, change.id, headSha);
       if (checkRunId === null) {
@@ -416,12 +449,14 @@ export async function fanoutPolicy(data: FanoutData, ctx: JobContext): Promise<n
     ctx.log.info({ outcome: "skipped", reason: "repository removed" }, "policy fanout done");
     return 0;
   }
-  const rows = await ctx.db
+  let query = ctx.db
     .selectFrom("changes")
     .select(["pr_number"])
     .where("repository_id", "=", data.repositoryId)
-    .where("state", "=", "open")
-    .where("base_ref", "=", data.branch)
+    .where("state", "=", "open");
+  // A push concerns one base branch; a mode change concerns every open PR.
+  if (data.scope === "branch") query = query.where("base_ref", "=", data.branch);
+  const rows = await query
     .orderBy("pr_updated_at", (ob) => ob.desc().nullsLast())
     .orderBy("pr_number", "desc")
     .limit(FANOUT_MAX + 1)
@@ -431,24 +466,31 @@ export async function fanoutPolicy(data: FanoutData, ctx: JobContext): Promise<n
   }
   const chosen = rows.slice(0, FANOUT_MAX);
   for (const [i, row] of chosen.entries()) {
+    const common = {
+      installationId: data.installationId,
+      repositoryId: data.repositoryId,
+      owner: data.owner,
+      repo: data.repo,
+      prNumber: row.pr_number,
+    };
     await ctx.queue.send(
       policyEvaluateJob,
+      data.scope === "branch"
+        ? { ...common, trigger: "base_push", deliveryId: data.deliveryId }
+        : { ...common, trigger: "mode" },
       {
-        installationId: data.installationId,
-        repositoryId: data.repositoryId,
-        owner: data.owner,
-        repo: data.repo,
-        prNumber: row.pr_number,
-        trigger: "base_push",
-        deliveryId: data.deliveryId,
-      },
-      {
-        singletonKey: `policy:base:${data.repositoryId}:${row.pr_number}:${data.afterSha}`,
+        singletonKey:
+          data.scope === "branch"
+            ? `policy:base:${data.repositoryId}:${row.pr_number}:${data.afterSha}`
+            : `policy:mode:${data.repositoryId}:${row.pr_number}:${data.changeId ?? `ceiling-${data.ceilingAt}`}`,
         startAfterSeconds: Math.floor(i / FANOUT_BATCH) * FANOUT_STEP_SECONDS,
       },
     );
   }
-  ctx.log.info({ outcome: "enqueued", count: chosen.length }, "policy fanout done");
+  ctx.log.info(
+    { outcome: "enqueued", count: chosen.length, scope: data.scope },
+    "policy fanout done",
+  );
   return chosen.length;
 }
 

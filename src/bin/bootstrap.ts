@@ -10,6 +10,7 @@ import { createDb } from "../db/client.js";
 import { pendingMigrations } from "../db/migrator.js";
 import { createGitHubClientFactory } from "../github/client-factory.js";
 import { createLlmClient } from "../llm/index.js";
+import { mutationGate } from "../modules/modes/index.js";
 import { nonAsciiCodePoints } from "../policy/globs.js";
 import { createPgBossQueue, type PgBossJobQueue } from "../queue/queue.js";
 import { loadDotEnv } from "./env.js";
@@ -75,6 +76,13 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
     appId: config.githubAppId,
     privateKey: config.githubAppPrivateKey,
     baseUrl: config.githubApiUrl,
+    // Phase 1 writes read the effective mode from the database at request time (D12).
+    gate: mutationGate(db, config),
+    onRefused: (e) =>
+      log.error(
+        { method: e.method, route: e.route, feature: e.feature, reason: e.refusal },
+        "github write refused by the mutation guard",
+      ),
   });
 
   const llm = createLlmClient(config, log);

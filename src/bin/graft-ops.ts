@@ -1,6 +1,6 @@
 /**
- * The operations half of `pnpm graft` (step 6, T9): `pilot`, `baseline`, `gate`, `incident` and
- * `metrics`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
+ * The operations half of `pnpm graft` (step 6, T9): `pilot`, `baseline`, `gate`, `incident`,
+ * `metrics` and, from Phase 1 step 1, `mode`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
  * running with an empty environment and without `db`, `config` or `modules` (U-CLI-6).
  *
  * Every command loads `.env` and the configuration (a ConfigError prints its message only and
@@ -9,8 +9,10 @@
  * 4 `gate report --check` found insufficient data.
  */
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { sql } from "kysely";
 import { type Config, ConfigError, loadConfig } from "../config/index.js";
 import type { JobContext } from "../core/context.js";
 import { createLogger } from "../core/logger.js";
@@ -26,9 +28,28 @@ import {
   makeGetOnly,
 } from "../github/client-factory.js";
 import { classifyGitHubError } from "../github/errors.js";
+import { refuseAllGate } from "../github/mutation-guard.js";
 import { RateLimitAbort } from "../github/rate-limit.js";
 import { unconfiguredLlm } from "../llm/index.js";
+import type { ModeKey } from "../modes/index.js";
 import { listChangesToPoll, pollReactions } from "../modules/intent/index.js";
+import {
+  notEffectiveNotes,
+  type RepositoryView,
+  renderShow,
+  resolveCeiling,
+  showJson,
+  validActor,
+  validReason,
+  viewRepository,
+} from "../modules/modes/cli.js";
+import {
+  insertModeChanges,
+  listModeChanges,
+  listRepositoryModeRows,
+  type NewModeChange,
+  refreshPermissions,
+} from "../modules/modes/index.js";
 import { rollupRange, syncReviewers } from "../modules/pilot/index.js";
 import {
   type AllowList,
@@ -90,6 +111,8 @@ export const defaultDeps: OpsDeps = {
       appId: config.githubAppId,
       privateKey: config.githubAppPrivateKey,
       baseUrl: config.githubApiUrl,
+      // The ops commands make no Phase 1 write.
+      gate: refuseAllGate,
     }),
   now: () => new Date(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -110,6 +133,11 @@ const USAGE = `usage:
   graft incident add --repo <owner/repo> --pr <n> [--fix-pr <n>] [--occurred-at <ISO>] [--severity 1-4]
   graft incident list --installation <id> [--json]
   graft incident remove --id <uuid>
+  graft mode show (--repo <owner/repo> | --installation <id>) [--json]
+  graft mode set --repo <owner/repo> [--policy report|enforce] [--guard report|enforce]
+                 [--mcp-write off|on] --reason "<text>" [--actor <name>]
+  graft mode history --repo <owner/repo> [--limit <1..200>] [--json]
+  graft mode refresh-permissions --installation <id>
 `;
 
 class UsageError extends Error {
@@ -587,6 +615,186 @@ async function incident(sub: string | undefined, rest: string[], r: Run): Promis
   throw new UsageError();
 }
 
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+function parseRepo(v: string | undefined): string {
+  if (v === undefined || !REPO.test(v)) throw new UsageError("--repo must be owner/repo");
+  return v;
+}
+
+/** The `mode` group (Phase 1 step 1, spec §8). Nothing here enqueues or calls GitHub (D6). */
+async function mode(sub: string | undefined, rest: string[], r: Run): Promise<number> {
+  if (sub === "show") {
+    const v = args(rest, {
+      repo: { type: "string" },
+      installation: { type: "string" },
+      json: { type: "boolean" },
+    });
+    const repo = str(v.repo);
+    const inst = str(v.installation);
+    if ((repo === undefined) === (inst === undefined)) {
+      throw new UsageError("give exactly one of --repo and --installation");
+    }
+    const rows = await listRepositoryModeRows(
+      r.db,
+      repo !== undefined
+        ? { fullName: parseRepo(repo) }
+        : { installationId: parseInstallation(inst) },
+    );
+    if (rows.length === 0) {
+      r.err("unknown or removed repository\n");
+      return 1;
+    }
+    const ceiling = await resolveCeiling(r.db, r.config);
+    const views = [];
+    for (const row of rows) views.push(await viewRepository(r.db, row, ceiling));
+    r.out(v.json ? `${JSON.stringify(showJson(views, ceiling))}\n` : renderShow(views, ceiling));
+    return 0;
+  }
+  if (sub === "set") {
+    const v = args(rest, {
+      repo: { type: "string" },
+      policy: { type: "string" },
+      guard: { type: "string" },
+      "mcp-write": { type: "string" },
+      reason: { type: "string" },
+      actor: { type: "string" },
+    });
+    const repo = parseRepo(str(v.repo));
+    const wanted: { key: ModeKey; value: string }[] = [];
+    const pick = (flag: string, key: ModeKey, allowed: readonly string[]) => {
+      const value = str(v[flag]);
+      if (v[flag] === undefined) return;
+      if (value === undefined || !allowed.includes(value)) {
+        throw new UsageError(`--${flag} must be ${allowed.join(" or ")}`);
+      }
+      wanted.push({ key, value });
+    };
+    pick("policy", "policy_mode", ["report", "enforce"]);
+    pick("guard", "guard_mode", ["report", "enforce"]);
+    pick("mcp-write", "mcp_write", ["off", "on"]);
+    if (wanted.length === 0) {
+      throw new UsageError("give at least one of --policy, --guard and --mcp-write");
+    }
+    const reason = str(v.reason);
+    if (reason === undefined || !validReason(reason)) {
+      throw new UsageError("--reason is required: 1 to 200 printable characters on one line");
+    }
+    const actor = str(v.actor) ?? userInfo().username;
+    if (!validActor(actor)) throw new UsageError("--actor must match ^[A-Za-z0-9._@-]{1,64}$");
+
+    const now = r.deps.now();
+    const changed = await r.db.transaction().execute(async (tx) => {
+      const locked = await tx
+        .selectFrom("repositories")
+        .select(["id", "policy_mode", "guard_mode", "mcp_write"])
+        .where(sql<string>`lower(full_name)`, "=", repo.toLowerCase())
+        .where("removed_at", "is", null)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!locked) return null;
+      const changes: NewModeChange[] = [];
+      for (const w of wanted) {
+        const from = locked[w.key];
+        if (from !== w.value) {
+          changes.push({ repositoryId: locked.id, key: w.key, from, to: w.value, actor, reason });
+        }
+      }
+      if (changes.length > 0) {
+        await insertModeChanges(tx, changes, now);
+        await tx
+          .updateTable("repositories")
+          .set(Object.fromEntries(changes.map((c) => [c.key, c.to])))
+          .where("id", "=", locked.id)
+          .execute();
+      }
+      return { repositoryId: locked.id, count: changes.length };
+    });
+    if (changed === null) {
+      r.err("unknown or removed repository\n");
+      return 1;
+    }
+    if (changed.count === 0) {
+      r.out("no change\n");
+      return 0;
+    }
+    const ceiling = await resolveCeiling(r.db, r.config);
+    const [row] = await listRepositoryModeRows(r.db, { fullName: repo });
+    if (!row) throw new Error("repository vanished");
+    const view: RepositoryView = await viewRepository(r.db, row, ceiling);
+    r.out(renderShow([view], ceiling));
+    for (const note of notEffectiveNotes(
+      view,
+      wanted.map((w) => w.key),
+    ))
+      r.out(`${note}\n`);
+    return 0;
+  }
+  if (sub === "history") {
+    const v = args(rest, {
+      repo: { type: "string" },
+      limit: { type: "string" },
+      json: { type: "boolean" },
+    });
+    const repo = parseRepo(str(v.repo));
+    const limit = parsePositiveInt("--limit", str(v.limit), 20);
+    if (limit > 200) throw new UsageError("--limit must be 1 to 200");
+    const [row] = await listRepositoryModeRows(r.db, { fullName: repo });
+    if (!row) {
+      r.err("unknown or removed repository\n");
+      return 1;
+    }
+    const rows = await listModeChanges(r.db, row.repositoryId, limit);
+    if (v.json) {
+      r.out(
+        `${JSON.stringify(
+          rows.map((x) => ({
+            createdAt: x.created_at.toISOString(),
+            key: x.key,
+            from: x.from_value,
+            to: x.to_value,
+            actor: x.actor,
+            appliedAt: x.applied_at?.toISOString() ?? null,
+            reason: x.reason,
+          })),
+        )}\n`,
+      );
+    } else {
+      for (const x of rows) {
+        r.out(
+          `${x.created_at.toISOString()}  ${x.key}  ${x.from_value} → ${x.to_value}  ${x.actor}  ${x.applied_at === null ? "pending" : "applied"}  ${x.reason}\n`,
+        );
+      }
+    }
+    return 0;
+  }
+  if (sub === "refresh-permissions") {
+    const v = args(rest, { installation: { type: "string" } });
+    const installationId = parseInstallation(str(v.installation));
+    const ctx = cliContext(r.config, r.db, r.deps.github(r.config), r.deps.now);
+    try {
+      const stored = await refreshPermissions({ installationId }, ctx);
+      if (stored === null) {
+        r.err("installation not found on GitHub; nothing stored\n");
+        return 1;
+      }
+      r.out(
+        `permissions: ${
+          Object.entries(stored)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([name, level]) => `${name}:${level}`)
+            .join(" ") || "none"
+        }\n`,
+      );
+      return 0;
+    } catch (e) {
+      if (!(e instanceof PermanentJobError)) throw e;
+      r.err(`${e.message}\n`);
+      return 1;
+    }
+  }
+  throw new UsageError();
+}
+
 export async function main(
   argv: string[],
   io: CliIo,
@@ -595,7 +803,7 @@ export async function main(
   const out = (s: string) => io.out(toTerminalSafe(s));
   const err = (s: string) => io.err(toTerminalSafe(s));
   const [group, sub, ...rest] = argv;
-  if (!["pilot", "baseline", "gate", "incident", "metrics"].includes(group ?? "")) {
+  if (!["pilot", "baseline", "gate", "incident", "metrics", "mode"].includes(group ?? "")) {
     err(USAGE);
     return 2;
   }
@@ -626,6 +834,7 @@ export async function main(
     if (group === "pilot") return await pilot(sub, rest, run);
     if (group === "gate") return await gate(sub, rest, run);
     if (group === "metrics") return await metrics(sub, rest, run);
+    if (group === "mode") return await mode(sub, rest, run);
     return await incident(sub, rest, run);
   } catch (e) {
     if (e instanceof UsageError) {

@@ -94,6 +94,12 @@ describe("pilot doctor", () => {
       login: PILOT_A.login,
       repos: [{ id: PILOT_A.repo, name: "api" }],
     });
+    // Permissions were read an hour ago (Phase 1 step 1), so the permissions check is OK.
+    await t.db
+      .updateTable("installations")
+      .set({ permissions: JSON.stringify({ checks: "write" }), permissions_read_at: ago(HOUR) })
+      .where("id", "=", PILOT_A.id)
+      .execute();
     const head = SHA(1);
     const change = await addChange(t.db, {
       repositoryId: PILOT_A.repo,
@@ -140,7 +146,11 @@ describe("pilot doctor", () => {
     });
     await queue.start();
     try {
-      await applyCronSchedules(queue, testConfig());
+      // The modes crons are covered by the modes tests; this queue registers only two jobs.
+      await applyCronSchedules(
+        queue,
+        testConfig({ GRAFT_MODE_APPLY_CRON: "off", GRAFT_PERMISSIONS_REFRESH_CRON: "off" }),
+      );
       return await fn();
     } finally {
       await queue.stop();
@@ -166,6 +176,8 @@ describe("pilot doctor", () => {
       ["OK", "budget"],
       ["OK", "rollup"],
       ["OK", "crons"],
+      ["OK", "permissions"],
+      ["OK", "modes"],
     ]);
     expect(res.out).toContain("graft-sandbox/api");
     const json = JSON.parse(
@@ -175,7 +187,7 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(10);
+    expect(json.checks).toHaveLength(12);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
   });
 
@@ -235,12 +247,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(10);
+    expect(checks).toHaveLength(12);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(10);
+    expect(JSON.parse(missing.out).checks).toHaveLength(12);
     expect(missing.err).toBe("");
   });
 
@@ -363,6 +375,8 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
     repositoryId: o.repo,
     at: ago(DAY),
   });
+  await sql`insert into mode_changes (repository_id, key, from_value, to_value, actor, reason)
+    values (${o.repo}, 'policy_mode', 'report', 'enforce', 'op', 'seed')`.execute(t.db);
   await addReviewer(t.db, { changeId: change, userId: 70 + o.seq });
   await t.db
     .insertInto("reviewer_check_denials")
@@ -448,6 +462,9 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
     metrics_daily: await n(
       sql`select count(*) as n from metrics_daily where repository_id = ${repo}`,
     ),
+    mode_changes: await n(
+      sql`select count(*) as n from mode_changes where repository_id = ${repo}`,
+    ),
     pgboss_jobs: await n(
       sql`select count(*) as n from pgboss.job where data->>'installationId' = ${String(id)} or data->'payload'->'installation'->>'id' = ${String(id)}`,
     ),
@@ -503,13 +520,14 @@ describe("pilot purge", () => {
     expect(JSON.stringify(purges[0])).not.toContain(A.login);
   });
 
-  it("I-PURGE-2 every table of TABLE_NAMES except pilot_purges has a purge entry; a table without one is caught", async () => {
+  it("I-PURGE-2 every table of TABLE_NAMES except pilot_purges and service_state has a purge entry; a table without one is caught", async () => {
     const covered = Object.keys(OWNED_ROWS);
+    const exempt = ["pilot_purges", "service_state"];
     const missing = (names: readonly string[]) =>
-      names.filter((n) => n !== "pilot_purges" && !covered.includes(n));
+      names.filter((n) => !exempt.includes(n) && !covered.includes(n));
     expect(missing(TABLE_NAMES)).toEqual([]);
     expect(missing([...TABLE_NAMES, "fake_table"])).toEqual(["fake_table"]);
-    expect(covered.sort()).toEqual([...TABLE_NAMES].filter((n) => n !== "pilot_purges").sort());
+    expect(covered.sort()).toEqual([...TABLE_NAMES].filter((n) => !exempt.includes(n)).sort());
     // And every table in the database is in the list (a migration cannot add one quietly).
     const all = await sql<{ table_name: string }>`
       select table_name from information_schema.tables
@@ -865,13 +883,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0007_vote_eligibility"]);
+    expect(down).toEqual(["0008_modes"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0007_vote_eligibility"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0008_modes"]);
     }
   });
 });

@@ -26,6 +26,7 @@ const policy = (() => {
   return res.policy;
 })();
 
+const MODE_REPORT = "Graft mode: report. This check never blocks a merge.";
 const COMMIT = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const HEAD = "ec26c3e57ca3a959ca5aad62de7213c562f8c821";
 const facts = (over: Partial<PolicyFacts> = {}): PolicyFacts => ({
@@ -51,6 +52,7 @@ const view = (over: Partial<PolicyView> = {}): PolicyView => ({
   approvals: null,
   errors: [],
   addsPolicyFile: false,
+  mode: { effective: "report" },
   ...over,
 });
 const evaluated = (
@@ -99,6 +101,8 @@ describe("policy rendering", () => {
     );
     expect(renderPolicyDetails(E3())).toBe(
       [
+        MODE_REPORT,
+        "",
         "**Matched rules**",
         "",
         "- Rule 3 infra-and-auth → require 1 from `@acme/security`: paths match `infra/main.tf`",
@@ -195,8 +199,9 @@ describe("policy rendering", () => {
         `Head \`ec26c3e\` · ${FOOTER}`,
       ].join("\n"),
     );
-    expect(renderPolicyDetails(missing)).toBeNull();
-    expect(renderPolicyDetails(invalid)).toBeNull();
+    // Without details the text is the mode line alone.
+    expect(renderPolicyDetails(missing)).toBe(MODE_REPORT);
+    expect(renderPolicyDetails(invalid)).toBe(MODE_REPORT);
   });
 
   it("U-PR-3 titles, every form", () => {
@@ -322,7 +327,7 @@ describe("policy rendering", () => {
       evaluated(facts({ labels: ["hotfix"] })),
     ];
     for (const v of views) {
-      for (const text of [renderPolicySection(v), renderPolicyDetails(v) ?? ""]) {
+      for (const text of [renderPolicySection(v), renderPolicyDetails(v)]) {
         const outside = text.replace(/`[^`]*`/g, "");
         expect(outside).not.toContain("@");
       }
@@ -346,7 +351,7 @@ describe("policy rendering", () => {
       ],
     };
     const v = evaluated(facts(), p);
-    for (const text of [renderPolicySection(v), renderPolicyDetails(v) ?? ""]) {
+    for (const text of [renderPolicySection(v), renderPolicyDetails(v)]) {
       expect(text).not.toContain("<!--");
       expect(text).not.toContain("<!-- graft:");
       expect(text).not.toMatch(/\]\(http/);

@@ -7,6 +7,7 @@
  */
 import { MAX_SECTION_CHARS } from "../../github/managed-comment.js";
 import { codeSpan, escapeProse } from "../../github/markdown.js";
+import type { Mode } from "../../modes/index.js";
 import {
   formatPolicyErrorParts,
   type PolicyError,
@@ -53,6 +54,8 @@ export interface PolicyView {
   warnings?: PolicyWarning[];
   /** The PR adds graft.yaml where the base has none. */
   addsPolicyFile: boolean;
+  /** The effective `policy_mode` (Phase 1 step 1). Informational: it never decides a conclusion. */
+  mode: { effective: Mode };
 }
 
 export function viewOutcome(v: Pick<PolicyView, "state" | "verdict">): PolicyOutcome {
@@ -372,8 +375,21 @@ function actionText(m: MatchedRule, policy: Policy | null, owner: string): strin
   return `require ${action.humans}${teams}`;
 }
 
-/** `output.text` of the check run; null when there is nothing to detail. */
-export function renderPolicyDetails(v: PolicyView): string | null {
+/** The first line of `output.text`; step 2 replaces the enforce wording. */
+function modeLine(mode: Mode): string {
+  return mode === "report"
+    ? "Graft mode: report. This check never blocks a merge."
+    : "Graft mode: enforce. Enforcement is not active in this version; this check never blocks a merge.";
+}
+
+/** `output.text` of the check run: the mode line, then the details when there are any. */
+export function renderPolicyDetails(v: PolicyView): string {
+  const details = renderDetails(v);
+  const line = modeLine(v.mode.effective);
+  return details === null ? line : `${line}\n\n${details}`;
+}
+
+function renderDetails(v: PolicyView): string | null {
   if (v.state !== "ok" || v.verdict === null || v.facts === null) return null;
   const { verdict, facts } = v;
   const lines: string[] = [];

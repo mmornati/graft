@@ -108,6 +108,11 @@ export function createFakeGitHubApi(
     users: new Map<string, number>(),
     /** Reactions per comment id. */
     reactions: new Map<number, FakeReaction[]>(),
+    /**
+     * `GET /app/installations/{id}` (App JWT): the permissions the API reports. null is a 404.
+     * Tests make it differ from the webhook payload on purpose.
+     */
+    installationPermissions: null as Record<string, string> | null,
     comments: [] as FakeComment[],
     checkRuns: [] as FakeCheckRun[],
     /** When true, comments created through the API carry no performed_via_github_app (D13). */
@@ -219,6 +224,12 @@ export function createFakeGitHubApi(
         permissions: {},
         repository_selection: "selected",
       });
+    }
+    m = method === "GET" ? /^\/app\/installations\/(\d+)$/.exec(path) : null;
+    if (m) {
+      return state.installationPermissions === null
+        ? json(404, { message: "Not Found" })
+        : json(200, { id: Number(m[1]), permissions: state.installationPermissions });
     }
     const userMatch = method === "GET" ? /^\/users\/([^/]+)$/.exec(path) : null;
     if (userMatch) {

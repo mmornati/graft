@@ -1,7 +1,10 @@
+import type { Transaction } from "kysely";
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
+import type { Database } from "../../db/schema.js";
 import { defineWebhookHandler } from "../../webhooks/handler.js";
 import { parsePayload } from "../../webhooks/payload.js";
+import { refreshPermissionsJob } from "../modes/permissions.js";
 import {
   type InstallationInput,
   markAllRepositoriesRemoved,
@@ -111,12 +114,23 @@ export const trackInstallations = defineWebhookHandler({
     const now = ctx.clock.now();
     const inst = toInstallation(payload.installation);
 
+    // The job reads the permissions from the API (D5): the payload only says that it is time to.
+    // Sent in the transaction, so a rolled back event leaves no job and a job always finds its row.
+    const enqueueRefresh = async (tx: Transaction<Database>, installationId: number) => {
+      await ctx.queue.send(
+        refreshPermissionsJob,
+        { installationId },
+        { tx, singletonKey: `permissions:${installationId}:${Math.floor(now.getTime() / 60_000)}` },
+      );
+    };
+
     await ctx.db.transaction().execute(async (tx) => {
       if (event.name === "installation") {
         switch (payload.action) {
           case "created":
             await upsertInstallation(tx, inst, now, { reactivate: true });
             await upsertRepositories(tx, inst.id, toRepos(payload.repositories), now);
+            await enqueueRefresh(tx, inst.id);
             break;
           case "deleted":
             await upsertInstallation(tx, inst, now, { reactivate: false });
@@ -133,6 +147,7 @@ export const trackInstallations = defineWebhookHandler({
             break;
           case "new_permissions_accepted":
             await upsertInstallation(tx, inst, now, { reactivate: false });
+            await enqueueRefresh(tx, inst.id);
             break;
           default:
             ctx.log.debug({ action: payload.action }, "installation action not tracked");
