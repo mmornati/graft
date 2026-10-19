@@ -684,14 +684,17 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
 
     const now = r.deps.now();
     const changed = await r.db.transaction().execute(async (tx) => {
-      const locked = await tx
+      const matches = await tx
         .selectFrom("repositories")
-        .select(["id", "policy_mode", "guard_mode", "mcp_write"])
+        .select(["id", "installation_id", "policy_mode", "guard_mode", "mcp_write"])
         .where(sql<string>`lower(full_name)`, "=", repo.toLowerCase())
         .where("removed_at", "is", null)
         .forUpdate()
-        .executeTakeFirst();
+        .limit(2)
+        .execute();
+      const locked = matches[0];
       if (!locked) return null;
+      if (matches.length > 1) return { ambiguous: matches.map((m) => m.installation_id), count: 0 };
       const changes: NewModeChange[] = [];
       for (const w of wanted) {
         const from = locked[w.key];
@@ -707,10 +710,16 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
           .where("id", "=", locked.id)
           .execute();
       }
-      return { repositoryId: locked.id, count: changes.length };
+      return { repositoryId: locked.id, count: changes.length, ambiguous: undefined };
     });
     if (changed === null) {
       r.err("unknown or removed repository\n");
+      return 1;
+    }
+    if (changed.ambiguous) {
+      r.err(
+        `ambiguous repository: ${changed.ambiguous.length} active rows match (installations ${changed.ambiguous.join(", ")}); nothing changed\n`,
+      );
       return 1;
     }
     if (changed.count === 0) {

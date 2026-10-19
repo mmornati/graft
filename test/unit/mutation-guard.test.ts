@@ -18,7 +18,7 @@ describe("mutation guard: classification", () => {
     const p0 = { kind: "phase0" };
     const rows: [string, string, unknown][] = [
       ["POST", "/app/installations/45/access_tokens", { kind: "auth" }],
-      ["POST", "/app/hook/deliveries/7/attempts", { kind: "auth" }],
+      ["POST", "/app/hook/deliveries/7/attempts", { kind: "app" }],
       ["POST", "/repos/o/r/check-runs", p0],
       ["PATCH", "/repos/o/r/check-runs/12", p0],
       ["POST", "/repos/o/r/issues/3/comments", p0],
@@ -209,10 +209,53 @@ describe("mutation guard: the hook", () => {
     expect(e.refusal).toBe("app_client");
     expect(api.requests).toEqual([]);
     // Phase 1 routes have no installation to ask the gate about.
-    expect((await refusal(createRef(app as never))).refusal).toBe("no_feature");
+    expect((await refusal(createRef(app as never))).refusal).toBe("app_client");
     // A read goes through (the fake answers 404, which is not a refusal).
     await app.request("GET /app/installations/{id}", { id: 1 }).catch(() => undefined);
     expect(api.requests.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /app/installations/1"]);
+  });
+
+  it("U-MG-9 a write to another host is refused unknown_route and sends nothing, even for a phase 0 route", async () => {
+    const api = createFakeGitHubApi();
+    const client = await fakeGitHubFactory(api, allowAll).forInstallation(1, { feature: "guard" });
+    for (const url of [
+      "POST https://other.host/repos/o/r/check-runs",
+      "POST https://api.github.com.evil.example/repos/o/r/check-runs",
+    ]) {
+      expect((await refusal(client.request(url, { name: "x" }))).refusal, url).toBe(
+        "unknown_route",
+      );
+    }
+    expect(api.requests).toEqual([]);
+  });
+
+  it("U-MG-10 the redelivery route passes for the App client only; an installation client is refused", async () => {
+    const api = createFakeGitHubApi();
+    const factory = fakeGitHubFactory(api, allowAll);
+    const installation = await factory.forInstallation(1, { feature: "guard" });
+    const e = await refusal(
+      installation.request("POST /app/hook/deliveries/{id}/attempts", { id: 5 }),
+    );
+    expect(e.refusal).toBe("unknown_route");
+    expect(api.requests).toEqual([]);
+    const sent = await factory
+      .asApp()
+      .request("POST /app/hook/deliveries/{id}/attempts", { id: 5 })
+      .catch((x: unknown) => x);
+    expect(sent).not.toBeInstanceOf(MutationRefusedError);
+    expect(api.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "POST /app/hook/deliveries/5/attempts",
+    ]);
+  });
+
+  it("U-MG-11 a refused literal URL logs no branch or label name", async () => {
+    const api = createFakeGitHubApi();
+    const client = await fakeGitHubFactory(api).forInstallation(1);
+    const e = await refusal(
+      client.request(`DELETE /repos/${OWNER}/${REPO}/git/refs/heads/secret-branch-name`),
+    );
+    expect(e.message).toContain("DELETE /repos/{owner}/{repo}/git/refs/heads/{x}");
+    expect(e.message).not.toContain("secret-branch-name");
   });
 
   it("U-MG-8 a phase 1 route with a feature client: the gate's reason when it denies, sent when it allows", async () => {

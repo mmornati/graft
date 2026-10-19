@@ -79,7 +79,8 @@ function state<V extends string>(
   for (const [name, level] of PERMISSION_NEEDS[key]) {
     if (i.permissions === null) return lowered("permissions_unknown");
     const have = i.permissions[name];
-    if (have === undefined || LEVEL[have] < LEVEL[level]) {
+    // An unrecognised level counts as missing: the rule always fails toward report.
+    if (have === undefined || !Object.hasOwn(LEVEL, have) || LEVEL[have] < LEVEL[level]) {
       return lowered("permission_missing", `${name}:${level}`);
     }
   }

@@ -6,9 +6,11 @@ import { migrateDownOne, migrateToLatest } from "../../src/db/migrator.js";
 import { trackInstallations } from "../../src/modules/installations/handlers.js";
 import {
   applyModeChanges,
+  CEILING_STATE_KEY,
   claimUnappliedModeChanges,
   fanoutCeilingChange,
   getEffectiveModes,
+  getServiceState,
   publishModeCeiling,
   refreshPermissions,
 } from "../../src/modules/modes/index.js";
@@ -268,6 +270,29 @@ describe("modes: the operator CLI", () => {
       "r",
     );
     expect(unknown.code).toBe(1);
+    expect(await rows()).toEqual([]);
+    expect((await repoRow()).policy_mode).toBe("report");
+  });
+
+  it("I-MODE-4b mode set refuses a name that matches active rows of two installations", async () => {
+    await t.db
+      .insertInto("installations")
+      .values({
+        id: 1000010,
+        account_id: 10,
+        account_login: "dup",
+        account_type: "Organization",
+        repository_selection: "selected",
+      })
+      .execute();
+    await t.db
+      .insertInto("repositories")
+      .values({ id: 2000010, installation_id: 1000010, full_name: FULL_NAME, private: true })
+      .execute();
+    const r = await set("--policy", "enforce", "--reason", "r");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("ambiguous repository");
+    expect(r.err).toContain("1000010");
     expect(await rows()).toEqual([]);
     expect((await repoRow()).policy_mode).toBe("report");
   });
@@ -571,6 +596,26 @@ describe("modes: applying changes", () => {
     const again = ctxWith({ GRAFT_MODE_CEILING: "enforce" }, FIXED_NOW.getTime() + 9000);
     expect(await publishModeCeiling(again)).toBe("changed");
     expect(await ceilingJobs()).toHaveLength(3);
+  });
+
+  it("I-MODE-7 an enqueue that fails leaves the stored ceiling unchanged, so the next start still fans out", async () => {
+    expect(await publishModeCeiling(ctxWith({ GRAFT_MODE_CEILING: "report" }))).toBe("stored");
+    const failing = {
+      ...ctxWith({ GRAFT_MODE_CEILING: "enforce" }, FIXED_NOW.getTime() + 1000),
+      queue: {
+        ...jobContext(t).queue,
+        send: async () => {
+          throw new Error("queue down");
+        },
+      },
+    } as never;
+    await expect(publishModeCeiling(failing)).rejects.toThrow("queue down");
+    expect((await getServiceState(t.db, CEILING_STATE_KEY))?.value).toBe("report");
+    expect(await jobsNamed(t.db, "modes.ceiling_fanout")).toEqual([]);
+    const retry = ctxWith({ GRAFT_MODE_CEILING: "enforce" }, FIXED_NOW.getTime() + 2000);
+    expect(await publishModeCeiling(retry)).toBe("changed");
+    expect(await jobsNamed(t.db, "modes.ceiling_fanout")).toHaveLength(1);
+    expect(await publishModeCeiling(retry)).toBe("unchanged");
   });
 });
 

@@ -4,8 +4,12 @@
  * Titles, bodies, paths and diffs are never printed.
  */
 import { readFileSync } from "node:fs";
-import { Octokit } from "@octokit/rest";
-import { createGitHubClientFactory, type GitHubClient } from "../github/client-factory.js";
+import {
+  createGitHubClientFactory,
+  forToken,
+  type GitHubClient,
+  makeGetOnly,
+} from "../github/client-factory.js";
 import { classifyGitHubError } from "../github/errors.js";
 import { refuseAllGate } from "../github/mutation-guard.js";
 import type { LivePull } from "../modules/changes/index.js";
@@ -369,11 +373,13 @@ export async function buildExportClient(
     if (!o.env.GRAFT_EVAL_GITHUB_TOKEN) {
       throw new EvalStoreError("GRAFT_EVAL_GITHUB_TOKEN is required with --auth token");
     }
-    octokit = new Octokit({
-      auth: o.env.GRAFT_EVAL_GITHUB_TOKEN,
-      baseUrl: o.env.GITHUB_API_URL,
-      ...(o.fetch ? { request: { fetch: o.fetch } } : {}),
-    });
+    // Export only reads: a GET-only client built by the factory module.
+    octokit = makeGetOnly(
+      forToken(o.env.GRAFT_EVAL_GITHUB_TOKEN, {
+        baseUrl: o.env.GITHUB_API_URL,
+        ...(o.fetch ? { fetch: o.fetch } : {}),
+      }),
+    );
   } else {
     if (!o.env.GITHUB_APP_ID || !o.env.GITHUB_APP_PRIVATE_KEY_PATH || !o.installationId) {
       throw new EvalStoreError(

@@ -16,6 +16,7 @@ export type Feature = "guard" | "mcp";
 export type WriteClass =
   | { kind: "read" }
   | { kind: "auth" }
+  | { kind: "app" }
   | { kind: "phase0" }
   | { kind: "phase1"; features: readonly Feature[]; owner: string; repo: string }
   | { kind: "unknown" };
@@ -36,7 +37,11 @@ export type MutationGate = (q: {
   feature: Feature;
 }) => Promise<{ allowed: true } | { allowed: false; reason: string }>;
 
-/** A gate that allows nothing: for clients that never write (export, e2e, tests). */
+/**
+ * A gate that allows nothing: for clients that never write (export, e2e, tests). Its refusal
+ * reads `repository_unknown` because the reason union is fixed by the spec; it does not mean the
+ * repository is missing, it means this client has no gate wired in.
+ */
 export const refuseAllGate: MutationGate = async () => ({
   allowed: false,
   reason: "repository_unknown",
@@ -64,16 +69,17 @@ const OWNER_REPO = `^/repos/${NAME}/${NAME}`;
 interface Route {
   method: string;
   re: RegExp;
-  kind: "auth" | "phase0" | "phase1";
+  kind: "auth" | "app" | "phase0" | "phase1";
   features?: readonly Feature[];
 }
 
 /** THE write allow-list. Paths are anchored at both ends; `{n}` is digits only. */
 const ROUTES: readonly Route[] = [
   { method: "POST", re: /^\/app\/installations\/\d+\/access_tokens$/, kind: "auth" },
-  // App-level, with the App JWT: the live e2e runner redelivers a webhook with it (scenario s10).
-  // Graft's own code never calls it.
-  { method: "POST", re: /^\/app\/hook\/deliveries\/\d+\/attempts$/, kind: "auth" },
+  // App-level, with the App JWT: the live e2e runner redelivers a webhook with it (scenario s10),
+  // which is why a production allow-list holds it. Graft's own code never calls it. Only a client
+  // without an installation (`forApp`) may send it: an installation client is refused.
+  { method: "POST", re: /^\/app\/hook\/deliveries\/\d+\/attempts$/, kind: "app" },
   { method: "POST", re: new RegExp(`${OWNER_REPO}/check-runs$`), kind: "phase0" },
   { method: "PATCH", re: new RegExp(`${OWNER_REPO}/check-runs/\\d+$`), kind: "phase0" },
   { method: "POST", re: new RegExp(`${OWNER_REPO}/issues/\\d+/comments$`), kind: "phase0" },
@@ -151,16 +157,56 @@ export function classifyWrite(method: string, rawPath: string): WriteClass {
   return { kind: "unknown" };
 }
 
-/** `/repos/{owner}/{repo}/...` with numbers as `{n}`: a template safe to log and to print. */
+/** Path words that are part of a route; every other segment (names, branches) is templated. */
+const KNOWN_SEGMENTS = new Set([
+  "api",
+  "v3",
+  "app",
+  "installations",
+  "access_tokens",
+  "hook",
+  "deliveries",
+  "attempts",
+  "repos",
+  "check-runs",
+  "issues",
+  "comments",
+  "labels",
+  "git",
+  "trees",
+  "commits",
+  "refs",
+  "heads",
+  "pulls",
+  "merge",
+  "reviews",
+  "dismissals",
+  "branches",
+  "protection",
+  "contents",
+  "statuses",
+  "actions",
+  "runs",
+  "rerun",
+  "graphql",
+]);
+
+/** A route template safe to log and print: owner, repo, numbers and any free name are templated. */
 function routeTemplate(url: string): string {
-  const noQuery = url.split("?")[0] ?? "";
+  const noQuery = (url.split("?")[0] ?? "").split("#")[0] ?? "";
   const path = noQuery.replace(/^[a-z]+:\/\/[^/]+/i, "");
-  return path
-    .replace(/^(\/api\/v3)?\/repos\/[^/{]+\/[^/{]+/, "$1/repos/{owner}/{repo}")
-    .split("/")
-    .map((seg) => (/^\d+$/.test(seg) ? "{n}" : seg))
-    .join("/")
-    .slice(0, 120);
+  const segments = path.split("/");
+  const out: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as string;
+    if (seg === "") out.push(seg);
+    else if (/^\d+$/.test(seg)) out.push("{n}");
+    else if (KNOWN_SEGMENTS.has(seg) || /^\{[a-z_]+\}$/.test(seg)) out.push(seg);
+    else if (segments[i - 1] === "repos") out.push("{owner}");
+    else if (segments[i - 2] === "repos") out.push("{repo}");
+    else out.push("{x}");
+  }
+  return out.join("/").slice(0, 120);
 }
 
 export function installMutationGuard(
@@ -180,10 +226,6 @@ export function installMutationGuard(
     if (method === "GET" || method === "HEAD") return;
 
     const base = String(options.baseUrl).replace(/\/+$/, "");
-    const rest = parsed.url.startsWith(`${base}/`)
-      ? parsed.url.slice(base.length)
-      : new URL(parsed.url, base).pathname;
-    const cls = classifyWrite(method, rest);
     const refusal = (reason: string): MutationRefusedError => {
       const err = new MutationRefusedError(
         method,
@@ -195,9 +237,16 @@ export function installMutationGuard(
       return err;
     };
 
+    // A write to any host other than the configured API is never legitimate.
+    if (!parsed.url.startsWith(`${base}/`)) throw refusal("unknown_route");
+    const cls = classifyWrite(method, parsed.url.slice(base.length));
+
     switch (cls.kind) {
       case "read":
       case "auth":
+        return;
+      case "app":
+        if (o.installationId !== null) throw refusal("unknown_route");
         return;
       case "phase0":
         if (o.installationId === null) throw refusal("app_client");
@@ -205,7 +254,8 @@ export function installMutationGuard(
       case "unknown":
         throw refusal("unknown_route");
       case "phase1": {
-        if (o.installationId === null || o.feature === undefined) throw refusal("no_feature");
+        if (o.installationId === null) throw refusal("app_client");
+        if (o.feature === undefined) throw refusal("no_feature");
         if (!cls.features.includes(o.feature)) throw refusal("feature_not_allowed");
         const verdict = await o.gate({
           installationId: o.installationId,

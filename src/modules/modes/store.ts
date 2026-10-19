@@ -203,12 +203,15 @@ export async function getServiceState(
  * Compare-and-set: stores `value` and returns what was there before (null on the first write).
  * The row lock serialises workers that start together: the one that updates sees the old value,
  * the others see the new one and so report no change. An equal value is not rewritten.
+ * `inTx` runs in the same transaction after a change of an existing value, so work that must not
+ * be lost (a job enqueue) commits or rolls back together with the new value.
  */
 export async function casServiceState(
   db: Db,
   key: string,
   value: string,
   now: Date,
+  inTx?: (tx: Transaction<Database>, previous: string) => Promise<void>,
 ): Promise<string | null> {
   return db.transaction().execute(async (tx) => {
     for (;;) {
@@ -225,6 +228,7 @@ export async function casServiceState(
             .set({ value, updated_at: now })
             .where("key", "=", key)
             .execute();
+          if (inTx) await inTx(tx, current.value);
         }
         return current.value;
       }

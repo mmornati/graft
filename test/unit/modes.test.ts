@@ -74,6 +74,27 @@ describe("effective modes", () => {
     expect(m.guard.missing).toBeUndefined();
   });
 
+  it("U-MODE-8 an unrecognised permission level, or a non-object value, counts as missing", () => {
+    for (const bad of ["maybe", "toString", "constructor", "", 3, null]) {
+      const m = effectiveModes(
+        base({ permissions: { contents: bad, pull_requests: bad } as never }),
+      );
+      expect(m.guard, String(bad)).toMatchObject({
+        effective: "report",
+        reason: "permission_missing",
+      });
+      expect(m.mcpWrite, String(bad)).toMatchObject({
+        effective: "off",
+        reason: "permission_missing",
+      });
+    }
+    for (const bad of ["write", 5, true]) {
+      const m = effectiveModes(base({ permissions: bad as never }));
+      expect(m.guard.effective, String(bad)).toBe("report");
+      expect(m.mcpWrite.effective, String(bad)).toBe("off");
+    }
+  });
+
   it("U-MODE-5 contents: admin satisfies write", () => {
     const m = effectiveModes(base({ permissions: { contents: "admin", pull_requests: "admin" } }));
     expect(m.guard).toMatchObject({ effective: "enforce", reason: "repository" });

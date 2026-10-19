@@ -16,14 +16,19 @@ export async function publishModeCeiling(
   const { config, db, log, queue, clock } = ctx;
   log.info({ ceiling: config.modeCeiling }, "mode ceiling");
   const now = clock.now();
-  const previous = await casServiceState(db, CEILING_STATE_KEY, config.modeCeiling, now);
+  // The new value and the fan-out job commit together: if the enqueue fails the stored value
+  // stays the old one, so the next start still sees a change and fans out (I-MODE-7).
+  const previous = await casServiceState(db, CEILING_STATE_KEY, config.modeCeiling, now, (tx) =>
+    queue
+      .send(
+        modesCeilingFanoutJob,
+        { at: now.getTime() },
+        { singletonKey: `ceiling:${now.getTime()}`, tx },
+      )
+      .then(() => undefined),
+  );
   if (previous === null) return "stored";
   if (previous === config.modeCeiling) return "unchanged";
-  await queue.send(
-    modesCeilingFanoutJob,
-    { at: now.getTime() },
-    { singletonKey: `ceiling:${now.getTime()}` },
-  );
   log.info({ from: previous, to: config.modeCeiling }, "mode ceiling changed");
   return "changed";
 }

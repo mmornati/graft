@@ -304,3 +304,18 @@ Spec: [phase-1/step-1-modes.md](phase-1/step-1-modes.md). Decisions D1 to D17 ar
 - **I-MODE-10 freezes the check details** (a `vi.mock` of `renderPolicyDetails`) because in step 1 the mode line is part of the rendered details, which are already in the facts hash: without the freeze, dropping `policyMode` from the hash would change nothing visible and the mutation check could not catch it. In step 2 the hash term is what keeps the republication correct if the rendered text does not differ.
 
 **Other test changes**: `db.test.ts` and `pilot-ops.test.ts` step down one more migration and count 22 tables (I-DB-1, I-DB-2, I-DB-3 inserts a row into the two new tables); I-PURGE-2 excludes `service_state` next to `pilot_purges` and I-PURGE-1 seeds and counts `mode_changes`; the two tests that call `applyCronSchedules` with a queue that registers two jobs switch the modes crons off; `policy.test.ts` fan-out data gains `scope: "branch"`. The fake GitHub API gains `GET /app/installations/{id}` (`state.installationPermissions`), and `fakeGitHubFactory(api, gate?, onRefused?)`.
+
+### Review 1 fixes
+
+Finding → fix (review: `docs/phase-1/reviews/step-1-review-1.md`).
+
+1. **Octokit outside the factory** → `buildExportClient --auth token` now builds `makeGetOnly(forToken(...))`; the DoD grep is empty without an exemption.
+2. **Ceiling fan-out lost on a failed enqueue** → `casServiceState` takes an `inTx` callback that runs in the same transaction; `publishModeCeiling` enqueues `modes.ceiling_fanout` there (`queue.send(..., { tx })`). If the send throws, the stored ceiling rolls back and the next start fans out (I-MODE-7, new case).
+3. **Unknown permission level failed open** → `effectiveModes` treats a level that is not an own key of `LEVEL` as missing (`permission_missing`); U-MODE-8 covers unknown strings, `toString`, numbers, null and non-object permissions.
+4. **Guard ignored the host** → a write whose parsed URL does not start with `${baseUrl}/` is refused `unknown_route`; the fallback branch is gone (U-MG-9).
+5. **Redelivery route passed for every client** → new class `app` (route table kind and `WriteClass`): it passes only when `installationId === null`; installation clients get `unknown_route` (U-MG-1, U-MG-10). It stays in the production allow-list because the live e2e runner redelivers a webhook with the App JWT.
+6. **N-4 cannot catch mutation 6 in step 1** → recorded here: only I-MODE-10 kills "policyMode removed from factsHash" until step 2 stops rendering the mode line into the details; the step 2 reviewer must re-check that N-4 catches it then.
+7. **Phase 1 route on the App client** → refused `app_client` (U-MG-7 now expects it) before the feature check.
+8. **`refuseAllGate` reads `repository_unknown`** → commented: the reason union is fixed by the spec; it means "no gate wired in".
+9. **`routeTemplate` kept free names** → every segment that is not a known route word or a number is templated (`{owner}`, `{repo}`, `{x}`); a branch name is never logged (U-MG-11).
+10. **`mode set --repo` ambiguity** → if more than one active row matches the name, exit 1, print the installation ids, change nothing (I-MODE-4b).
