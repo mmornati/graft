@@ -6,6 +6,7 @@ import {
   renderManagedComment,
   upsertManagedSection,
 } from "../../src/github/managed-comment.js";
+import { refuseAllGate } from "../../src/github/mutation-guard.js";
 import { TEST_PRIVATE_KEY } from "../helpers/config.js";
 import { createFakeGitHubApi, type FakeComment } from "../helpers/fake-github-api.js";
 import { EXPECTED_COMMENT, EXPECTED_SECTION } from "../helpers/provenance-scenario.js";
@@ -18,6 +19,7 @@ async function setup() {
     appId: APP_ID,
     privateKey: TEST_PRIVATE_KEY,
     baseUrl: "https://api.github.com",
+    gate: refuseAllGate,
     fetch: api.fetch,
   }).forInstallation(1);
   const base = {

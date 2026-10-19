@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { Octokit } from "@octokit/rest";
 import { createGitHubClientFactory, type GitHubClient } from "../github/client-factory.js";
 import { classifyGitHubError } from "../github/errors.js";
+import { refuseAllGate } from "../github/mutation-guard.js";
 import type { LivePull } from "../modules/changes/index.js";
 import { type ChangedFile, fetchIntentInputs } from "../modules/intent/index.js";
 import {
@@ -383,6 +384,8 @@ export async function buildExportClient(
       appId: o.env.GITHUB_APP_ID,
       privateKey: readFileSync(o.env.GITHUB_APP_PRIVATE_KEY_PATH, "utf8"),
       baseUrl: o.env.GITHUB_API_URL,
+      // Export only reads.
+      gate: refuseAllGate,
       ...(o.fetch ? { fetch: o.fetch } : {}),
     });
     octokit = await factory.forInstallation(o.installationId);

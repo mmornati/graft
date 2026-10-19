@@ -1,11 +1,23 @@
 import { App } from "@octokit/app";
 import { Octokit } from "@octokit/rest";
+import {
+  type Feature,
+  installMutationGuard,
+  type MutationGate,
+  type MutationRefusedError,
+  refuseAllGate,
+} from "./mutation-guard.js";
 
 export type GitHubClient = InstanceType<typeof Octokit>;
 
 export interface GitHubClientFactory {
-  forInstallation(installationId: number): Promise<GitHubClient>;
-  /** JWT-authenticated. */
+  /**
+   * Every client has the mutation guard installed. Without `feature` it can make Phase 0 writes
+   * only; a Phase 1 write needs the feature it acts for (`"guard"` or `"mcp"`) and a mode that
+   * permits it (D11).
+   */
+  forInstallation(installationId: number, opts?: { feature?: Feature }): Promise<GitHubClient>;
+  /** JWT-authenticated. Guarded too: it makes no writes of its own. */
   asApp(): GitHubClient;
 }
 
@@ -13,6 +25,10 @@ export function createGitHubClientFactory(o: {
   appId: number;
   privateKey: string;
   baseUrl: string;
+  /** Phase 1 write permission lookup. Without one, no Phase 1 write is ever allowed. */
+  gate?: MutationGate;
+  /** Told about each refused write (the bootstrap logs it at error). */
+  onRefused?: (e: MutationRefusedError) => void;
   fetch?: typeof fetch;
 }): GitHubClientFactory {
   const OctokitWithDefaults = Octokit.defaults({
@@ -24,11 +40,27 @@ export function createGitHubClientFactory(o: {
     privateKey: o.privateKey,
     Octokit: OctokitWithDefaults,
   });
+  const gate = o.gate ?? refuseAllGate;
+  const appClient = app.octokit as unknown as GitHubClient;
+  installMutationGuard(appClient, {
+    installationId: null,
+    feature: undefined,
+    gate,
+    ...(o.onRefused ? { onRefused: o.onRefused } : {}),
+  });
   return {
     // @octokit/app caches installation tokens (until close to expiry) inside the auth strategy.
-    forInstallation: (installationId) =>
-      app.getInstallationOctokit(installationId) as Promise<GitHubClient>,
-    asApp: () => app.octokit as unknown as GitHubClient,
+    async forInstallation(installationId, opts) {
+      const client = (await app.getInstallationOctokit(installationId)) as unknown as GitHubClient;
+      installMutationGuard(client, {
+        installationId,
+        feature: opts?.feature,
+        gate,
+        ...(o.onRefused ? { onRefused: o.onRefused } : {}),
+      });
+      return client;
+    },
+    asApp: () => appClient,
   };
 }
 

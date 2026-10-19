@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createGitHubClientFactory } from "../../src/github/client-factory.js";
+import { refuseAllGate } from "../../src/github/mutation-guard.js";
 import { TEST_PRIVATE_KEY } from "../helpers/config.js";
 import { createFakeGitHubFetch, verifyAppJwt } from "../helpers/fake-github.js";
 
@@ -13,6 +14,7 @@ function factory(
     appId: APP_ID,
     privateKey: TEST_PRIVATE_KEY,
     baseUrl,
+    gate: refuseAllGate,
     fetch: fake.fetch,
   });
 }
