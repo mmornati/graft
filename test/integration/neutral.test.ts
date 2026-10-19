@@ -121,13 +121,15 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     expect(res.statusCode, `${fixture} ${res.body}`).toBe(202);
     await drain();
   }
+  let tick = 0;
   const ops = async (...argv: string[]) => {
     let out = "";
     const deps: OpsDeps = {
       loadConfig: config,
       openDb: () => testDb(),
       github: () => fakeGitHubFactory(api),
-      now: () => FIXED_NOW,
+      // Each mode change gets its own second, so the history has an order.
+      now: () => new Date(FIXED_NOW.getTime() + 1000 * tick++),
       sleep: async () => {},
     };
     const code = await opsMain(argv, { out: (s) => (out += s), err: (s) => (out += s) }, deps);

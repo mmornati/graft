@@ -37,6 +37,7 @@ vi.mock("../../src/modules/policy/render.js", async (importOriginal) => {
   };
 });
 
+const EARLIER = new Date(FIXED_NOW.getTime() - 60_000);
 const FULL_NAME = `${OWNER}/${REPO}`;
 const SECOND_REPO_ID = 2000002;
 
@@ -183,12 +184,18 @@ describe("modes: the operator CLI", () => {
       "x",
     );
     expect(both.code, both.err).toBe(0);
-    expect((await rows()).map((r) => [r.key, r.from_value, r.to_value, r.actor])).toEqual([
-      ["policy_mode", "report", "enforce", userInfo().username],
-      ["policy_mode", "enforce", "report", "tester"],
-      ["guard_mode", "report", "enforce", "tester"],
-      ["mcp_write", "off", "on", "tester"],
-    ]);
+    // All rows share one clock reading, so compare them in a fixed order.
+    const keyed = (await rows())
+      .map((r) => [r.key, r.from_value, r.to_value, r.actor])
+      .sort((a, b) => a.join().localeCompare(b.join()));
+    expect(keyed).toEqual(
+      [
+        ["policy_mode", "report", "enforce", userInfo().username],
+        ["policy_mode", "enforce", "report", "tester"],
+        ["guard_mode", "report", "enforce", "tester"],
+        ["mcp_write", "off", "on", "tester"],
+      ].sort((a, b) => (a as string[]).join().localeCompare((b as string[]).join())),
+    );
   });
 
   it("I-MODE-3 usage errors exit 2 and write nothing", async () => {
@@ -373,7 +380,7 @@ describe("modes: the operator CLI", () => {
     await set("--policy", "report", "--reason", "second");
     await t.db
       .updateTable("mode_changes")
-      .set({ applied_at: FIXED_NOW })
+      .set({ applied_at: FIXED_NOW, created_at: EARLIER })
       .where("reason", "=", "first")
       .execute();
     await t.db
@@ -389,7 +396,7 @@ describe("modes: the operator CLI", () => {
       `${FIXED_NOW.toISOString()}  policy_mode  enforce → report  tester  pending  bell[U+0007]here`,
     );
     expect(lines[1]).toBe(
-      `${FIXED_NOW.toISOString()}  policy_mode  report → enforce  tester  applied  first`,
+      `${EARLIER.toISOString()}  policy_mode  report → enforce  tester  applied  first`,
     );
     expect(
       JSON.parse((await run("mode", "history", "--repo", FULL_NAME, "--limit", "1", "--json")).out),
