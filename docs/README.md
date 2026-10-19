@@ -52,5 +52,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | [phase-0/README.md](phase-0/README.md) | How each Phase 0 step is built (spec, build, review, fix) and the constraints for every step. |
 | Step specs | [1 Base setup](phase-0/step-1-base-setup.md) · [2 Provenance](phase-0/step-2-provenance.md) · [3 Intent service](phase-0/step-3-intent-service.md) · [4 Evaluation set](phase-0/step-4-evaluation-set.md) · [5 Policy engine](phase-0/step-5-policy-engine.md) · [6 Pilots and gate](phase-0/step-6-pilots-and-gate.md) |
 | [phase-0/reviews/](phase-0/reviews/) | Review notes for every step. |
+| [phase-1/README.md](phase-1/README.md) | The Phase 1 plan (enforce), with report mode as the default so it can be tried without changing outcomes. |
+| Phase 1 step specs | [1 Modes and safety rails](phase-1/step-1-modes.md) |
 
 Security reports: see [SECURITY.md](../SECURITY.md).

@@ -151,3 +151,6 @@ nav:
       - "Step 5: Policy engine": phase-0/step-5-policy-engine.md
       - "Step 6: Pilots and gate": phase-0/step-6-pilots-and-gate.md
       - Human to-do: phase-0/HUMAN-TODO.md
+    - Phase 1:
+      - phase-1/README.md
+      - "Step 1: Modes": phase-1/step-1-modes.md
