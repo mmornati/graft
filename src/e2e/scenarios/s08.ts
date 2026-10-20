@@ -164,6 +164,22 @@ async function latestVote(
   return r ? { verdict: r.verdict, source: r.source, isPrAuthor: r.is_pr_author } : null;
 }
 
+/**
+ * Whether `s08.clicks` may stop waiting: each button click a person reported (the actor's on
+ * PR 8 when the buttons were visible, the outsider's on PR 1 when they answered "clicked") is
+ * that user's latest recorded vote.
+ */
+export function clicksRecorded(o: {
+  buttons: boolean;
+  outsiderClicked: boolean;
+  actorPr8: string | null;
+  outsiderPr1: string | null;
+}): boolean {
+  if (o.buttons && o.actorPr8 !== "check_action") return false;
+  if (o.outsiderClicked && o.outsiderPr1 !== "check_action") return false;
+  return true;
+}
+
 const gateArgv = (installationId: number, day: string, until: string): string[] => [
   "gate",
   "report",
@@ -330,13 +346,27 @@ export const s08: ScenarioDef = {
           timeoutMs: TIMEOUTS.delivery,
           describe: "the recorded button votes (check_action)",
           probe: async (sx) => {
-            if (sx.scope.get("s08.answer.buttons") !== "y") return true;
-            const pr8 = await latestVote(sx, {
-              prNumber: sx.scope.require<{ number: number }>("s08.pr").number,
-              userId: sx.run.actor.id,
+            const buttons = sx.scope.get("s08.answer.buttons") === "y";
+            const outsiderClicked = sx.scope.get("s08.answer.outsider") === "clicked";
+            const pr8 = buttons
+              ? await latestVote(sx, {
+                  prNumber: sx.scope.require<{ number: number }>("s08.pr").number,
+                  userId: sx.run.actor.id,
+                })
+              : null;
+            const pr1 = outsiderClicked
+              ? await latestVote(sx, {
+                  prNumber: sx.scope.require<{ number: number }>("s01.pr").number,
+                  userId: sx.run.outsider?.id ?? 0,
+                })
+              : null;
+            sx.note({ actorClick: pr8?.source ?? null, outsiderClick: pr1?.source ?? null });
+            return clicksRecorded({
+              buttons,
+              outsiderClicked,
+              actorPr8: pr8?.source ?? null,
+              outsiderPr1: pr1?.source ?? null,
             });
-            sx.note({ actorClick: pr8?.source ?? null });
-            return pr8?.source === "check_action";
           },
         },
       );

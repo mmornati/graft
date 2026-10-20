@@ -11,7 +11,12 @@ import { evaluateS04 } from "../../src/e2e/scenarios/s04.js";
 import { evaluateS05 } from "../../src/e2e/scenarios/s05.js";
 import { evaluateS06 } from "../../src/e2e/scenarios/s06.js";
 import { evaluateS07 } from "../../src/e2e/scenarios/s07.js";
-import { evaluateS08, type GateNums, type S08Obs } from "../../src/e2e/scenarios/s08.js";
+import {
+  clicksRecorded,
+  evaluateS08,
+  type GateNums,
+  type S08Obs,
+} from "../../src/e2e/scenarios/s08.js";
 import { evaluateS09, type PerPr, type S09Obs } from "../../src/e2e/scenarios/s09.js";
 import { evaluateS10, type S10Obs } from "../../src/e2e/scenarios/s10.js";
 import {
@@ -582,6 +587,39 @@ describe("scenario expectations", () => {
       kind: "soft",
       ok: false,
     });
+  });
+
+  it("U-LIVE-SCEN-8 s08: the clicks wait holds until every reported click is the clicker's latest vote", () => {
+    const base = { buttons: true, outsiderClicked: true };
+    expect(clicksRecorded({ ...base, actorPr8: "check_action", outsiderPr1: "check_action" })).toBe(
+      true,
+    );
+    // The outsider's delivery is not recorded yet: the actor's click alone is not enough.
+    expect(clicksRecorded({ ...base, actorPr8: "check_action", outsiderPr1: null })).toBe(false);
+    expect(clicksRecorded({ ...base, actorPr8: "check_action", outsiderPr1: "reaction" })).toBe(
+      false,
+    );
+    expect(clicksRecorded({ ...base, actorPr8: null, outsiderPr1: "check_action" })).toBe(false);
+    // A click nobody reported is not waited for.
+    expect(
+      clicksRecorded({
+        buttons: true,
+        outsiderClicked: false,
+        actorPr8: "check_action",
+        outsiderPr1: null,
+      }),
+    ).toBe(true);
+    expect(
+      clicksRecorded({
+        buttons: false,
+        outsiderClicked: true,
+        actorPr8: null,
+        outsiderPr1: "check_action",
+      }),
+    ).toBe(true);
+    expect(
+      clicksRecorded({ buttons: false, outsiderClicked: false, actorPr8: null, outsiderPr1: null }),
+    ).toBe(true);
   });
 
   it("U-LIVE-SCEN-9 s09: every open run PR is re-evaluated at both pushes; the starter is restored", () => {
