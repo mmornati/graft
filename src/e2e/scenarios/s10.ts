@@ -11,7 +11,21 @@ import { envOfCtx } from "./env.js";
 
 export type Fingerprint = Record<string, unknown>;
 
-const CRON_QUEUES = ["intent.feedback.sweep", "pilot.metrics.rollup"];
+/**
+ * Clock-driven queues: the crons and the jobs they fan out to. A cron firing inside the window
+ * (the feedback sweep runs every 15 minutes and sends one `intent.feedback.poll` per carded
+ * change, PR 1's included) is not something the redelivery caused.
+ */
+const CRON_QUEUES = [
+  "intent.feedback.sweep",
+  "intent.feedback.poll",
+  "pilot.metrics.rollup",
+  "modes.apply",
+  "installations.refresh_permissions_all",
+  "installations.refresh_permissions",
+];
+/** A vote recorded by a feedback poll syncs reviewers under this hourly key (pilot/reviewers.ts). */
+const VOTE_SYNC_KEY = "rev-sync:%";
 
 /** What must not change. `withDeliveryCounts` is false when the redelivery has a new guid. */
 export async function fingerprint(
@@ -67,12 +81,15 @@ export async function fingerprint(
     const checks = await graftChecks(run, ch.head_sha);
     fp.checks = checks.map((c) => `${c.id}:${c.completedAt ?? ""}`).sort();
   }
-  const jobs = await sql<{ n: string }>`
-    select count(*)::text as n from ${sql.table(`${schema}.job`)}
+  // Per queue, so that a failure names the job that appeared.
+  const jobs = await sql<{ name: string; n: string }>`
+    select name, count(*)::text as n from ${sql.table(`${schema}.job`)}
     where created_on >= ${o.since}
       and name <> 'github.webhook' and name <> all(${sql.val(CRON_QUEUES)}::text[])
-      and data->>'installationId' = ${String(run.installationId)}`.execute(run.db);
-  fp.jobsSince = Number(jobs.rows[0]?.n ?? 0);
+      and data->>'installationId' = ${String(run.installationId)}
+      and not (name = 'pilot.reviewers.sync' and coalesce(singleton_key, '') like ${VOTE_SYNC_KEY})
+    group by name order by name`.execute(run.db);
+  fp.jobsSince = jobs.rows.map((r) => `${r.name}:${r.n}`);
   return fp;
 }
 
@@ -80,6 +97,8 @@ export interface S10Obs {
   attempt: { redelivery: boolean; statusCode: number; sameGuid: boolean } | null;
   fingerprintStable: boolean;
   changed: string[];
+  /** For each changed key: its value before the redelivery and the first different value seen. */
+  changes?: Record<string, { before: unknown; after: unknown }>;
   /** With --server-log: a duplicate line for the original guid was found (null: not checked). */
   logDuplicate: boolean | null;
 }
@@ -97,7 +116,7 @@ export function evaluateS10(o: S10Obs, _env: EvalEnv): AssertionResult[] {
       "system",
       "s10.stable",
       "the fingerprint does not change over the window",
-      o.changed.length === 0 ? "unchanged" : o.changed,
+      o.changed.length === 0 ? "unchanged" : { changed: o.changed, values: o.changes ?? {} },
       o.fingerprintStable,
     ),
     ...(o.logDuplicate === null
@@ -250,7 +269,13 @@ export const s10: ScenarioDef = {
             if (withCounts || (k !== "deliveriesSince" && k !== "webhookJobsSince"))
               expected[k] = v;
           }
-          const changed = new Set<string>(diffFingerprints(expected, baseline));
+          const changes: Record<string, { before: unknown; after: unknown }> = {};
+          const record = (next: Fingerprint) => {
+            for (const k of diffFingerprints(expected, next)) {
+              changes[k] ??= { before: expected[k] ?? null, after: next[k] ?? null };
+            }
+          };
+          record(baseline);
           const windowMs = Math.round(TIMEOUTS.stability * sx.run.opts.timeoutScale);
           const step = Math.max(250, Math.min(5000, Math.round(windowMs / 6)));
           const end = sx.run.clock.now() + windowMs;
@@ -261,9 +286,10 @@ export const s10: ScenarioDef = {
               since,
               withDeliveryCounts: withCounts,
             });
-            for (const k of diffFingerprints(expected, next)) changed.add(k);
+            record(next);
           }
-          sx.scope.set("s10.changed", [...changed]);
+          sx.scope.set("s10.changed", Object.keys(changes));
+          sx.scope.set("s10.changes", changes);
         },
       },
       {
@@ -289,6 +315,7 @@ export const s10: ScenarioDef = {
               attempt: sx.scope.get<S10Obs["attempt"]>("s10.attemptItem") ?? null,
               fingerprintStable: changed.length === 0,
               changed,
+              changes: sx.scope.get<S10Obs["changes"]>("s10.changes") ?? {},
               logDuplicate: sx.scope.get<boolean | null>("s10.logDuplicate") ?? null,
             },
             envOfCtx(sx.run),
