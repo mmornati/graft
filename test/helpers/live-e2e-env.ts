@@ -17,6 +17,7 @@ import { MARKER_PATH } from "../../src/e2e/guard.js";
 import { sandboxFiles } from "../../src/e2e/setup.js";
 import type { E2eDeps } from "../../src/e2e/types.js";
 import { createGitHubClientFactory, forToken } from "../../src/github/client-factory.js";
+import { refuseAllGate } from "../../src/github/mutation-guard.js";
 import { buildServer } from "../../src/http/server.js";
 import { agreeingVerifier, createFakeLlm, type FakeReply } from "../../src/llm/fake.js";
 import { unconfiguredLlm } from "../../src/llm/index.js";
@@ -193,6 +194,7 @@ export async function createLiveEnv(
       appId: config.githubAppId,
       privateKey: TEST_PRIVATE_KEY,
       baseUrl: "https://api.github.com",
+      gate: refuseAllGate,
       fetch: worldFetch,
     }),
   });
@@ -215,6 +217,7 @@ export async function createLiveEnv(
         appId: config.githubAppId,
         privateKey: TEST_PRIVATE_KEY,
         baseUrl: "https://api.github.com",
+        gate: refuseAllGate,
         fetch: worldFetch,
       }),
     now: () => new Date(),
@@ -356,7 +359,12 @@ export async function createLiveEnv(
     },
     async close() {
       // The schedules persist in the database: remove them so other tests see a clean queue.
-      await applyCronSchedules(t.deps.queue, { feedbackPollCron: null, metricsRollupCron: null });
+      await applyCronSchedules(t.deps.queue, {
+        feedbackPollCron: null,
+        metricsRollupCron: null,
+        modeApplyCron: null,
+        permissionsRefreshCron: null,
+      });
       await server.close();
       await t.deps.queue.stop();
       // Maintenance timestamps would make the next test file's supervise() a no-op.

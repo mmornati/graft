@@ -17,6 +17,10 @@ export interface InstallationsTable {
   repository_selection: "all" | "selected";
   suspended_at: Date | null;
   deleted_at: Date | null;
+  /** Permission name to level, from `GET /app/installations/{id}` (Phase 1 step 1). */
+  permissions: Json<Record<string, "read" | "write" | "admin">>;
+  /** NULL: never read, which counts as "permission missing". */
+  permissions_read_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -28,8 +32,32 @@ export interface RepositoriesTable {
   private: boolean;
   default_branch: string | null;
   removed_at: Date | null;
+  /** Requested modes (Phase 1 step 1); the effective mode is computed, never stored. */
+  policy_mode: Generated<"report" | "enforce">;
+  guard_mode: Generated<"report" | "enforce">;
+  mcp_write: Generated<"off" | "on">;
   created_at: Timestamp;
   updated_at: Timestamp;
+}
+
+/** Audit of `graft mode set`; `applied_at` is NULL until the worker has acted on the change. */
+export interface ModeChangesTable {
+  id: Generated<string>;
+  repository_id: number;
+  key: "policy_mode" | "guard_mode" | "mcp_write";
+  from_value: string;
+  to_value: string;
+  actor: string;
+  reason: string;
+  created_at: Timestamp;
+  applied_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+}
+
+/** Server facts, not installation data (the ceiling the worker last published). */
+export interface ServiceStateTable {
+  key: string;
+  value: string;
+  updated_at: Date;
 }
 
 export interface TasksTable {
@@ -248,6 +276,8 @@ export interface PolicyVerdictsTable {
   /** Set iff `policy_status` is `ok`. */
   policy_hash: string | null;
   mode: Generated<"report" | "enforce">;
+  /** The effective `policy_mode` the verdict was published under (Phase 1 step 1). */
+  policy_mode: Generated<"report" | "enforce">;
   outcome: "would_approve" | "would_require" | "would_block" | "no_policy" | "policy_invalid";
   check_conclusion: Generated<"neutral" | "success" | "failure" | "action_required">;
   risk_class: RiskClass | null;
@@ -394,6 +424,8 @@ export interface Database {
   incidents: IncidentsTable;
   metrics_daily: MetricsDailyTable;
   pilot_purges: PilotPurgesTable;
+  mode_changes: ModeChangesTable;
+  service_state: ServiceStateTable;
 }
 
 export const TABLE_NAMES = [
@@ -417,4 +449,6 @@ export const TABLE_NAMES = [
   "incidents",
   "metrics_daily",
   "pilot_purges",
+  "mode_changes",
+  "service_state",
 ] as const satisfies readonly (keyof Database)[];

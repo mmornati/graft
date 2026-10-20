@@ -1,8 +1,10 @@
+import { publishModeCeiling } from "../modules/modes/index.js";
 import { startWorker } from "../queue/worker.js";
 import { bootstrap } from "./bootstrap.js";
 
 async function main(): Promise<void> {
   const deps = await bootstrap({ supervise: true });
+  await publishModeCeiling(deps);
   await startWorker(deps.queue, deps.registry, deps, {
     concurrency: deps.config.workerConcurrency,
   });

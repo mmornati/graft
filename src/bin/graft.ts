@@ -24,10 +24,11 @@ const USAGE = `usage:
   graft policy schema [--write | --check] [--path <file>]
   graft pilot doctor|sync-reviewers|purge ...   (see the README, "Pilots and gate")
   graft baseline | gate report | metrics rollup | incident add|list|remove ...
+  graft mode show|set|history|refresh-permissions ...   (see docs/features/modes.md)
   graft e2e setup|run|verify|report|cleanup ...   (see docs/e2e/runbook.md)
 `;
 
-const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics"]);
+const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics", "mode"]);
 
 const DEFAULT_SCHEMA_PATH = fileURLToPath(
   new URL("../../schema/graft.v1.schema.json", import.meta.url),

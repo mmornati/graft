@@ -211,6 +211,7 @@ export const basePushPolicy = defineWebhookHandler({
     if (!pushTouchesPolicy(p)) return;
     if (!(await getActiveInstallation(ctx.db, p.installation.id))) return;
     const data: FanoutData = {
+      scope: "branch",
       installationId: p.installation.id,
       repositoryId: p.repository.id,
       ...splitFullName(p.repository.full_name),

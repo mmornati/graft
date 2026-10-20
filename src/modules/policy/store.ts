@@ -23,6 +23,8 @@ export interface VerdictValues extends VerdictIdentity {
   riskSource: PolicyVerdictsTable["risk_source"];
   authorKind: PolicyVerdictsTable["author_kind"];
   policyFileChanged: boolean;
+  /** The effective `policy_mode` it was published under (Phase 1 step 1). */
+  policyMode: "report" | "enforce";
   rulesMatched: unknown[];
   required: Record<string, unknown>;
   approvals: Record<string, unknown>;
@@ -41,6 +43,7 @@ export async function upsertVerdict(tx: Transaction<Database>, v: VerdictValues)
     policy_commit_sha: v.policyCommitSha,
     policy_status: v.policyStatus,
     policy_hash: v.policyHash,
+    policy_mode: v.policyMode,
     outcome: v.outcome,
     risk_class: v.riskClass,
     risk_final: v.riskFinal,

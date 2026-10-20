@@ -50,14 +50,14 @@ Seven steps over six weeks, in the order of the development plan. Each step's fe
 
 ### Step 1 — Modes and safety rails (week 7, first half)
 
-Detailed spec: [step-1-modes.md](step-1-modes.md).
+Detailed spec: [step-1-modes.md](step-1-modes.md). User-facing page: [features/modes.md](../features/modes.md). Human tasks: [HUMAN-TODO.md](HUMAN-TODO.md).
 
 
 - `GRAFT_MODE_CEILING` in config; migration adding `repositories.policy_mode`, `guard_mode`, `mcp_write` (all defaulting to report/off) and a `mode_changes` audit table (repository, key, from, to, actor, reason, at).
 - `pnpm graft mode show|set|history|refresh-permissions`; `set` writes the audit row, and a worker cron applies it by re-evaluating the repository's open PRs (the ops CLI never enqueues).
 - `effectiveMode(repo, key)` in one place; every feature reads it from there.
 - The Octokit mutation guard (§2.1) and the report-mode regression suite skeleton (§2.3), green on today's Phase 0 behaviour.
-- Installation permissions stored from the `installation` / `new_permissions_accepted` payloads, so features can ask "do we have `members: read`?" without a failing API call.
+- Installation permissions stored from `GET /app/installations/{id}` (read on `installation.created`, `new_permissions_accepted`, daily and on demand; never from a payload), so features can ask "do we have `members: read`?" without a failing API call.
 - **Done when:** with the ceiling at `report`, `mode set --policy enforce` succeeds but `mode show` reports the effective mode as `report (ceiling)`; the regression suite passes; no behaviour change on any PR.
 
 ### Step 2 — Approvals Graft can enforce (week 7–8)

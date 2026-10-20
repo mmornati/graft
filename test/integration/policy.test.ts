@@ -879,6 +879,7 @@ describe("policy fan-out", () => {
       await addOpenChange(i, { updatedAt: new Date(Date.UTC(2026, 9, 1, 0, 0, i)) });
     }
     const data: FanoutData = {
+      scope: "branch",
       installationId: INSTALLATION_ID,
       repositoryId: REPO_ID,
       owner: OWNER,
@@ -909,6 +910,7 @@ describe("policy fan-out", () => {
   it("I-POLF-4 a removed repository or an inactive installation enqueues nothing", async () => {
     await addOpenChange(2);
     const data: FanoutData = {
+      scope: "branch",
       installationId: INSTALLATION_ID,
       repositoryId: REPO_ID,
       owner: OWNER,

@@ -274,3 +274,57 @@ Step 1, item 5 of [plan/llm-provider-expansion.md](plan/llm-provider-expansion.m
 - **Token file re-read on every exchange.** Assertions with a `jti` are single use, so the provider never caches the identity token: the SDK's token cache refreshes the minted token in the 2-minute window before expiry and once after a 401, and each refresh reads the file again (U-LLM-17).
 - **Exchange failures are API outcomes.** The SDK throws `WorkloadIdentityError` (an `AnthropicError`, not an `APIError`) from inside the request, before any HTTP call, and `AnthropicError` for an unreadable token file; `classify` would have rethrown both as programmer errors. A wrapper maps them to `FederationError` with a failure: 400, 401, 403, a missing `access_token` and an unreadable or empty file are `auth`; 429 is `rate_limited`; 5xx and a network failure (detected in the wrapped `fetch`, not from the message) are `unavailable` (U-LLM-18). The message carries the status only, never the token, path or body. The exchange is outside the request's deadline signal, so it has its own 30 s timeout.
 - **Logging and redaction.** The client log line carries `auth: "federation"`, the rule ID and the host (U-LLM-19). The logger redacts `anthropicFederation`, `organizationId`, `serviceAccountId`, `identityTokenFile`, `identityToken`, `assertion` and `access_token`. The e2e runner registers the token file's current contents as a secret; later rotations are caught by the JWT pattern.
+
+## Phase 1 step 1: modes
+
+Spec: [phase-1/step-1-modes.md](phase-1/step-1-modes.md). Decisions D1 to D17 are in the spec; what follows is what the spec left open, what the library check (T1) found, and where the build differs from the spec.
+
+**T1: library verification** (offline, against the fake GitHub API).
+
+- **(a) `octokit.request.endpoint.parse(options)` in `hook.before("request")`** returns the expanded `method` and `url` (full URL, base included) for `octokit.rest.checks.create`, for `octokit.request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", …)` and for `octokit.paginate(octokit.rest.pulls.list, …)`. It does not return a `baseUrl`; the guard reads `options.baseUrl` and strips it (a GitHub Enterprise `…/api/v3` prefix) before matching. `options.url` in the hook is the route *template* for `rest.*` calls, which is what the refusal message uses (after replacing any literal owner/repo and numbers). A `{ref}` parameter is percent-encoded by Octokit (`heads/graft-revert/x` becomes `heads%2Fgraft-revert%2Fx`), and the guard refuses every `%` in a write path (U-MG-2). Step 5 must therefore delete its revert branch with a literal path (`octokit.request("DELETE /repos/{owner}/{repo}/git/refs/heads/graft-revert/" + name, …)` with the owner and repo expanded by the caller), not with `rest.git.deleteRef({ ref })`.
+- **(b) The installation-token request does pass through the installation client's `hook.before`**: `POST /app/installations/{id}/access_tokens` is seen by the hook (once per client use, lazily, after the caller's own before-hooks), and `asApp().request("POST /app/installations/…")` passes it too. So the `auth` row is reachable and exercised by every write.
+- **(c) A throw in `hook.before` rejects the call without a network request**: the fake's request log stays empty, not even the token call (U-MG-6).
+
+**Choices where the spec is silent**
+
+- **Fan-out inside the claiming transaction.** The pg-boss queue accepts a transaction (`send(..., { tx })`), so `modes.apply` sends its `policy.fanout` jobs in the transaction that claims the `mode_changes` rows and marks them applied. A rollback sends nothing; a repeated run cannot happen for the same rows.
+- **`mode set` output.** When nothing changes it prints `no change` and nothing else. After a change it prints the `show` block, then one `note:` line for each key given on the command line whose requested value is not effective (the note names the reason and the missing permission). A shell/worker ceiling warning is printed once, above the first repository. A removed or unknown repository is `unknown or removed repository` on stderr, exit 1, for `show`, `set` and `history`. `--json` prints `permissions: {}` when they were never read (`permissionsReadAt` is then `null`), and the text line says `permissions  not read`.
+- **`pilot doctor` is per installation**, so the two new checks (appended after `crons`, always WARN, never FAIL) count for the installation being examined: `permissions` is a WARN when its permissions were not read in the last 48 hours; `modes` is a WARN when a requested mode is not effective (counted by reason). `modes` uses the worker's ceiling from `service_state` when there is one, else the shell's. The Phase 0 doctor tests now expect twelve checks, and their healthy installation has read its permissions.
+- **Effective modes in the policy job** are read after `ensureRepository` (a repository created after an `all` install has no row before it), still outside the lock and after the installation check.
+- **Mode line when the details are null** (no policy, invalid policy): the text is the mode line alone, so `renderPolicyDetails` returns a string and never `null`. Two Phase 0 render assertions changed accordingly (U-PR-1 gains the line, U-PR-2 expects the line where it expected `null`).
+- **`PolicyView.mode`** is required, not optional.
+
+**Deviations from the spec**
+
+- **Ceiling fan-out key.** The spec's singleton key `policy:mode:<repo>:<pr>:ceiling-<ceiling>` would swallow a second change to the same value within the 7-day job retention (report, enforce, report, enforce: the last fan-out would be deduplicated and the check would keep a stale mode line). The repository fan-out therefore carries `ceilingAt` (epoch ms of the change, null for a `mode_change`) and the key is `policy:mode:<repo>:<pr>:ceiling-<ceilingAt>`. `modes.ceiling_fanout` takes `{ at }` for the same reason.
+- **The factory's `gate` is optional** and defaults to a gate that allows no Phase 1 write. The spec says the factory "gains `gate`" and callers pass one. `src/e2e` may import only a short list of modules (U-LIVE-BOUND-1) and "no change to the runner" applies, so the runner's own factory cannot be made to pass one. Production wiring (`bootstrap.ts`) passes the real `mutationGate(db, config)` and a logger for refusals; `graft-ops.ts` and `eval/export.ts` pass the refuse-all gate explicitly.
+- **One route is added to the table**: `POST /app/hook/deliveries/{n}/attempts`, class `auth`. The live e2e runner's s10 scenario redelivers a webhook with the App-JWT client that it builds from the factory, so a table without it breaks I-LIVE-RUN-1. Graft's own code never calls it, and the class `auth` is not tied to an installation.
+- **`installations.refresh_permissions` lives in `src/modules/modes/permissions.ts`**, not `jobs.ts`: the installation handler enqueues it and the modes jobs import the policy job, which imports the installations module, so keeping it in `jobs.ts` would be an import cycle. The daily cron needs a fixed payload, so it runs a second job, `installations.refresh_permissions_all`, that enqueues one refresh per active installation, two seconds apart.
+- **N-4 under the default profile.** With a `report` ceiling the effective mode cannot change, so the mode line cannot change either; the suite asserts that the line stays `report` and that the extra `modes.apply` publishes nothing. Under the `max` profile the repository starts at `enforce`, so the sequence is report (a rollback, which is the case that matters) and then enforce again.
+- **I-MODE-10 freezes the check details** (a `vi.mock` of `renderPolicyDetails`) because in step 1 the mode line is part of the rendered details, which are already in the facts hash: without the freeze, dropping `policyMode` from the hash would change nothing visible and the mutation check could not catch it. In step 2 the hash term is what keeps the republication correct if the rendered text does not differ.
+
+**Other test changes**: `db.test.ts` and `pilot-ops.test.ts` step down one more migration and count 22 tables (I-DB-1, I-DB-2, I-DB-3 inserts a row into the two new tables); I-PURGE-2 excludes `service_state` next to `pilot_purges` and I-PURGE-1 seeds and counts `mode_changes`; the two tests that call `applyCronSchedules` with a queue that registers two jobs switch the modes crons off; `policy.test.ts` fan-out data gains `scope: "branch"`. The fake GitHub API gains `GET /app/installations/{id}` (`state.installationPermissions`), and `fakeGitHubFactory(api, gate?, onRefused?)`.
+
+### Review 1 fixes
+
+Finding → fix (review: `docs/phase-1/reviews/step-1-review-1.md`).
+
+1. **Octokit outside the factory** → `buildExportClient --auth token` now builds `makeGetOnly(forToken(...))`; the DoD grep is empty without an exemption.
+2. **Ceiling fan-out lost on a failed enqueue** → `casServiceState` takes an `inTx` callback that runs in the same transaction; `publishModeCeiling` enqueues `modes.ceiling_fanout` there (`queue.send(..., { tx })`). If the send throws, the stored ceiling rolls back and the next start fans out (I-MODE-7, new case).
+3. **Unknown permission level failed open** → `effectiveModes` treats a level that is not an own key of `LEVEL` as missing (`permission_missing`); U-MODE-8 covers unknown strings, `toString`, numbers, null and non-object permissions.
+4. **Guard ignored the host** → a write whose parsed URL does not start with `${baseUrl}/` is refused `unknown_route`; the fallback branch is gone (U-MG-9).
+5. **Redelivery route passed for every client** → new class `app` (route table kind and `WriteClass`): it passes only when `installationId === null`; installation clients get `unknown_route` (U-MG-1, U-MG-10). It stays in the production allow-list because the live e2e runner redelivers a webhook with the App JWT.
+6. **N-4 cannot catch mutation 6 in step 1** → recorded here: only I-MODE-10 kills "policyMode removed from factsHash" until step 2 stops rendering the mode line into the details; the step 2 reviewer must re-check that N-4 catches it then.
+7. **Phase 1 route on the App client** → refused `app_client` (U-MG-7 now expects it) before the feature check.
+8. **`refuseAllGate` reads `repository_unknown`** → commented: the reason union is fixed by the spec; it means "no gate wired in".
+9. **`routeTemplate` kept free names** → every segment that is not a known route word or a number is templated (`{owner}`, `{repo}`, `{x}`); a branch name is never logged (U-MG-11).
+10. **`mode set --repo` ambiguity** → if more than one active row matches the name, exit 1, print the installation ids, change nothing (I-MODE-4b).
+
+### Review 2 fixes
+
+Review: `docs/phase-1/reviews/step-1-review-2.md` (APPROVED, 2 minors, 2 nits).
+
+1. **Per-request `baseUrl` bypassed the host check** -> the guard takes the factory's configured base URL (`baseUrl` option, trailing slashes trimmed) instead of reading it from the request options. A write whose per-request `baseUrl` differs, or whose resolved URL is not under the configured one, is refused `unknown_route` (U-MG-9b).
+2. **Trailing slash in `GITHUB_API_URL` refused every write** -> `loadConfig` strips trailing slashes from `githubApiUrl` (U-CFG-1b).
+3. **Follow-up (nit): the ceiling send without `tx` can survive a mutation.** Harmless: it runs before the commit, so the fan-out is only enqueued early. Left as is.
+4. **Follow-up (nit): modes are kept on transferred or re-added repositories.** To decide in step 2.

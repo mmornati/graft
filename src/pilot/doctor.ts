@@ -5,6 +5,9 @@
 import { sql } from "kysely";
 import type { Config } from "../config/index.js";
 import type { Db } from "../db/client.js";
+import { resolveCeiling } from "../modules/modes/cli.js";
+import { modesOf } from "../modules/modes/effective.js";
+import { listRepositoryModeRows } from "../modules/modes/store.js";
 
 export type CheckStatus = "OK" | "WARN" | "FAIL";
 export interface Check {
@@ -21,7 +24,11 @@ export async function runDoctor(
   db: Db,
   config: Pick<
     Config,
-    "pgbossSchema" | "llmDailyTokenBudget" | "feedbackPollCron" | "metricsRollupCron"
+    | "pgbossSchema"
+    | "llmDailyTokenBudget"
+    | "feedbackPollCron"
+    | "metricsRollupCron"
+    | "modeCeiling"
   >,
   o: { installationId: number; now: Date },
 ): Promise<Check[]> {
@@ -243,6 +250,39 @@ export async function runDoctor(
     if (gone.length > 0) add("crons", "WARN", `schedule missing in pg-boss: ${gone.join(", ")}`);
     else add("crons", "OK", "feedback and rollup schedules are present");
   }
+
+  // permissions (Phase 1 step 1): a mode that needs a permission stays in report until it is read
+  const unread = await sql<{ n: string }>`
+    select count(*)::text as n from installations
+    where id = ${id} and deleted_at is null and suspended_at is null
+      and (permissions_read_at is null or permissions_read_at < ${ago(2 * DAY_MS)})`.execute(db);
+  if (num(unread.rows[0]?.n) > 0) {
+    add(
+      "permissions",
+      "WARN",
+      `permissions not read in the last 48 h (run pnpm graft mode refresh-permissions --installation ${id})`,
+    );
+  } else add("permissions", "OK", "permissions were read in the last 48 h");
+
+  // modes (Phase 1 step 1): a requested mode that is not effective, by reason
+  const ceiling = await resolveCeiling(db, config);
+  const notEffective = new Map<string, number>();
+  for (const row of await listRepositoryModeRows(db, { installationId: id })) {
+    const m = modesOf(row, ceiling.ceiling);
+    for (const s of [m.policy, m.guard, m.mcpWrite]) {
+      if (s.requested !== s.effective) {
+        notEffective.set(s.reason, (notEffective.get(s.reason) ?? 0) + 1);
+      }
+    }
+  }
+  if (notEffective.size > 0) {
+    const total = [...notEffective.values()].reduce((a, b) => a + b, 0);
+    const byReason = [...notEffective]
+      .map(([reason, n]) => `${reason} ${n}`)
+      .sort()
+      .join(", ");
+    add("modes", "WARN", `${total} requested modes are not effective: ${byReason}`);
+  } else add("modes", "OK", "every requested mode is effective");
   return checks;
 }
 

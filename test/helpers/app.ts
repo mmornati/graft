@@ -7,6 +7,11 @@ import {
   createGitHubClientFactory,
   type GitHubClientFactory,
 } from "../../src/github/client-factory.js";
+import {
+  type MutationGate,
+  type MutationRefusedError,
+  refuseAllGate,
+} from "../../src/github/mutation-guard.js";
 import type { buildServer } from "../../src/http/server.js";
 import { forbiddenLlm } from "../../src/llm/fake.js";
 import type { LlmClient } from "../../src/llm/types.js";
@@ -40,11 +45,17 @@ export interface TestApp {
 }
 
 /** A real client factory whose HTTP goes to the in-memory fake GitHub API. */
-export function fakeGitHubFactory(api: { fetch: typeof fetch }): GitHubClientFactory {
+export function fakeGitHubFactory(
+  api: { fetch: typeof fetch },
+  gate: MutationGate = refuseAllGate,
+  onRefused?: (e: MutationRefusedError) => void,
+): GitHubClientFactory {
   return createGitHubClientFactory({
     appId: 12345,
     privateKey: TEST_PRIVATE_KEY,
     baseUrl: "https://api.github.com",
+    gate,
+    ...(onRefused ? { onRefused } : {}),
     fetch: api.fetch,
   });
 }

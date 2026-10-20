@@ -165,6 +165,9 @@ const EnvSchema = z.object({
   GRAFT_INCIDENT_LABEL: withDefault(incidentLabel, "incident"),
   GRAFT_METRICS_ROLLUP_CRON: withDefault(cronOrOff, "15 2 * * *"),
   GRAFT_METRICS_EXCLUDED_AUTHORS: withDefault(loginList, "dependabot[bot],renovate[bot]"),
+  GRAFT_MODE_CEILING: withDefault(z.enum(["report", "enforce"]), "report"),
+  GRAFT_MODE_APPLY_CRON: withDefault(cronOrOff, "* * * * *"),
+  GRAFT_PERMISSIONS_REFRESH_CRON: withDefault(cronOrOff, "30 3 * * *"),
 });
 
 export interface Config {
@@ -218,6 +221,15 @@ export interface Config {
   readonly metricsRollupCron: string | null;
   /** Lowercased logins left out of the baseline, the rollup PR counts and gate coverage. */
   readonly metricsExcludedAuthors: readonly string[];
+  /**
+   * The most any repository can be set to (Phase 1 step 1). Only the operator's environment sets
+   * it; `report` (the default) makes every mode report/off whatever the database says.
+   */
+  readonly modeCeiling: "report" | "enforce";
+  /** Cron for `modes.apply`, or null when switched off. */
+  readonly modeApplyCron: string | null;
+  /** Cron for the daily installation permissions refresh, or null when switched off. */
+  readonly permissionsRefreshCron: string | null;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -300,7 +312,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     githubAppId: d.GITHUB_APP_ID,
     githubAppPrivateKey: privateKey,
     githubWebhookSecret: d.GITHUB_WEBHOOK_SECRET,
-    githubApiUrl: d.GITHUB_API_URL,
+    githubApiUrl: d.GITHUB_API_URL.replace(/\/+$/, ""),
     pgbossSchema: d.PGBOSS_SCHEMA,
     workerConcurrency: d.WORKER_CONCURRENCY,
     webhookBodyLimitBytes: d.WEBHOOK_BODY_LIMIT_BYTES,
@@ -324,5 +336,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     incidentLabel: d.GRAFT_INCIDENT_LABEL,
     metricsRollupCron: d.GRAFT_METRICS_ROLLUP_CRON,
     metricsExcludedAuthors: Object.freeze([...d.GRAFT_METRICS_EXCLUDED_AUTHORS]),
+    modeCeiling: d.GRAFT_MODE_CEILING,
+    modeApplyCron: d.GRAFT_MODE_APPLY_CRON,
+    permissionsRefreshCron: d.GRAFT_PERMISSIONS_REFRESH_CRON,
   });
 }

@@ -4,9 +4,18 @@
 
 The [quickstart](getting-started.md#quickstart-offline) runs with a throwaway key and signed fixtures. To see Graft on real pull requests you register your own GitHub App from the manifest in this repository, point its webhook at your laptop through a tunnel, and install it on a sandbox organisation. Use a sandbox: Phase 0 Graft reports only, but it still writes check runs and a comment on every pull request it sees.
 
+## Which manifest
+
+Two manifests live in `github/`:
+
+- `app-manifest.json`: the full permission set. Register this one for a deployment that may enforce.
+- `app-manifest.report.json`: the permission set for a deployment that only ever evaluates Graft (name and description say "report only"). In this version both carry the Phase 0 permissions; from step 2 on, later steps add read permissions to both and `contents: write` to the full manifest only. `test/unit/manifest.test.ts` (U-MAN-2) pins that the report manifest never has a write permission other than `checks` and `pull_requests`, so an evaluating deployment cannot be enforced on by construction.
+
+Registering the report manifest is the safest default. See [Modes](features/modes.md).
+
 ## Register the App
 
-1. Edit `github/app-manifest.json` (name, `url`, `hook_attributes.url`). Create a channel at <https://smee.io/new> and use its URL as the hook URL.
+1. Pick the manifest (see above) and edit it (name, `url`, `hook_attributes.url`). Create a channel at <https://smee.io/new> and use its URL as the hook URL.
 2. Serve `github/register-app.html` (for example `cd github && python3 -m http.server 8080`, then open <http://localhost:8080/register-app.html>), enter the org name and submit. GitHub redirects to `redirect_url` with `?code=...`.
 3. Convert the code: `gh api -X POST /app-manifests/<code>/conversions`. The response has the App `id`, `pem` and `webhook_secret`.
 4. Put the PEM in a file outside the repo and fill `.env`: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_WEBHOOK_SECRET`; also set `SMEE_URL`.
