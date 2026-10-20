@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../../src/http/server.js";
 import { startWorker } from "../../src/queue/worker.js";
 import { createTestApp, jobContext, postFixture, type TestApp } from "../helpers/app.js";
-import { truncateAll } from "../helpers/db.js";
+import { countJobs, truncateAll } from "../helpers/db.js";
 
 let t: TestApp;
 let server: Awaited<ReturnType<typeof buildServer>>;
@@ -44,7 +44,11 @@ describe("end to end", () => {
       "graft-sandbox/sample-py",
       "graft-sandbox/sample-ts",
     ]);
-    expect(t.deps.github).toMatchObject({ calls: 0 });
+    // Since Phase 1 step 1 the event also queues `installations.refresh_permissions`, whose job
+    // reads the permissions with the App JWT (asApp) whenever the worker gets to it: a race with
+    // this assertion. The installation itself is handled without an installation token.
+    expect(t.deps.github).toMatchObject({ installationCalls: 0 });
+    expect(await countJobs(t.db, "installations.refresh_permissions")).toBe(1);
   });
 
   it("I-HEALTH-1 /readyz -> 200 against the real DB and started queue", async () => {
