@@ -312,7 +312,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     githubAppId: d.GITHUB_APP_ID,
     githubAppPrivateKey: privateKey,
     githubWebhookSecret: d.GITHUB_WEBHOOK_SECRET,
-    githubApiUrl: d.GITHUB_API_URL,
+    githubApiUrl: d.GITHUB_API_URL.replace(/\/+$/, ""),
     pgbossSchema: d.PGBOSS_SCHEMA,
     workerConcurrency: d.WORKER_CONCURRENCY,
     webhookBodyLimitBytes: d.WEBHOOK_BODY_LIMIT_BYTES,

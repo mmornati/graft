@@ -215,6 +215,8 @@ export function installMutationGuard(
     /** null for the App-JWT client. */
     installationId: number | null;
     feature: Feature | undefined;
+    /** The factory's configured API base URL: the only host a write may go to. */
+    baseUrl: string;
     gate: MutationGate;
     /** Told about every refusal (the factory logs it at error). */
     onRefused?: (e: MutationRefusedError) => void;
@@ -225,7 +227,7 @@ export function installMutationGuard(
     const method = parsed.method.toUpperCase();
     if (method === "GET" || method === "HEAD") return;
 
-    const base = String(options.baseUrl).replace(/\/+$/, "");
+    const base = o.baseUrl.replace(/\/+$/, "");
     const refusal = (reason: string): MutationRefusedError => {
       const err = new MutationRefusedError(
         method,
@@ -237,7 +239,12 @@ export function installMutationGuard(
       return err;
     };
 
-    // A write to any host other than the configured API is never legitimate.
+    // A write to any host other than the configured API is never legitimate. The comparison is
+    // against the factory's base URL, never the request's: a per-request `baseUrl` that differs is
+    // refused, and so is any resolved URL that is not under the configured one.
+    if (options.baseUrl !== undefined && String(options.baseUrl).replace(/\/+$/, "") !== base) {
+      throw refusal("unknown_route");
+    }
     if (!parsed.url.startsWith(`${base}/`)) throw refusal("unknown_route");
     const cls = classifyWrite(method, parsed.url.slice(base.length));
 

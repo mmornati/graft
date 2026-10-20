@@ -229,6 +229,32 @@ describe("mutation guard: the hook", () => {
     expect(api.requests).toEqual([]);
   });
 
+  it("U-MG-9b a per-request baseUrl cannot move a write to another host: refused unknown_route, nothing sent", async () => {
+    const api = createFakeGitHubApi();
+    const client = await fakeGitHubFactory(api, allowAll).forInstallation(1, { feature: "guard" });
+    for (const baseUrl of [
+      "https://other.host",
+      "https://other.host/",
+      "https://api.github.com.evil.example",
+    ]) {
+      expect(
+        (
+          await refusal(
+            client.request("POST /repos/{owner}/{repo}/check-runs", {
+              owner: OWNER,
+              repo: REPO,
+              name: "x",
+              head_sha: SHA,
+              baseUrl,
+            }),
+          )
+        ).refusal,
+        baseUrl,
+      ).toBe("unknown_route");
+    }
+    expect(api.requests).toEqual([]);
+  });
+
   it("U-MG-10 the redelivery route passes for the App client only; an installation client is refused", async () => {
     const api = createFakeGitHubApi();
     const factory = fakeGitHubFactory(api, allowAll);

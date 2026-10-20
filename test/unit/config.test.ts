@@ -39,6 +39,11 @@ describe("config", () => {
     expect(Object.isFrozen(c)).toBe(true);
   });
 
+  it("U-CFG-1b trailing slashes on GITHUB_API_URL are stripped", () => {
+    const c = loadConfig({ ...valid, GITHUB_API_URL: "https://ghe.example.com/api/v3//" });
+    expect(c.githubApiUrl).toBe("https://ghe.example.com/api/v3");
+  });
+
   it("U-CFG-2 an empty env names every required variable in one message", () => {
     const msg = errorOf({}).message;
     for (const name of [

@@ -45,6 +45,7 @@ export function createGitHubClientFactory(o: {
   installMutationGuard(appClient, {
     installationId: null,
     feature: undefined,
+    baseUrl: o.baseUrl,
     gate,
     ...(o.onRefused ? { onRefused: o.onRefused } : {}),
   });
@@ -55,6 +56,7 @@ export function createGitHubClientFactory(o: {
       installMutationGuard(client, {
         installationId,
         feature: opts?.feature,
+        baseUrl: o.baseUrl,
         gate,
         ...(o.onRefused ? { onRefused: o.onRefused } : {}),
       });

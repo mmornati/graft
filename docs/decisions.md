@@ -319,3 +319,12 @@ Finding → fix (review: `docs/phase-1/reviews/step-1-review-1.md`).
 8. **`refuseAllGate` reads `repository_unknown`** → commented: the reason union is fixed by the spec; it means "no gate wired in".
 9. **`routeTemplate` kept free names** → every segment that is not a known route word or a number is templated (`{owner}`, `{repo}`, `{x}`); a branch name is never logged (U-MG-11).
 10. **`mode set --repo` ambiguity** → if more than one active row matches the name, exit 1, print the installation ids, change nothing (I-MODE-4b).
+
+### Review 2 fixes
+
+Review: `docs/phase-1/reviews/step-1-review-2.md` (APPROVED, 2 minors, 2 nits).
+
+1. **Per-request `baseUrl` bypassed the host check** -> the guard takes the factory's configured base URL (`baseUrl` option, trailing slashes trimmed) instead of reading it from the request options. A write whose per-request `baseUrl` differs, or whose resolved URL is not under the configured one, is refused `unknown_route` (U-MG-9b).
+2. **Trailing slash in `GITHUB_API_URL` refused every write** -> `loadConfig` strips trailing slashes from `githubApiUrl` (U-CFG-1b).
+3. **Follow-up (nit): the ceiling send without `tx` can survive a mutation.** Harmless: it runs before the commit, so the fan-out is only enqueued early. Left as is.
+4. **Follow-up (nit): modes are kept on transferred or re-added repositories.** To decide in step 2.
