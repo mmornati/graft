@@ -668,6 +668,42 @@ describe("reviewer eligibility sync", () => {
     const res = await upsertChangeFromPull(t.db, REPO_ID, renamed as never, FIXED_NOW);
     expect(res.change).toMatchObject({ author_id: PR_AUTHOR_ID, author_login: "renamed" });
   });
+
+  it("I-REV-14 after the collaborator helper extraction (Phase 1 step 2, D16) the outcomes are unchanged: triage and above, custom roles by base, 403/404 fail closed, recycled logins refused", async () => {
+    await withChange();
+    const cases = [
+      // login, id, role, legacy permission (undefined: derived), eligible
+      ["r-admin", 7401, "admin", undefined, true],
+      ["r-maintain", 7402, "maintain", undefined, true],
+      ["r-write", 7403, "write", undefined, true],
+      ["r-triage", 7404, "triage", undefined, true],
+      ["r-read", 7405, "read", undefined, false],
+      ["r-custom-write", 7406, "release", "write", true],
+      ["r-custom-read", 7407, "Triage", "read", false],
+      ["r-missing", 7408, null, undefined, false],
+      ["r-recycled", 7409, "admin", undefined, false],
+      ["r-forbidden", 7410, "admin", undefined, false],
+    ] as const;
+    api.state.requestedReviewers.set(PR_NUMBER, {
+      users: cases.map(([login, id]) => ({ id, login, type: "User" })),
+      teams: [],
+    });
+    for (const [login, id, role, permission] of cases) {
+      if (role === null) continue;
+      api.state.permissions.set(login, {
+        id: login === "r-recycled" ? 99_001 : id,
+        role,
+        ...(permission === undefined ? {} : { permission }),
+      });
+    }
+    api.failNext("GET", /\/collaborators\/r-forbidden\/permission$/, 403);
+    await syncReviewers(jobContext(t), SYNC_DATA);
+    expect((await rows()).map((r) => r.user_id)).toEqual(
+      cases.filter((c) => c[4]).map((c) => c[1]),
+    );
+    // One permission request per user, through the one helper.
+    expect(permissionCalls()).toHaveLength(cases.length);
+  });
 });
 
 const INCIDENT_DATA = SYNC_DATA;

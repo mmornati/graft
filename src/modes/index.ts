@@ -87,6 +87,20 @@ function state<V extends string>(
   return { requested, effective: requested, reason: "repository" };
 }
 
+/**
+ * Phase 1 step 2 (D15): whether the stored installation permissions include `members` at read or
+ * above. null (never read) and an unknown level count as missing. `policy_mode` does not need it:
+ * without it, team constraints are unverified and never met.
+ */
+export function hasMembersRead(
+  permissions: Readonly<Record<string, string>> | null | undefined,
+): boolean {
+  if (permissions === null || permissions === undefined) return false;
+  if (!Object.hasOwn(permissions, "members")) return false;
+  const have = permissions.members as string;
+  return Object.hasOwn(LEVEL, have) && LEVEL[have as PermissionLevel] >= LEVEL.read;
+}
+
 export function effectiveModes(input: EffectiveModesInput): EffectiveModes {
   const r = input.requested;
   return {

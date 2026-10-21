@@ -434,7 +434,9 @@ describe("policy engine (integration)", () => {
   it("I-POL-9 a review shows in the approvals line; a dismissal takes it back", async () => {
     await schedulePolicy.handle(event("pull_request.opened", "wh-9a"), jobContext(t));
     expect(await run()).toBe("published");
-    expect(policySection()).toContain("**Approvals so far:** 0 on this head.");
+    expect(policySection()).toContain(
+      "**Approvals so far:** 0 on this head; 0 count (write access).",
+    );
 
     api.state.reviews.set(PR_NUMBER, [makeReview({ id: 1, login: "alice" })]);
     await reviewPolicy.handle(event("pull_request_review.submitted", "wh-9b"), jobContext(t));
@@ -443,7 +445,9 @@ describe("policy engine (integration)", () => {
     );
     expect(job?.data).toMatchObject({ trigger: "review" });
     expect(await run({ trigger: "review" }, 30_000)).toBe("published");
-    expect(policySection()).toContain("**Approvals so far:** 1 on this head (`alice`).");
+    expect(policySection()).toContain(
+      "**Approvals so far:** 1 on this head (`alice`); 0 count (write access).",
+    );
 
     api.state.reviews.set(PR_NUMBER, [
       makeReview({ id: 1, login: "alice", userId: 77, submittedAt: "2026-10-14T11:01:00Z" }),
@@ -456,13 +460,17 @@ describe("policy engine (integration)", () => {
       }),
     ]);
     expect(await run({ trigger: "review" }, 60_000)).toBe("published");
-    expect(policySection()).toContain("**Approvals so far:** 0 on this head.");
+    expect(policySection()).toContain(
+      "**Approvals so far:** 0 on this head; 0 count (write access).",
+    );
     // An approval on an older commit is counted apart; the count never changes the outcome.
     api.state.reviews.set(PR_NUMBER, [
       makeReview({ id: 3, login: "bob", commitId: fakeSha(0x0d) }),
     ]);
     expect(await run({ trigger: "review" }, 90_000)).toBe("published");
-    expect(policySection()).toContain("0 on this head, 1 on an older commit.");
+    expect(policySection()).toContain(
+      "0 on this head, 1 on an older commit; 0 count (write access).",
+    );
     expect(lastCheck()?.conclusion).toBe("neutral");
   });
 

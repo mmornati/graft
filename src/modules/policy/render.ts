@@ -8,6 +8,12 @@
 import { MAX_SECTION_CHARS } from "../../github/managed-comment.js";
 import { codeSpan, escapeProse } from "../../github/markdown.js";
 import type { Mode } from "../../modes/index.js";
+import type {
+  ApproverFacts,
+  ConstraintStatus,
+  Enforced,
+  Unverified,
+} from "../../policy/enforce.js";
 import {
   formatPolicyErrorParts,
   type PolicyError,
@@ -54,8 +60,15 @@ export interface PolicyView {
   warnings?: PolicyWarning[];
   /** The PR adds graft.yaml where the base has none. */
   addsPolicyFile: boolean;
-  /** The effective `policy_mode` (Phase 1 step 1). Informational: it never decides a conclusion. */
+  /** The effective `policy_mode` (Phase 1 step 1): which wording is shown (step 2, §9). */
   mode: { effective: Mode };
+  /**
+   * What enforce mode concludes (Phase 1 step 2), computed in every mode. Report mode shows it
+   * as the would-be line; enforce mode titles the check with it. Absent: nothing is said.
+   */
+  enforced?: Enforced | null;
+  /** Who counted (Phase 1 step 2); null when the policy is not valid. */
+  approvers?: ApproverFacts | null;
 }
 
 export function viewOutcome(v: Pick<PolicyView, "state" | "verdict">): PolicyOutcome {
@@ -130,9 +143,78 @@ function titleWith(v: PolicyView, wrap: (s: string) => string): string {
   return title;
 }
 
+/** In enforce mode, the conclusion is what the title says (§9). */
+const enforcing = (v: PolicyView): Enforced | null =>
+  v.mode.effective === "enforce" && v.enforced ? v.enforced : null;
+
+function whoText(v: PolicyView, c: ConstraintStatus, wrap: (s: string) => string): string {
+  return c.teams.length > 0 ? teamsText(v.owner, c.teams, wrap) : "anyone";
+}
+
+/**
+ * The enforce conclusion in words, one source for the enforce title and the would-be line.
+ * `sentence` is capitalised (a title); otherwise it continues a sentence.
+ */
+function enforcedText(
+  v: PolicyView,
+  e: Enforced,
+  wrap: (s: string) => string,
+  sentence: boolean,
+): string {
+  const cap = (s: string) => (sentence ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  switch (e.reason) {
+    case "approved_by_policy":
+      return sentence ? "Policy satisfied: no review required" : "no review required";
+    case "requirements_met":
+      return sentence
+        ? "Policy satisfied: required approvals present"
+        : "required approvals present";
+    case "card_pending":
+      return cap("waiting for the intent card");
+    case "no_policy":
+    case "policy_invalid":
+      return cap(`no valid graft.yaml on ${wrap(cutChars(v.baseRef, 100))}`);
+    case "reviews_truncated":
+      return cap("too many reviews to count (over 300)");
+    case "blocked": {
+      const by = v.verdict?.outcome === "would_block" ? v.verdict.blockedBy : [];
+      return cap(
+        by.length === 1 ? `blocked by rule ${by[0]}` : `blocked by rules ${by.join(", ")}`,
+      );
+    }
+    case "changes_requested": {
+      const who = v.approvers?.changesRequestedBy ?? [];
+      const more = who.length > 1 ? ` and ${who.length - 1} more` : "";
+      return cap(
+        `changes requested by ${who[0] === undefined ? "a reviewer" : wrap(who[0])}${more}`,
+      );
+    }
+    case "approvals_missing": {
+      const unmet = e.constraints.filter((c) => !c.met);
+      const missing = (c: ConstraintStatus) => Math.max(0, c.humans - c.approvedCount);
+      const only = unmet.length === 1 ? unmet[0] : undefined;
+      if (only) {
+        const n = missing(only);
+        return cap(
+          `needs ${n} more ${n === 1 ? "approval" : "approvals"} from ${whoText(v, only, wrap)}`,
+        );
+      }
+      if (unmet.length === 0) return cap("needs approvals");
+      return cap(
+        `needs approvals: ${unmet
+          .map(
+            (c) => `${missing(c)}${c.approvedCount > 0 ? " more" : ""} from ${whoText(v, c, wrap)}`,
+          )
+          .join(", ")}`,
+      );
+    }
+  }
+}
+
 /** The check run title, plain text, at most 200 characters. */
 export function policyTitle(v: PolicyView): string {
-  const t = titleWith(v, (s) => s);
+  const e = enforcing(v);
+  const t = e ? enforcedText(v, e, (s) => s, true) : titleWith(v, (s) => s);
   const chars = Array.from(t);
   return chars.length > MAX_TITLE_CHARS ? `${chars.slice(0, MAX_TITLE_CHARS - 1).join("")}…` : t;
 }
@@ -219,13 +301,40 @@ function bullet(m: MatchedRule, v: PolicyView, verdict: PolicyVerdict, facts: Po
 // ---------------------------------------------------------------------------------------------
 
 const REPORT_ONLY = " · report only";
-const PHASE0 = "Graft only reports in Phase 0; it approves and blocks nothing.";
+
+/** The section footer (the Phase 0 `PHASE0` sentence, reworded in Phase 1 step 2). */
+function footer(v: PolicyView): string {
+  return v.mode.effective === "enforce"
+    ? "Graft mode: enforce. This check is required only if branch protection says so."
+    : "Graft mode: report. Graft approves and blocks nothing here.";
+}
+
+/** The headline: the report title with ` · report only`, or the enforce title alone. */
+function headlineOf(v: PolicyView, reportTitle: string): string {
+  const e = enforcing(v);
+  return e
+    ? `**${enforcedText(v, e, (s) => codeSpan(s), true)}**`
+    : `**${reportTitle}**${REPORT_ONLY}`;
+}
+
+/** Report mode only, right after the headline: what enforce mode would conclude (§9). */
+export function wouldBeLine(v: PolicyView): string | null {
+  const e = v.enforced;
+  if (!e || v.mode.effective === "enforce") return null;
+  const text = enforcedText(v, e, (s) => codeSpan(s), false);
+  const head = "**In enforce mode this check would be:**";
+  return e.conclusion === "failure"
+    ? `${head} \`failure\`, ${text}.`
+    : `${head} \`${e.conclusion}\` (${text}).`;
+}
+
+const optional = (s: string | null): string[] => (s === null ? [] : [s]);
 
 function importantBlock(text: string): string {
   return `> [!IMPORTANT]\n> ${text}`;
 }
 
-function approvalsLine(a: ApprovalCount): string {
+function approvalsLine(a: ApprovalCount, approvers: ApproverFacts | null | undefined): string {
   const logins = a.users.map((u) => codeSpan(u));
   const rest = a.current - a.users.length;
   let who = "";
@@ -241,7 +350,16 @@ function approvalsLine(a: ApprovalCount): string {
   const parts = [`${a.current} on this head${who}`];
   if (a.stale > 0) parts.push(`${a.stale} on an older commit`);
   const cap = a.truncated ? " (first 300 reviews)" : "";
-  return `**Approvals so far:** ${parts.join(", ")}${cap}. Team membership is not checked in Phase 0.`;
+  const n = approvers?.counted.length;
+  const counts = n === undefined ? "" : `; ${n} ${n === 1 ? "counts" : "count"} (write access)`;
+  let line = `**Approvals so far:** ${parts.join(", ")}${cap}${counts}.`;
+  const req = approvers?.changesRequestedBy ?? [];
+  if (req.length > 0) {
+    const shown = req.slice(0, 3).map((l) => codeSpan(l));
+    const more = req.length > shown.length ? ` and ${req.length - shown.length} more` : "";
+    line += ` Changes requested by ${shown.join(", ")}${more}.`;
+  }
+  return line;
 }
 
 function listedErrors(errors: readonly PolicyError[]): string[] {
@@ -267,7 +385,8 @@ export function renderPolicySection(v: PolicyView): string {
   if (outcome === "no_policy") {
     const parts = [
       "### Policy",
-      `**No policy**${REPORT_ONLY}`,
+      headlineOf(v, "No policy"),
+      ...optional(wouldBeLine(v)),
       `There is no \`graft.yaml\` on ${base} at \`${short(v.commitSha)}\`. Add one to report what Graft would require; see the graft.yaml reference in the Graft docs.`,
     ];
     if (v.addsPolicyFile) {
@@ -277,7 +396,7 @@ export function renderPolicySection(v: PolicyView): string {
         ),
       );
     }
-    parts.push(`Head \`${head}\` · ${PHASE0}`);
+    parts.push(`Head \`${head}\` · ${footer(v)}`);
     return parts.join("\n\n");
   }
 
@@ -285,18 +404,25 @@ export function renderPolicySection(v: PolicyView): string {
     const title = titleWith(v, (s) => codeSpan(s));
     const parts = [
       "### Policy",
-      `**${title}**${REPORT_ONLY}`,
+      headlineOf(v, title),
+      ...optional(wouldBeLine(v)),
       `\`graft.yaml\` on ${base} at \`${short(v.commitSha)}\` cannot be used, so Graft would not auto-approve anything:`,
       listedErrors(v.errors).join("\n"),
       "Fix the file on " +
         `${base}, and check it locally with \`pnpm graft policy check graft.yaml\`.`,
-      `Head \`${head}\` · ${PHASE0}`,
+      `Head \`${head}\` · ${footer(v)}`,
     ];
     return parts.join("\n\n");
   }
 
   const { verdict, facts } = v;
-  const headline = `**${titleWith(v, (s) => codeSpan(s))}**${REPORT_ONLY}`;
+  const headline = [
+    headlineOf(
+      v,
+      titleWith(v, (s) => codeSpan(s)),
+    ),
+    ...optional(wouldBeLine(v)),
+  ].join("\n\n");
   const notes: string[] = [];
   if (verdict.policyFileChanged) {
     notes.push(
@@ -332,11 +458,12 @@ export function renderPolicySection(v: PolicyView): string {
   }
   const tail: string[] = [];
   const a = v.approvals;
-  if (a && !(verdict.outcome === "would_approve" && a.current + a.stale === 0)) {
-    tail.push(approvalsLine(a));
+  const requested = v.approvers?.changesRequestedBy.length ?? 0;
+  if (a && !(verdict.outcome === "would_approve" && a.current + a.stale + requested === 0)) {
+    tail.push(approvalsLine(a, v.approvers));
   }
   tail.push(
-    `Policy \`graft.yaml\` on ${base} at \`${short(v.commitSha)}\` · head \`${head}\` · ${PHASE0}`,
+    `Policy \`graft.yaml\` on ${base} at \`${short(v.commitSha)}\` · head \`${head}\` · ${footer(v)}`,
   );
 
   const bullets =
@@ -375,11 +502,66 @@ function actionText(m: MatchedRule, policy: Policy | null, owner: string): strin
   return `require ${action.humans}${teams}`;
 }
 
-/** The first line of `output.text`; step 2 replaces the enforce wording. */
+/** The first line of `output.text`. */
 function modeLine(mode: Mode): string {
   return mode === "report"
     ? "Graft mode: report. This check never blocks a merge."
-    : "Graft mode: enforce. Enforcement is not active in this version; this check never blocks a merge.";
+    : "Graft mode: enforce. This check passes or fails on this policy; a passing check is not a review approval.";
+}
+
+const UNVERIFIED_TEXT: Record<Unverified, string> = {
+  no_permission: "the App has no members: read permission",
+  owner_not_org: "the repository owner is not an organization",
+  team_not_found: "no such team, or the App cannot see it",
+  team_unreadable: "the App cannot read this team",
+  check_limit: "too many checks in one evaluation",
+};
+
+const NOT_COUNTED_TEXT: Record<ApproverFacts["notCounted"][number]["why"], string> = {
+  no_write_access: "no write access",
+  permission_denied: "permission check refused",
+  check_limit: "too many approvers to check",
+};
+
+const loginList = (logins: readonly string[], max = MAX_SHOWN_LOGINS): string => {
+  const shown = logins.slice(0, max).map((l) => codeSpan(l));
+  const more = logins.length - shown.length;
+  return `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+};
+const MAX_SHOWN_LOGINS = 10;
+
+/** The "Approvals counted" block of the details (§9), or nothing. */
+function approvalsCounted(v: PolicyView): string[] {
+  const a = v.approvers;
+  const constraints = v.enforced?.constraints ?? [];
+  if (!a || (constraints.length === 0 && a.notCounted.length === 0)) return [];
+  const lines: string[] = [];
+  for (const c of constraints) {
+    const who = c.teams.length > 0 ? teamsText(v.owner, c.teams, (s) => codeSpan(s)) : "anyone";
+    const parts: string[] = [];
+    if (c.approvedBy.length > 0) {
+      const more = c.approvedCount - c.approvedBy.length;
+      parts.push(`${loginList(c.approvedBy)}${more > 0 ? ` and ${more} more` : ""}`);
+    }
+    for (const u of c.unverified) {
+      parts.push(`cannot verify ${codeSpan(`@${v.owner}/${u.team}`)} (${UNVERIFIED_TEXT[u.why]})`);
+    }
+    lines.push(
+      `- ${Math.min(c.approvedCount, c.humans)} of ${c.humans} from ${who}${parts.length > 0 ? `: ${parts.join("; ")}` : ""}`,
+    );
+  }
+  const groups = new Map<string, string[]>();
+  for (const n of a.notCounted) {
+    const list = groups.get(n.why) ?? [];
+    list.push(n.login);
+    groups.set(n.why, list);
+  }
+  for (const [why, logins] of groups) {
+    lines.push(
+      `- not counted: ${loginList(logins)} (${NOT_COUNTED_TEXT[why as keyof typeof NOT_COUNTED_TEXT]})`,
+    );
+  }
+  return ["", "**Approvals counted**", "", ...lines];
 }
 
 /** `output.text` of the check run: the mode line, then the details when there are any. */
@@ -429,6 +611,7 @@ function renderDetails(v: PolicyView): string | null {
             .join(", ")
     }`,
     `- Policy file SHA ${codeSpan(short(v.fileSha ?? ""))}, policy hash ${codeSpan((v.hash ?? "").slice(0, 8))}`,
+    ...approvalsCounted(v),
   );
   const total = v.policy?.rules.length ?? 0;
   const others = total - verdict.matched.length;

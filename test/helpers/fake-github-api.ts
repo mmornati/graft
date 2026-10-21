@@ -104,6 +104,13 @@ export function createFakeGitHubApi(
      * like a user who is not a collaborator.
      */
     permissions: new Map<string, { id: number; role: string; permission?: string }>(),
+    /**
+     * Organisation teams of the fake owner, by slug (Phase 1 step 2, T1 (b)). A slug with no
+     * entry is a 404 on `GET /orgs/{org}/teams/{slug}`; `status: 403` answers 403 there (no
+     * access). A membership is `GET …/memberships/{login}`: 200 with `state` for a listed login
+     * (lowercased), 404 otherwise.
+     */
+    teams: new Map<string, { status?: 200 | 403; members: Map<string, "active" | "pending"> }>(),
     /** `users.getByUsername` by lowercased login (a missing login is a 404). */
     users: new Map<string, number>(),
     /** Reactions per comment id. */
@@ -238,6 +245,30 @@ export function createFakeGitHubApi(
       return id === undefined
         ? json(404, { message: "Not Found" })
         : json(200, { id, login, type: "User" });
+    }
+    const teamMatch =
+      method === "GET"
+        ? /^\/orgs\/([^/]+)\/teams\/([^/]+)(?:\/memberships\/([^/]+))?$/.exec(path)
+        : null;
+    if (teamMatch) {
+      const org = decodeURIComponent(teamMatch[1] as string);
+      const slug = decodeURIComponent(teamMatch[2] as string).toLowerCase();
+      const team =
+        org.toLowerCase() === (opts.owner ?? OWNER).toLowerCase()
+          ? state.teams.get(slug)
+          : undefined;
+      if (!team) return json(404, { message: "Not Found" });
+      if (team.status === 403) {
+        return json(403, { message: "Resource not accessible by integration" });
+      }
+      if (teamMatch[3] === undefined) {
+        return json(200, { id: 4000 + slug.length, slug, name: slug, privacy: "closed" });
+      }
+      const login = decodeURIComponent(teamMatch[3]).toLowerCase();
+      const membership = team.members.get(login);
+      return membership === undefined
+        ? json(404, { message: "Not Found" })
+        : json(200, { url: `https://api.github.com${path}`, role: "member", state: membership });
     }
     if (!path.startsWith(`${repoPrefix}/`)) return json(404, { message: "Not Found (fake repo)" });
     const rest = path.slice(repoPrefix.length);
@@ -389,6 +420,8 @@ export function createFakeGitHubApi(
       const run = state.checkRuns.find((r) => r.id === Number(m?.[1]));
       if (!run) return json(404, { message: "Not Found" });
       Object.assign(run, body);
+      // A run that is not completed has no conclusion (Phase 1 step 2: the card wait).
+      if (body?.status !== undefined && body.status !== "completed") run.conclusion = null;
       return json(200, run);
     }
     m = is("GET", /^\/issues\/comments\/(\d+)$/);

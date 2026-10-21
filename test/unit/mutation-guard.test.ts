@@ -349,7 +349,7 @@ describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
       owner: OWNER,
       repo: REPO,
       head_sha: SHA,
-      ...body,
+      ...(body as { name: string }),
     });
   const createRest = (c: Client, body: Record<string, unknown>) =>
     c.rest.checks.create({
