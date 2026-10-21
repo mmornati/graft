@@ -2,7 +2,7 @@
 
 [Back to the project README](../README.md)
 
-New to Graft? Start with the [two-and-a-half-minute video](video.md): how it works, who is involved and what changes for reviewers and agents.
+New to Graft? Start with the [two-and-a-half-minute video](video.md): how it works, who is involved and what changes for reviewers and agents. Then [What a reviewer sees](video-reviewer-tour.md) shows the comment, the checks and the ratings on four simulated pull requests.
 
 ## Use and run Graft
 

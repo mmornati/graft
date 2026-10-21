@@ -116,7 +116,9 @@ not_in_nav: |
 
 nav:
   - Home: README.md
-  - Video: video.md
+  - Videos:
+    - Graft, explained: video.md
+    - What a reviewer sees: video-reviewer-tour.md
   - Getting started:
     - getting-started.md
     - GitHub App: github-app.md

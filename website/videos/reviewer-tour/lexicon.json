@@ -1,0 +1,5 @@
+{
+  "_doc": "Pronunciation fixes, applied to the spoken text only (subtitles keep the original). Keys are whole words, case-sensitive. A [[…]] value is raw IPA (Kokoro, Azure). '<lang>@<engine>' entries override '<lang>' for one engine. Use the narration-lexicon skill to find and verify entries.",
+  "en": {},
+  "_notes": "Verified with narration-lexicon (Whisper small) on 2026-10-21: 28 of 30 cues match, no entry needed for Kokoro af_heart. The two diffs are elisions Whisper resolves its own way: 'Graft check' heard as 'graph check' (raw IPA [[ɡɹˈæft]] gives the same, and 'so Graft never' is heard right), 'canned model' heard as 'can model'."
+}
