@@ -18,6 +18,8 @@ x-graft-env: &graft-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GRAFT_MODE_CEILING: ${GRAFT_MODE_CEILING:-report}
 
+# Each Graft service builds the same Dockerfile; they share the build cache. Do not give them a
+# common `image:` name: Coolify builds services in parallel and a shared tag makes all but one fail.
 x-graft-build: &graft-build
   context: .
   dockerfile: Dockerfile
@@ -40,7 +42,6 @@ services:
 
   migrate:
     build: *graft-build
-    image: graft:coolify
     command: ["node", "dist/bin/migrate.js", "up"]
     environment:
       DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/graft
@@ -53,10 +54,11 @@ services:
 
   server:
     build: *graft-build
-    image: graft:coolify
     environment:
       <<: *graft-env
       SERVICE_FQDN_SERVER_3000: ""
+    expose:
+      - "3000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -70,7 +72,6 @@ services:
 
   worker:
     build: *graft-build
-    image: graft:coolify
     command: ["node", "dist/bin/worker.js"]
     environment: *graft-env
     depends_on:
