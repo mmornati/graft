@@ -10,6 +10,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | --- | --- |
 | [getting-started.md](getting-started.md) | Prerequisites, the offline quickstart in detail, tests, CI and every `pnpm` script. |
 | [github-app.md](github-app.md) | Registering a real GitHub App from the manifest, smee tunnel, the permissions and events table. |
+| [deploy/README.md](deploy/README.md) | Deploying Graft: the Docker image, its processes and secrets, pointing the App at it; guides for [Fly.io](deploy/fly.md) and [Coolify](deploy/coolify.md). |
 | [configuration.md](configuration.md) | Every environment variable with its default and rule, and the configuration files. |
 | [troubleshooting.md](troubleshooting.md) | Common errors and what they mean. |
 

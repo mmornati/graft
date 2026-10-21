@@ -25,6 +25,8 @@ Registering the report manifest is the safest default. See [Modes](features/mode
 
 After registering, record the App's **slug** too. Setting `GITHUB_APP_SLUG` enables the `<slug>[bot]` fallback that recognises Graft's own comment when `performed_via_github_app` is missing from the comments API (decision D13; see [architecture.md](architecture.md#managed-pr-comment)). Install the App on **selected** repositories only; [docs/pilots/onboarding.md](pilots/onboarding.md) explains why and lists what Graft reads and stores.
 
+To run Graft on a server instead of your laptop (a stable HTTPS webhook URL, no tunnel), see [Deploying Graft](deploy/README.md).
+
 The human steps (sandbox org, test repositories, smee channel, registration, install checks) are tracked in [docs/phase-0/HUMAN-TODO.md](phase-0/HUMAN-TODO.md).
 
 ## Permissions and events
