@@ -62,6 +62,8 @@ Detailed spec: [step-1-modes.md](step-1-modes.md). User-facing page: [features/m
 
 ### Step 2 — Approvals Graft can enforce (week 7–8)
 
+Detailed spec: [step-2-approvals.md](step-2-approvals.md). It deviates from the bullets below in one place: team membership is checked per approver through the memberships API, with no cache across jobs (its D4).
+
 - **Team membership** (`members: read`): resolve each required team to its members through the org teams API, cached per installation for a short TTL and invalidated on `membership` / `team` events. A team that does not exist, or that Graft cannot read, is "unverified" and never satisfies a constraint (fail closed).
 - **Who counts:** an approval counts only from a user with write access or more on the repository (collaborator permission check, already used by the step 6 reviewer sync), not the PR author, not a bot. Approvals on an older head SHA are **stale**: shown, never counted. Graft does not dismiss them (no new write); the existing `countApprovals` split into current and stale is the base.
 - **Re-evaluation** on push, review submitted/dismissed, label change, team membership change, and card or provenance completion (most triggers already exist from step 5).
@@ -126,7 +128,7 @@ Because GitHub Apps have one permission set, the repository will carry two manif
 ## 6. Decisions to confirm before step 1
 
 - [x] Modes are set by the operator (ceiling + ops CLI), not by `graft.yaml` (decided 2026-10-19).
-- [ ] Enforce mode with no or an invalid `graft.yaml` concludes `failure` (proposed) rather than `neutral`.
-- [ ] The guard's only report-mode write is a comment on the culprit PR. Alternative: no write at all, guard results only in `gate report` and the ops CLI.
-- [ ] The confirmation rule for flaky `main` checks (wait for the next commit's result) is on by default.
-- [ ] Two manifests (full and report-only) rather than one.
+- [x] Enforce mode with no or an invalid `graft.yaml` concludes `failure` rather than `neutral` (decided 2026-10-21).
+- [x] The guard's only report-mode write is a comment on the culprit PR (decided 2026-10-21). Rejected alternative: no write at all, guard results only in `gate report` and the ops CLI.
+- [x] The confirmation rule for flaky `main` checks (wait for the next commit's result) is on by default (decided 2026-10-21).
+- [x] Two manifests (full and report-only) rather than one (built in step 1).
