@@ -333,3 +333,173 @@ describe("mutation guard: the hook", () => {
     );
   });
 });
+
+describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
+  type Client = Awaited<ReturnType<ReturnType<typeof fakeGitHubFactory>["forInstallation"]>>;
+  const NON_NEUTRAL: Record<string, unknown>[] = [
+    { status: "completed", conclusion: "failure" },
+    { status: "completed", conclusion: "success" },
+    { status: "completed", conclusion: "action_required" },
+    { conclusion: "failure" },
+    { status: "in_progress" },
+    { status: "queued" },
+  ];
+  const create = (c: Client, body: Record<string, unknown>) =>
+    c.request("POST /repos/{owner}/{repo}/check-runs", {
+      owner: OWNER,
+      repo: REPO,
+      head_sha: SHA,
+      ...body,
+    });
+  const createRest = (c: Client, body: Record<string, unknown>) =>
+    c.rest.checks.create({
+      owner: OWNER,
+      repo: REPO,
+      head_sha: SHA,
+      ...(body as { name: string }),
+    });
+  const update = (c: Client, body: Record<string, unknown>) =>
+    c.rest.checks.update({ owner: OWNER, repo: REPO, check_run_id: 7, ...body });
+  const patchRaw = (c: Client, body: Record<string, unknown>) =>
+    c.request(`PATCH /repos/${OWNER}/${REPO}/check-runs/7`, body);
+  const checkWrites = (api: ReturnType<typeof createFakeGitHubApi>) =>
+    api.requests.filter((r) => r.method !== "GET" && r.path.includes("/check-runs"));
+  const countingGate = (verdict: () => Awaited<ReturnType<MutationGate>>) => {
+    const asked: unknown[] = [];
+    const gate: MutationGate = async (q) => {
+      asked.push(q);
+      return verdict();
+    };
+    return { asked, gate };
+  };
+
+  it("U-MG-12 a neutral, completed check through the default client passes and never asks the gate", async () => {
+    const api = createFakeGitHubApi();
+    const factory = fakeGitHubFactory(api, async () => {
+      throw new Error("the gate must not be asked");
+    });
+    const client = await factory.forInstallation(1);
+    await createRest(client, { name: "graft/intent", status: "completed", conclusion: "neutral" });
+    await createRest(client, { name: "graft/policy", status: "completed", conclusion: "neutral" });
+    // No status and no conclusion at all leaves the stored ones alone: still Phase 0.
+    await patchRaw(client, {
+      name: "graft/provenance",
+      output: { title: "t", summary: "s" },
+    }).catch(() => undefined);
+    expect(checkWrites(api)).toHaveLength(3);
+  });
+
+  it("U-MG-13 a non-neutral body through the default client is refused no_feature, for every form of the call", async () => {
+    const api = createFakeGitHubApi();
+    const client = await fakeGitHubFactory(api, async () => ({ allowed: true })).forInstallation(1);
+    for (const body of NON_NEUTRAL) {
+      const named = { name: "graft/policy", ...body };
+      for (const call of [create, createRest, update, patchRaw]) {
+        const e = await refusal(call(client, named));
+        expect(e.refusal, JSON.stringify(named)).toBe("no_feature");
+      }
+      // A body given as `data` is the body Octokit sends: it is read, not the other options.
+      const viaData = await refusal(
+        client.request("POST /repos/{owner}/{repo}/check-runs", {
+          owner: OWNER,
+          repo: REPO,
+          conclusion: "neutral",
+          data: { ...named, head_sha: SHA },
+        } as never),
+      );
+      expect(viaData.refusal).toBe("no_feature");
+    }
+    expect(checkWrites(api)).toEqual([]);
+  });
+
+  it("U-MG-14 through a policy client the gate decides: mode_report when it denies, sent when it allows, asked once per request", async () => {
+    const api = createFakeGitHubApi();
+    let allowed = false;
+    const { asked, gate } = countingGate(() =>
+      allowed ? { allowed: true } : { allowed: false, reason: "mode_report" },
+    );
+    const policy = await fakeGitHubFactory(api, gate).forInstallation(1, { feature: "policy" });
+    const body = { name: "graft/policy", status: "completed", conclusion: "failure" };
+    expect((await refusal(createRest(policy, body))).refusal).toBe("mode_report");
+    expect(asked).toEqual([{ installationId: 1, owner: OWNER, repo: REPO, feature: "policy" }]);
+    expect(checkWrites(api)).toEqual([]);
+    allowed = true;
+    await createRest(policy, body);
+    await update(policy, { name: "graft/policy", status: "in_progress" }).catch(() => undefined);
+    expect(asked).toHaveLength(3);
+    expect(checkWrites(api).map((r) => r.body?.conclusion ?? r.body?.status)).toEqual([
+      "failure",
+      "in_progress",
+    ]);
+    // A neutral write through the same client never asks.
+    await createRest(policy, { name: "graft/policy", status: "completed", conclusion: "neutral" });
+    expect(asked).toHaveLength(3);
+  });
+
+  it("U-MG-15 a non-neutral body for another check, or with no name, is refused feature_not_allowed", async () => {
+    const api = createFakeGitHubApi();
+    const { asked, gate } = countingGate(() => ({ allowed: true }));
+    const factory = fakeGitHubFactory(api, gate);
+    const policy = await factory.forInstallation(1, { feature: "policy" });
+    const plain = await factory.forInstallation(1);
+    for (const name of ["graft/intent", "graft/provenance", "graft/Policy", "other", undefined]) {
+      const body = { ...(name === undefined ? {} : { name }), conclusion: "failure" };
+      expect((await refusal(patchRaw(policy, body))).refusal, String(name)).toBe(
+        "feature_not_allowed",
+      );
+      expect((await refusal(patchRaw(plain, body))).refusal, String(name)).toBe(
+        "feature_not_allowed",
+      );
+    }
+    expect(asked).toEqual([]);
+    expect(checkWrites(api)).toEqual([]);
+  });
+
+  it("U-MG-16 a guard or mcp client sending a non-neutral graft/policy check is refused feature_not_allowed", async () => {
+    const api = createFakeGitHubApi();
+    const { asked, gate } = countingGate(() => ({ allowed: true }));
+    const factory = fakeGitHubFactory(api, gate);
+    for (const feature of ["guard", "mcp"] as const) {
+      const client = await factory.forInstallation(1, { feature });
+      const e = await refusal(createRest(client, { name: "graft/policy", conclusion: "success" }));
+      expect(e.refusal, feature).toBe("feature_not_allowed");
+    }
+    expect(asked).toEqual([]);
+    expect(checkWrites(api)).toEqual([]);
+  });
+
+  it("U-MG-17 the refusal message names the route and says non-neutral, with no body text and no conclusion", async () => {
+    const api = createFakeGitHubApi();
+    const client = await fakeGitHubFactory(api).forInstallation(1);
+    const e = await refusal(
+      createRest(client, {
+        name: "graft/policy",
+        conclusion: "action_required",
+        output: { title: "secret-title-zq", summary: "secret-summary-zq" },
+      }),
+    );
+    expect(e.message).toBe(
+      "GitHub write refused by the mutation guard: POST /repos/{owner}/{repo}/check-runs (non-neutral check run) (feature none): no_feature",
+    );
+    for (const s of [
+      "secret-title-zq",
+      "secret-summary-zq",
+      "action_required",
+      "graft/policy",
+      OWNER,
+      REPO,
+    ]) {
+      expect(e.message).not.toContain(s);
+    }
+    // A body that cannot be read as an object is refused, never assumed neutral.
+    const odd = await refusal(
+      client.request("POST /repos/{owner}/{repo}/check-runs", {
+        owner: OWNER,
+        repo: REPO,
+        data: "conclusion=failure",
+      } as never),
+    );
+    expect(odd.refusal).toBe("unknown_route");
+    expect(odd.message).not.toContain("conclusion=failure");
+  });
+});

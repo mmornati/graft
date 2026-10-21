@@ -13,8 +13,8 @@ export type GitHubClient = InstanceType<typeof Octokit>;
 export interface GitHubClientFactory {
   /**
    * Every client has the mutation guard installed. Without `feature` it can make Phase 0 writes
-   * only; a Phase 1 write needs the feature it acts for (`"guard"` or `"mcp"`) and a mode that
-   * permits it (D11).
+   * only; a Phase 1 write needs the feature it acts for (`"guard"`, `"mcp"`, or `"policy"` for a
+   * non-neutral `graft/policy` check) and a mode that permits it (D11).
    */
   forInstallation(installationId: number, opts?: { feature?: Feature }): Promise<GitHubClient>;
   /** JWT-authenticated. Guarded too: it makes no writes of its own. */
