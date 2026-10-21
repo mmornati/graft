@@ -681,6 +681,29 @@ describe("approvals Graft can enforce (integration)", () => {
     expect((await lastVerdict())?.approvals).toMatchObject({ counted: 20, notCounted: 5 });
   });
 
+  it("I-ENF-12b public repository: 20 outsiders whose logins sort first do not use up the role checks of a member", async () => {
+    await setMode("enforce");
+    const outsiders = Array.from({ length: 20 }, (_, i) => ({
+      login: `aaa${String(i).padStart(2, "0")}`,
+      userId: 900 + i,
+    }));
+    const ZED = { login: "zed", userId: 950 };
+    api.state.permissions.set(ZED.login, { id: ZED.userId, role: "maintain" });
+    api.state.teams.get("security")?.members.set("zed", "active");
+    api.state.reviews.set(PR_NUMBER, [
+      ...outsiders.map((u, i) => makeReview({ id: 40 + i, ...u, association: "NONE" })),
+      makeReview({ id: 99, ...ZED, association: "MEMBER" }),
+    ]);
+    await run();
+    // The member is checked first; the outsiders after, and only up to the bound.
+    expect(permissionRequests()[0]?.path).toMatch(/\/collaborators\/zed\/permission$/);
+    expect(permissionRequests()).toHaveLength(20);
+    expect(lastCheck()?.conclusion).toBe("success");
+    expect((await lastVerdict())?.approvals).toMatchObject({ counted: 1, notCounted: 20 });
+    // The last outsider is past the bound and does not count (fail closed).
+    expect(lastCheck()?.output.text).toContain("(too many approvers to check)");
+  });
+
   it("I-ENF-13 enforce: no policy and an invalid policy fail with the fix text; report mode stays neutral", async () => {
     for (const [policy, reason, fix] of [
       [null, "no_policy", "Add one to report what Graft would require"],

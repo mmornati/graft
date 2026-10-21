@@ -77,6 +77,7 @@ export async function listReviews(
         state: r.state,
         commit_id: r.commit_id ?? null,
         submitted_at: r.submitted_at ?? null,
+        author_association: r.author_association,
       });
     }
     if (res.data.length < REVIEW_PAGE) break;
