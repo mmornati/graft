@@ -5,6 +5,7 @@
 import { sql } from "kysely";
 import type { Config } from "../config/index.js";
 import type { Db } from "../db/client.js";
+import { hasMembersRead } from "../modes/index.js";
 import { resolveCeiling } from "../modules/modes/cli.js";
 import { modesOf } from "../modules/modes/effective.js";
 import { listRepositoryModeRows } from "../modules/modes/store.js";
@@ -267,8 +268,12 @@ export async function runDoctor(
   // modes (Phase 1 step 1): a requested mode that is not effective, by reason
   const ceiling = await resolveCeiling(db, config);
   const notEffective = new Map<string, number>();
+  let enforcingWithoutMembers = 0;
   for (const row of await listRepositoryModeRows(db, { installationId: id })) {
     const m = modesOf(row, ceiling.ceiling);
+    if (m.policy.effective === "enforce" && !hasMembersRead(row.permissions)) {
+      enforcingWithoutMembers++;
+    }
     for (const s of [m.policy, m.guard, m.mcpWrite]) {
       if (s.requested !== s.effective) {
         notEffective.set(s.reason, (notEffective.get(s.reason) ?? 0) + 1);
@@ -283,6 +288,15 @@ export async function runDoctor(
       .join(", ");
     add("modes", "WARN", `${total} requested modes are not effective: ${byReason}`);
   } else add("modes", "OK", "every requested mode is effective");
+
+  // teams (Phase 1 step 2, T10): enforcing without members:read fails every team constraint
+  if (enforcingWithoutMembers > 0) {
+    add(
+      "teams",
+      "WARN",
+      `${enforcingWithoutMembers} repositories enforcing policy without members:read (team constraints will fail)`,
+    );
+  } else add("teams", "OK", "no repository enforces policy without members:read");
   return checks;
 }
 

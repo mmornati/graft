@@ -4,7 +4,18 @@
  */
 import type { Config } from "../../config/index.js";
 import type { Db } from "../../db/client.js";
-import type { EffectiveModes, Mode, ModeKey, ModeReason, ModeState } from "../../modes/index.js";
+import {
+  type EffectiveModes,
+  hasMembersRead,
+  type Mode,
+  type ModeKey,
+  type ModeReason,
+  type ModeState,
+} from "../../modes/index.js";
+
+export const TEAMS_NOTE =
+  "note: team constraints cannot be verified (no members:read); they will fail";
+
 import { CEILING_STATE_KEY } from "./ceiling.js";
 import { modesOf } from "./effective.js";
 import { countUnapplied, getServiceState, type RepositoryModeRow } from "./store.js";
@@ -99,6 +110,10 @@ export function renderRepository(v: RepositoryView, ceiling: CeilingInfo): strin
             .join(" ") || "none"
         }  (read ${iso(row.permissionsReadAt)})`,
   ];
+  // Phase 1 step 2 (T10): enforcing without `members: read` fails every team constraint.
+  if (modes.policy.effective === "enforce" && !hasMembersRead(row.permissions)) {
+    lines.push(`  ${TEAMS_NOTE}`);
+  }
   if (v.pending > 0) {
     lines.push(
       `  ${"pending".padEnd(11)}${v.pending} ${v.pending === 1 ? "change" : "changes"} not yet applied by the worker`,

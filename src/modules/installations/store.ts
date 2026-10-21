@@ -51,6 +51,56 @@ export async function upsertInstallation(
     .execute();
 }
 
+const MODE_FLOORS = { policy_mode: "report", guard_mode: "report", mcp_write: "off" } as const;
+
+/**
+ * Phase 1 step 2, D13: a repository that moves to another installation, or comes back after
+ * removal, returns to report/report/off, with one `mode_changes` row per key that changed (actor
+ * `system`, `applied_at` NULL so that `modes.apply` republishes). An `enforce` set for one owner
+ * must not follow the repository to another. A rename within the same installation keeps them.
+ * Call it in the transaction that reactivates the row, before the upsert.
+ */
+export async function resetModesOnTransfer(
+  ex: Executor,
+  installationId: number,
+  repositoryId: number,
+  now: Date,
+): Promise<number> {
+  const row = await ex
+    .selectFrom("repositories")
+    .select(["installation_id", "removed_at", "policy_mode", "guard_mode", "mcp_write"])
+    .where("id", "=", repositoryId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!row) return 0;
+  const moved = row.installation_id !== installationId;
+  if (!moved && row.removed_at === null) return 0;
+  const changed = (Object.keys(MODE_FLOORS) as (keyof typeof MODE_FLOORS)[]).filter(
+    (key) => row[key] !== MODE_FLOORS[key],
+  );
+  if (changed.length === 0) return 0;
+  await ex
+    .updateTable("repositories")
+    .set({ ...MODE_FLOORS, updated_at: now })
+    .where("id", "=", repositoryId)
+    .execute();
+  await ex
+    .insertInto("mode_changes")
+    .values(
+      changed.map((key) => ({
+        repository_id: repositoryId,
+        key,
+        from_value: row[key],
+        to_value: MODE_FLOORS[key],
+        actor: "system",
+        reason: moved ? "installation changed" : "repository re-added",
+        created_at: now,
+      })),
+    )
+    .execute();
+  return changed.length;
+}
+
 /** Upsert repositories as active (removed_at = NULL); renames update full_name. */
 export async function upsertRepositories(
   ex: Executor,
@@ -59,6 +109,7 @@ export async function upsertRepositories(
   now: Date,
 ): Promise<void> {
   for (const r of repos) {
+    await resetModesOnTransfer(ex, installationId, r.id, now);
     await ex
       .insertInto("repositories")
       .values({
