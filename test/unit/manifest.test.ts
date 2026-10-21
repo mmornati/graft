@@ -19,9 +19,26 @@ describe("github app manifest", () => {
       issues: "read",
       pull_requests: "write",
       checks: "write",
+      // Phase 1 step 2: team constraints (D15).
+      members: "read",
     });
-    expect(m.default_events).toEqual(["check_run", "pull_request", "pull_request_review", "push"]);
+    expect(m.default_events).toEqual([
+      "check_run",
+      "membership",
+      "pull_request",
+      "pull_request_review",
+      "push",
+      "team",
+    ]);
     expect(m.public).toBe(false);
+  });
+
+  it("U-MAN-4 members is never above read, in either manifest; both carry the membership and team events", () => {
+    for (const name of ["app-manifest.json", "app-manifest.report.json"]) {
+      const m = manifest(name);
+      expect(m.default_permissions.members, name).toBe("read");
+      expect(m.default_events, name).toEqual(expect.arrayContaining(["membership", "team"]));
+    }
   });
 
   it("U-MAN-2 the report manifest's permissions are a subset of the full one's, and only checks and pull_requests are above read", () => {

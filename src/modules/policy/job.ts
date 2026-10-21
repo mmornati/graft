@@ -1,7 +1,12 @@
 /**
  * `policy.evaluate` and `policy.fanout` (spec T11). Modelled on the intent and provenance jobs:
  * the PR is re-fetched, facts are computed outside the lock, then the lock is taken, freshness is
- * re-checked and the result is published. The check run ALWAYS concludes `neutral` in Phase 0.
+ * re-checked and the result is published.
+ *
+ * Phase 1 step 2: the enforce conclusion is computed in every mode (`src/policy/enforce.ts`) and
+ * stored; it is PUBLISHED only when the effective `policy_mode` is `enforce`. In report mode the
+ * check concludes `neutral`, whatever the verdict says. This job never names a non-neutral
+ * conclusion itself: it passes through what `publishedCheck` returns.
  */
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
@@ -10,7 +15,15 @@ import { withChangeLock } from "../../db/locks.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { toJobError } from "../../github/errors.js";
 import { upsertManagedSection } from "../../github/managed-comment.js";
-import { countApprovals, evaluatePolicy } from "../../policy/evaluate.js";
+import { MutationRefusedError } from "../../github/mutation-guard.js";
+import {
+  type ApproverFacts,
+  type Enforced,
+  enforcedConclusion,
+  type PublishedCheck,
+  publishedCheck,
+} from "../../policy/enforce.js";
+import { type ApprovalCount, countApprovals, evaluatePolicy } from "../../policy/evaluate.js";
 import { type LoadedPolicy, loadBasePolicy, resolveBaseCommit } from "../../policy/load.js";
 import { canonicalHash } from "../../policy/parse.js";
 import { PermanentJobError } from "../../queue/errors.js";
@@ -24,6 +37,7 @@ import {
 import { latestPublishedCard } from "../intent/index.js";
 import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
+import { resolveApprovers } from "./approvals.js";
 import { buildFacts, listChangedPaths, listReviews } from "./facts.js";
 import {
   POLICY_CHECK_NAME,
@@ -36,6 +50,7 @@ import {
 import {
   checkRunIdForHead,
   findVerdict,
+  headFirstEvaluatedAt,
   maxFactsReadAt,
   upsertVerdict,
   type VerdictValues,
@@ -51,6 +66,9 @@ export const POLICY_TRIGGERS = [
   "provenance",
   "base_push",
   "mode",
+  // Phase 1 step 2: a team or membership change (D14), the end of the card wait (D9).
+  "team",
+  "card_wait",
 ] as const;
 export const FANOUT_MAX = 100;
 const FANOUT_BATCH = 10;
@@ -125,7 +143,8 @@ export async function evaluatePolicyJobRun(
   if (!installation) return done("skipped", { reason: "installation inactive" });
   let octokit: GitHubClient;
   try {
-    octokit = await ctx.github.forInstallation(data.installationId);
+    // The `policy` feature (D11): the only client that may publish a non-neutral graft/policy.
+    octokit = await ctx.github.forInstallation(data.installationId, { feature: "policy" });
   } catch (err) {
     throw toJobError(err, "installation token");
   }
@@ -150,8 +169,8 @@ export async function evaluatePolicyJobRun(
   if ((await ensureRepository(ctx.db, data.installationId, pull.base.repo, now)) === "removed") {
     return done("skipped", { reason: "repository removed" });
   }
-  // Read once, outside the lock. It decides only the mode line and the facts hash (D8, D9): the
-  // conclusion below is never derived from it.
+  // Read once, outside the lock (step 2 D12). It decides the wording, the facts hash and whether
+  // the enforce conclusion is published; a rollback that lands in between is refused by the gate.
   const modes = await getEffectiveModes(ctx.db, data.repositoryId, config);
   const { change, applied } = await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now);
   if (!applied) return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
@@ -233,6 +252,15 @@ export async function evaluatePolicyJobRun(
         prAuthorLogin: pull.user?.login ?? "ghost",
         truncated,
       });
+      // Who counts (step 2, §5): role checks and team memberships, in every mode, before the lock.
+      view.approvers = await resolveApprovers(octokit, {
+        owner: data.owner,
+        repo: data.repo,
+        approvals: view.approvals,
+        verdict: view.verdict,
+        accountType: installation.account_type,
+        permissions: installation.permissions_read_at === null ? null : installation.permissions,
+      });
     } else if (loaded.status === "missing") {
       const listed = await listChangedPaths(octokit, {
         owner: data.owner,
@@ -248,12 +276,29 @@ export async function evaluatePolicyJobRun(
     throw toJobError(err, "read pull request facts");
   }
 
-  // 5. Render, then fingerprint what is shown.
+  // 5. The enforce conclusion (step 2, §7), computed in every mode; published only in enforce.
+  const waitMs = config.policyCardWaitSeconds * 1000;
+  let cardWaitUntil: Date | null = null;
+  if (waitMs > 0 && view.verdict?.effectiveRisk.source === "card_pending") {
+    const first = (await headFirstEvaluatedAt(ctx.db, change.id, headSha)) ?? factsReadAt;
+    const deadline = new Date(first.getTime() + waitMs);
+    if (factsReadAt < deadline) cardWaitUntil = deadline;
+  }
+  const enforced = enforcedConclusion({
+    state: view.state,
+    verdict: view.verdict,
+    approvers: view.approvers ?? null,
+    cardWait: cardWaitUntil !== null,
+  });
+  view.enforced = enforced;
+  const published = publishedCheck(modes.policy.effective, enforced);
+
+  // 6. Render, then fingerprint what is shown.
   const outcome = viewOutcome(view);
   const title = policyTitle(view);
   const summary = renderPolicySection(view);
   const details = renderPolicyDetails(view);
-  const factsHash = canonicalHash({
+  const factsHash = policyFactsHash({
     verdict: view.verdict,
     approvals: view.approvals,
     policyStatus: view.state,
@@ -263,9 +308,9 @@ export async function evaluatePolicyJobRun(
     headSha,
     baseRef,
     commitSha: view.commitSha,
-    // Without this a mode change would leave the hash equal and nothing would be republished (D8).
     policyMode: modes.policy.effective,
-    // What reviewers read depends on more than the verdict (author name, labels, size ...).
+    enforced,
+    published,
     rendered: { title, summary, details },
   });
 
@@ -275,8 +320,8 @@ export async function evaluatePolicyJobRun(
     current.head_sha === headSha &&
     !(current.pr_updated_at !== null && current.pr_updated_at > new Date(pull.updated_at));
 
-  // 6. Lock, re-check, publish.
-  const result = await withChangeLock(ctx.db, change.id, async (tx) => {
+  // 7. Lock, re-check, publish.
+  const publish = withChangeLock(ctx.db, change.id, async (tx) => {
     const current = await getChange(tx, change.id);
     if (!current || !fresh(current)) {
       ctx.log.info({ changeId: change.id }, "stale: head moved or newer snapshot stored");
@@ -303,9 +348,12 @@ export async function evaluatePolicyJobRun(
       policyFileChanged: view.verdict?.policyFileChanged ?? view.addsPolicyFile,
       rulesMatched: storedRules(view),
       required: storedRequired(view),
-      approvals: view.approvals ? { ...view.approvals } : {},
+      approvals: storedApprovals(view.approvals, view.approvers ?? null, enforced),
       errors: view.errors.map(({ key: _key, ...rest }) => rest),
       policyMode: modes.policy.effective,
+      enforcedConclusion: enforced.conclusion,
+      enforcedReason: enforced.reason,
+      checkConclusion: published.stored,
       factsHash,
       factsReadAt,
       checkRunId,
@@ -326,12 +374,11 @@ export async function evaluatePolicyJobRun(
     try {
       const body = {
         name: POLICY_CHECK_NAME,
-        status: "completed" as const,
-        // Phase 0 (spec fix 1): the check decides nothing. Never derive this from the outcome.
-        conclusion: "neutral" as const,
         external_id: change.id,
-        completed_at: stamp.toISOString(),
         output: { title, summary, text: details },
+        // Report mode (spec fix 1): `completed` + `neutral`, never derived from the outcome.
+        // Enforce mode: what `publishedCheck` returns; `in_progress` carries no conclusion.
+        ...checkState(published, stamp),
       };
       let checkRunId = await checkRunIdForHead(tx, change.id, headSha);
       if (checkRunId === null) {
@@ -378,11 +425,48 @@ export async function evaluatePolicyJobRun(
         .execute();
       await upsertVerdict(tx, values(checkRunId, ctx.clock.now()));
     } catch (err) {
+      // D12: a rollback committed between the mode read and this write. Not an error: the
+      // rollback fan-out republishes. Thrown (not returned) so the transaction rolls back.
+      if (err instanceof MutationRefusedError && err.refusal === "mode_report") {
+        throw new ModeChangedDuringEvaluation();
+      }
       // Rolls the transaction back; the retry repeats everything without creating duplicates.
       throw toJobError(err, "publish");
     }
     return "published" as const;
   });
+
+  let result: Exclude<PolicyOutcomeResult, "closed" | "skipped">;
+  try {
+    result = await publish;
+  } catch (err) {
+    if (!(err instanceof ModeChangedDuringEvaluation)) throw err;
+    ctx.log.info(
+      { changeId: change.id, prNumber: data.prNumber },
+      "mode changed during evaluation",
+    );
+    result = "stale";
+  }
+
+  // D9: re-evaluate at the end of the card wait, in every mode (the singleton key makes it once).
+  if (cardWaitUntil !== null && result !== "stale") {
+    const seconds = Math.max(
+      1,
+      Math.ceil((cardWaitUntil.getTime() - factsReadAt.getTime()) / 1000),
+    );
+    await ctx.queue.send(
+      policyEvaluateJob,
+      {
+        installationId: data.installationId,
+        repositoryId: data.repositoryId,
+        owner: data.owner,
+        repo: data.repo,
+        prNumber: data.prNumber,
+        trigger: "card_wait",
+      },
+      { singletonKey: `policy:cardwait:${change.id}:${headSha}`, startAfterSeconds: seconds },
+    );
+  }
 
   return done(result, {
     changeId: change.id,
@@ -391,6 +475,103 @@ export async function evaluatePolicyJobRun(
     matched: view.verdict?.matched.length ?? 0,
     uncertain: view.verdict?.matched.some((m) => m.reasons.some((r) => r.uncertain)) ?? false,
   });
+}
+
+/** D12: the gate refused the check write with `mode_report`; caught outside the lock. */
+class ModeChangedDuringEvaluation extends Error {
+  constructor() {
+    super("mode changed during evaluation");
+    this.name = "ModeChangedDuringEvaluation";
+  }
+}
+
+/** The status fields of the check body (§9). The conclusion is passed through, never chosen here. */
+function checkState(
+  p: PublishedCheck,
+  at: Date,
+):
+  | { status: "in_progress" }
+  | {
+      status: "completed";
+      conclusion: NonNullable<PublishedCheck["conclusion"]>;
+      completed_at: string;
+    } {
+  if (p.status === "in_progress" || p.conclusion === null) return { status: "in_progress" };
+  return { status: "completed", conclusion: p.conclusion, completed_at: at.toISOString() };
+}
+
+export interface FactsHashInput {
+  verdict: unknown;
+  approvals: unknown;
+  policyStatus: string;
+  policyFileSha: string | null;
+  policyHash: string | null;
+  errors: unknown;
+  headSha: string;
+  baseRef: string;
+  commitSha: string;
+  /** Without this a mode change would leave the hash equal and nothing would be republished (D8). */
+  policyMode: string;
+  /** Step 2: what enforce mode concludes (conclusion, reason, per-constraint `met` and counts). */
+  enforced: Enforced;
+  /** Step 2: the status and conclusion actually sent. */
+  published: PublishedCheck;
+  /** What reviewers read depends on more than the verdict (author name, labels, size ...). */
+  rendered: { title: string; summary: string; details: string };
+}
+
+/** The "unchanged" short cut compares this hash: everything that decides what GitHub shows. */
+export function policyFactsHash(i: FactsHashInput): string {
+  return canonicalHash({
+    verdict: i.verdict,
+    approvals: i.approvals,
+    policyStatus: i.policyStatus,
+    policyFileSha: i.policyFileSha,
+    policyHash: i.policyHash,
+    errors: i.errors,
+    headSha: i.headSha,
+    baseRef: i.baseRef,
+    commitSha: i.commitSha,
+    policyMode: i.policyMode,
+    enforced: {
+      conclusion: i.enforced.conclusion,
+      reason: i.enforced.reason,
+      constraints: i.enforced.constraints.map((c) => ({
+        humans: c.humans,
+        teamCount: c.teams.length,
+        met: c.met,
+        approved: c.approvedCount,
+        unverified: c.unverified.length,
+      })),
+    },
+    published: { status: i.published.status, conclusion: i.published.conclusion },
+    rendered: i.rendered,
+  });
+}
+
+/**
+ * D10 and §9: counts only. No team slugs (Phase 0 D19) and no logins beyond the existing `users`.
+ */
+function storedApprovals(
+  a: ApprovalCount | null,
+  approvers: ApproverFacts | null,
+  enforced: Enforced,
+): Record<string, unknown> {
+  if (a === null) return {};
+  const { currentApprovers: _all, changesRequested: _req, ...phase0 } = a;
+  return {
+    ...phase0,
+    counted: approvers?.counted.length ?? 0,
+    notCounted: approvers?.notCounted.length ?? 0,
+    changesRequested: approvers?.changesRequestedBy.length ?? 0,
+    constraints: enforced.constraints.map((c) => ({
+      humans: c.humans,
+      teamCount: c.teams.length,
+      met: c.met,
+      approved: c.approvedCount,
+      unverified: c.unverified.map((u) => u.why),
+    })),
+  };
 }
 
 /** Rule indices, actions, reason keys and PR paths (at most 5): no globs, names or team slugs. */

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MAX_SECTION_CHARS, renderManagedComment } from "../../src/github/managed-comment.js";
+import { codeSpan } from "../../src/github/markdown.js";
 import {
   type PolicyView,
   policyTitle,
@@ -8,6 +9,11 @@ import {
   renderPolicySection,
   viewOutcome,
 } from "../../src/modules/policy/render.js";
+import {
+  type ApproverFacts,
+  enforcedConclusion,
+  type Unverified,
+} from "../../src/policy/enforce.js";
 import type { PolicyError } from "../../src/policy/errors.js";
 import {
   type ApprovalCount,
@@ -69,7 +75,14 @@ const E3 = () =>
       author: { kind: "agent", agent: "claude-code" },
     }),
     policy,
-    { current: 1, stale: 1, users: ["alice"], truncated: false },
+    {
+      current: 1,
+      stale: 1,
+      users: ["alice"],
+      truncated: false,
+      currentApprovers: [{ id: 1, login: "alice" }],
+      changesRequested: [],
+    },
   );
 const E4 = () =>
   evaluated(
@@ -81,7 +94,7 @@ const E4 = () =>
   );
 const E1 = () => evaluated(facts({ files: [{ path: "docs/a.md", previousPath: null }] }));
 
-const FOOTER = "Graft only reports in Phase 0; it approves and blocks nothing.";
+const FOOTER = "Graft mode: report. Graft approves and blocks nothing here.";
 
 describe("policy rendering", () => {
   it("U-PR-1 a would_require section, byte for byte", () => {
@@ -94,7 +107,7 @@ describe("policy rendering", () => {
         "- Rule 3 infra-and-auth: paths match `infra/main.tf`",
         "- Rule 4 agent-sensitive: risk `sensitive` (card), author agent `claude-code`",
         "",
-        "**Approvals so far:** 1 on this head (`alice`), 1 on an older commit. Team membership is not checked in Phase 0.",
+        "**Approvals so far:** 1 on this head (`alice`), 1 on an older commit.",
         "",
         `Policy \`graft.yaml\` on \`main\` at \`a1b2c3d\` · head \`ec26c3e\` · ${FOOTER}`,
       ].join("\n"),
@@ -150,10 +163,17 @@ describe("policy rendering", () => {
     // With approvals the line appears for would_approve too.
     const withApproval = {
       ...E1(),
-      approvals: { current: 2, stale: 0, users: ["a", "b"], truncated: true },
+      approvals: {
+        current: 2,
+        stale: 0,
+        users: ["a", "b"],
+        truncated: true,
+        currentApprovers: [],
+        changesRequested: [],
+      },
     };
     expect(renderPolicySection(withApproval)).toContain(
-      "**Approvals so far:** 2 on this head (`a` and `b`) (first 300 reviews). Team membership is not checked in Phase 0.",
+      "**Approvals so far:** 2 on this head (`a` and `b`) (first 300 reviews).",
     );
 
     const errors: PolicyError[] = [
@@ -392,7 +412,14 @@ describe("policy rendering", () => {
         author: { kind: "agent", agent: "claude-code" },
       }),
       p,
-      { current: 1, stale: 0, users: ["alice"], truncated: false },
+      {
+        current: 1,
+        stale: 0,
+        users: ["alice"],
+        truncated: false,
+        currentApprovers: [{ id: 1, login: "alice" }],
+        changesRequested: [],
+      },
     );
     const text = renderPolicySection(v);
     expect(text.length).toBeLessThanOrEqual(MAX_SECTION_CHARS);
@@ -483,5 +510,263 @@ describe("policy rendering", () => {
     const spent = renderPolicySection(evaluated(facts({ files }), hostile.policy));
     expect(spent).toContain("`budget_exhausted`");
     expect(renderPolicySection(E1())).not.toContain("budget_exhausted");
+  });
+});
+
+describe("policy rendering, Phase 1 step 2 (§9)", () => {
+  const NO_APPROVERS: ApproverFacts = {
+    counted: [],
+    notCounted: [],
+    changesRequestedBy: [],
+    teams: {},
+    reviewsTruncated: false,
+  };
+  /** The view as the job builds it: approvers resolved, the enforce conclusion computed. */
+  const enforcedView = (
+    v: PolicyView,
+    approvers: ApproverFacts | null = NO_APPROVERS,
+    o: { mode?: "report" | "enforce"; cardWait?: boolean } = {},
+  ): PolicyView => {
+    const a = v.state === "ok" ? approvers : null;
+    return {
+      ...v,
+      mode: { effective: o.mode ?? "report" },
+      approvers: a,
+      enforced: enforcedConclusion({
+        state: v.state,
+        verdict: v.verdict,
+        approvers: a,
+        cardWait: o.cardWait ?? false,
+      }),
+    };
+  };
+  const securityOnly = () =>
+    evaluated(
+      facts({
+        files: [{ path: "infra/main.tf", previousPath: null }],
+        risk: { value: "logic", final: true, source: "card" },
+      }),
+    );
+  const ALICE: ApproverFacts = {
+    ...NO_APPROVERS,
+    counted: [{ id: 1, login: "alice" }],
+    teams: { security: { members: ["alice"] } },
+  };
+  const firstLines = (s: string, n: number) => s.split("\n\n").slice(0, n);
+
+  /** One view per enforce reason. */
+  const byReason = (): [string, PolicyView, string, string][] => {
+    const blockedTitle = "Blocked by rule 5";
+    return [
+      [
+        "approved_by_policy",
+        enforcedView(E1()),
+        "Policy satisfied: no review required",
+        "**In enforce mode this check would be:** `success` (no review required).",
+      ],
+      [
+        "requirements_met",
+        enforcedView(securityOnly(), ALICE),
+        "Policy satisfied: required approvals present",
+        "**In enforce mode this check would be:** `success` (required approvals present).",
+      ],
+      [
+        "approvals_missing",
+        enforcedView(securityOnly()),
+        "Needs 1 more approval from @acme/security",
+        "**In enforce mode this check would be:** `failure`, needs 1 more approval from `@acme/security`.",
+      ],
+      [
+        "changes_requested",
+        enforcedView(securityOnly(), { ...ALICE, changesRequestedBy: ["carol", "dan"] }),
+        "Changes requested by carol and 1 more",
+        "**In enforce mode this check would be:** `failure`, changes requested by `carol` and 1 more.",
+      ],
+      [
+        "blocked",
+        enforcedView(E4()),
+        blockedTitle,
+        "**In enforce mode this check would be:** `failure`, blocked by rule 5.",
+      ],
+      [
+        "no_policy",
+        enforcedView(view({ state: "missing" })),
+        "No valid graft.yaml on main",
+        "**In enforce mode this check would be:** `failure`, no valid graft.yaml on `main`.",
+      ],
+      [
+        "policy_invalid",
+        enforcedView(
+          view({
+            state: "invalid",
+            errors: [{ code: "yaml_syntax", location: null, line: 1, column: 1 }],
+          }),
+        ),
+        "No valid graft.yaml on main",
+        "**In enforce mode this check would be:** `failure`, no valid graft.yaml on `main`.",
+      ],
+      [
+        "reviews_truncated",
+        enforcedView(E1(), { ...NO_APPROVERS, reviewsTruncated: true }),
+        "Too many reviews to count (over 300)",
+        "**In enforce mode this check would be:** `failure`, too many reviews to count (over 300).",
+      ],
+      [
+        "card_pending",
+        enforcedView(E1(), NO_APPROVERS, { cardWait: true }),
+        "Waiting for the intent card",
+        "**In enforce mode this check would be:** `pending` (waiting for the intent card).",
+      ],
+    ];
+  };
+
+  it("U-REN-9 report mode: titles equal the Phase 0 titles; the would-be line for each enforce reason", () => {
+    for (const [reason, v, , line] of byReason()) {
+      expect(v.enforced?.reason, reason).toBe(reason);
+      const plain = { ...v, enforced: undefined, approvers: undefined };
+      expect(policyTitle(v), reason).toBe(policyTitle(plain));
+      const section = renderPolicySection(v);
+      // Right after the headline, which keeps ` · report only`.
+      const [heading, headline, would] = firstLines(section, 3);
+      expect(heading).toBe("### Policy");
+      expect(headline, reason).toMatch(/ · report only$/);
+      expect(would, reason).toBe(line);
+      expect(section).toContain("Graft mode: report. Graft approves and blocks nothing here.");
+      expect(renderPolicyDetails(v).split("\n")[0]).toBe(MODE_REPORT);
+    }
+    expect(policyTitle(E3())).toBe("Would require 2 humans (1 from @acme/security)");
+  });
+
+  it("U-REN-10 enforce mode: each title of the §9 table, no ` · report only`, the enforce footer and mode line", () => {
+    const ENFORCE_LINE =
+      "Graft mode: enforce. This check passes or fails on this policy; a passing check is not a review approval.";
+    for (const [reason, v, title] of byReason()) {
+      const e = { ...v, mode: { effective: "enforce" as const } };
+      expect(policyTitle(e), reason).toBe(title);
+      const section = renderPolicySection(e);
+      expect(section, reason).not.toContain("report only");
+      expect(section, reason).not.toContain("In enforce mode this check would be");
+      expect(firstLines(section, 2)[1], reason).toBe(
+        `**${title
+          .replace("@acme/security", "`@acme/security`")
+          .replace(/by (carol)/, "by `$1`")
+          .replace(/on main$/, "on `main`")}**`,
+      );
+      expect(section, reason).toContain(
+        "Graft mode: enforce. This check is required only if branch protection says so.",
+      );
+      expect(renderPolicyDetails(e).split("\n")[0], reason).toBe(ENFORCE_LINE);
+    }
+    // Several unmet constraints.
+    const e3 = enforcedView(
+      E3(),
+      { ...NO_APPROVERS, counted: [{ id: 2, login: "bob" }] },
+      {
+        mode: "enforce",
+      },
+    );
+    expect(policyTitle(e3)).toBe("Needs approvals: 1 from @acme/security, 1 more from anyone");
+    // Two blocking rules.
+    const twoBlocks = enforcedView(
+      evaluated(
+        facts({
+          files: [{ path: "secrets/x", previousPath: null }],
+          author: { kind: "agent", agent: "a" },
+        }),
+        {
+          ...policy,
+          rules: [
+            ...policy.rules,
+            { index: 9, name: null, match: { paths: ["secrets/**"] }, action: { kind: "block" } },
+          ],
+        },
+      ),
+      NO_APPROVERS,
+      { mode: "enforce" },
+    );
+    expect(policyTitle(twoBlocks)).toBe("Blocked by rules 5, 9");
+  });
+
+  it("U-REN-11 approvals counted: met, unmet, unverified for each reason, not counted; teams in code spans; no @ outside them", () => {
+    const reasons: [Unverified, string][] = [
+      ["no_permission", "the App has no members: read permission"],
+      ["owner_not_org", "the repository owner is not an organization"],
+      ["team_not_found", "no such team, or the App cannot see it"],
+      ["team_unreadable", "the App cannot read this team"],
+      ["check_limit", "too many checks in one evaluation"],
+    ];
+    const e3 = (a: ApproverFacts) => enforcedView(E3(), a);
+    const met = renderPolicyDetails(
+      e3({
+        ...NO_APPROVERS,
+        counted: [
+          { id: 1, login: "alice" },
+          { id: 2, login: "bob" },
+        ],
+        notCounted: [
+          { login: "dave", why: "no_write_access" },
+          { login: "erin", why: "permission_denied" },
+          { login: "fay", why: "no_write_access" },
+        ],
+        teams: { security: { members: ["alice"] } },
+      }),
+    );
+    expect(met).toContain(
+      [
+        "**Approvals counted**",
+        "",
+        "- 1 of 1 from `@acme/security`: `alice`",
+        "- 2 of 2 from anyone: `alice`, `bob`",
+        "- not counted: `dave`, `fay` (no write access)",
+        "- not counted: `erin` (permission check refused)",
+      ].join("\n"),
+    );
+    // The block comes after "Facts used".
+    expect(met.indexOf("**Approvals counted**")).toBeGreaterThan(met.indexOf("**Facts used**"));
+    const unmet = renderPolicyDetails(
+      e3({ ...NO_APPROVERS, teams: { security: { members: [] } } }),
+    );
+    expect(unmet).toContain("- 0 of 1 from `@acme/security`\n- 0 of 2 from anyone");
+    for (const [why, text] of reasons) {
+      const details = renderPolicyDetails(
+        e3({
+          ...NO_APPROVERS,
+          counted: [{ id: 1, login: "alice" }],
+          teams: { security: { unverified: why } },
+        }),
+      );
+      expect(details, why).toContain(
+        `- 0 of 1 from \`@acme/security\`: cannot verify \`@acme/security\` (${text})`,
+      );
+      for (const out of [details, renderPolicySection(e3(NO_APPROVERS))]) {
+        expect(out.replace(/`[^`]*`/g, ""), why).not.toContain("@");
+      }
+    }
+    // The approvals line: counts, and change requests.
+    const withCounts = enforcedView(
+      {
+        ...E3(),
+        approvals: {
+          current: 2,
+          stale: 1,
+          users: ["alice", "bob"],
+          truncated: false,
+          currentApprovers: [],
+          changesRequested: [],
+        },
+      },
+      { ...NO_APPROVERS, counted: [{ id: 1, login: "alice" }], changesRequestedBy: ["carol"] },
+    );
+    expect(renderPolicySection(withCounts)).toContain(
+      "**Approvals so far:** 2 on this head (`alice` and `bob`), 1 on an older commit; 1 counts (write access). Changes requested by `carol`.",
+    );
+    expect(renderPolicySection(withCounts)).not.toContain("Team membership");
+    // A hostile login is a code span.
+    const hostile = renderPolicyDetails(
+      e3({ ...NO_APPROVERS, notCounted: [{ login: "x`@everyone", why: "check_limit" }] }),
+    );
+    expect(hostile).toContain(
+      `- not counted: ${codeSpan("x`@everyone")} (too many approvers to check)`,
+    );
   });
 });

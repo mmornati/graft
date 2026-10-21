@@ -25,6 +25,11 @@ export interface VerdictValues extends VerdictIdentity {
   policyFileChanged: boolean;
   /** The effective `policy_mode` it was published under (Phase 1 step 1). */
   policyMode: "report" | "enforce";
+  /** What enforce mode concludes, in every mode (Phase 1 step 2, D10). */
+  enforcedConclusion: NonNullable<PolicyVerdictsTable["enforced_conclusion"]["__select__"]>;
+  enforcedReason: NonNullable<PolicyVerdictsTable["enforced_reason"]["__select__"]>;
+  /** What was published: `neutral` in report mode, `pending` for `in_progress` (D10). */
+  checkConclusion: "neutral" | "success" | "failure" | "pending";
   rulesMatched: unknown[];
   required: Record<string, unknown>;
   approvals: Record<string, unknown>;
@@ -36,7 +41,7 @@ export interface VerdictValues extends VerdictIdentity {
   evaluatedAt: Date;
 }
 
-/** Insert or update the row of (change, head, policy file). The conclusion is always `neutral`. */
+/** Insert or update the row of (change, head, policy file), with what was published (D10). */
 export async function upsertVerdict(tx: Transaction<Database>, v: VerdictValues): Promise<void> {
   const values = {
     base_ref: v.baseRef,
@@ -44,6 +49,9 @@ export async function upsertVerdict(tx: Transaction<Database>, v: VerdictValues)
     policy_status: v.policyStatus,
     policy_hash: v.policyHash,
     policy_mode: v.policyMode,
+    enforced_conclusion: v.enforcedConclusion,
+    enforced_reason: v.enforcedReason,
+    check_conclusion: v.checkConclusion,
     outcome: v.outcome,
     risk_class: v.riskClass,
     risk_final: v.riskFinal,
@@ -73,6 +81,8 @@ export async function upsertVerdict(tx: Transaction<Database>, v: VerdictValues)
       head_sha: v.headSha,
       policy_file_sha: v.policyFileSha,
       ...values,
+      // The job's clock, not the database's: the card wait (D9) measures from it.
+      created_at: v.evaluatedAt,
     })
     .execute();
 }
@@ -117,4 +127,19 @@ export async function checkRunIdForHead(
     .orderBy("facts_read_at", "desc")
     .executeTakeFirst();
   return row?.check_run_id ?? null;
+}
+
+/** When this head was first evaluated (D9): the oldest row of (change, head), or null. */
+export async function headFirstEvaluatedAt(
+  ex: Executor,
+  changeId: string,
+  headSha: string,
+): Promise<Date | null> {
+  const row = await ex
+    .selectFrom("policy_verdicts")
+    .select((eb) => eb.fn.min("created_at").as("at"))
+    .where("change_id", "=", changeId)
+    .where("head_sha", "=", headSha)
+    .executeTakeFirst();
+  return row?.at ?? null;
 }

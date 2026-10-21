@@ -16,6 +16,8 @@ const EXPECTED = [
   "installation.unsuspend",
   "installation_repositories.added",
   "installation_repositories.removed",
+  // Phase 1 step 2: team and membership triggers.
+  "membership.added",
   "ping",
   "pull_request.closed",
   "pull_request.edited",
@@ -26,6 +28,7 @@ const EXPECTED = [
   "pull_request_review.dismissed",
   "pull_request_review.submitted",
   "push",
+  "team.deleted",
 ];
 
 // Definitions are named "<event>$<action>" ("ping$event" for ping).

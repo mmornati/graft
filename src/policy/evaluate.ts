@@ -417,6 +417,10 @@ export interface ApprovalCount {
   /** Current approvers, login order, at most 10. */
   users: string[];
   truncated: boolean;
+  /** Every current approver, login order (Phase 1 step 2; the D17 bound is applied later). */
+  currentApprovers: { id: number; login: string }[];
+  /** Users whose latest counted review is CHANGES_REQUESTED, on any commit, login order. */
+  changesRequested: { id: number; login: string }[];
 }
 
 const COUNTED = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
@@ -439,18 +443,36 @@ export function countApprovals(
   });
   let current = 0;
   let stale = 0;
-  const users: string[] = [];
+  const approvers: { id: number; login: string }[] = [];
+  const changesRequested: { id: number; login: string }[] = [];
   for (const { review } of latest.values()) {
+    if (!review.user) continue;
+    const who = { id: review.user.id, login: review.user.login };
+    if (review.state === "CHANGES_REQUESTED") {
+      changesRequested.push(who);
+      continue;
+    }
     if (review.state !== "APPROVED") continue;
     if (review.commit_id === o.headSha) {
       current++;
-      if (review.user) users.push(review.user.login);
+      approvers.push(who);
     } else stale++;
   }
-  users.sort((a, b) => {
-    const la = a.toLowerCase();
-    const lb = b.toLowerCase();
-    return la < lb ? -1 : la > lb ? 1 : compareCodePoints(a, b);
-  });
-  return { current, stale, users: users.slice(0, 10), truncated: o.truncated };
+  approvers.sort(byLogin);
+  changesRequested.sort(byLogin);
+  return {
+    current,
+    stale,
+    users: approvers.slice(0, 10).map((u) => u.login),
+    truncated: o.truncated,
+    currentApprovers: approvers,
+    changesRequested,
+  };
+}
+
+/** Case-insensitive login order, code points as the tie-break. */
+function byLogin(a: { login: string }, b: { login: string }): number {
+  const la = a.login.toLowerCase();
+  const lb = b.login.toLowerCase();
+  return la < lb ? -1 : la > lb ? 1 : compareCodePoints(a.login, b.login);
 }

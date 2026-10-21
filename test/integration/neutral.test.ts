@@ -1,19 +1,26 @@
 /**
- * The neutral regression suite (Phase 1 step 1, T10).
+ * The neutral regression suite (Phase 1 step 1, T10; Phase 1 step 2, T11).
  *
  * Every Phase 1 step adds its feature to this suite in report mode. A failure here means Graft
  * would change outcomes for a team that has not opted in.
  *
  * It drives every Phase 0 flow through the real server, queue and worker against the in-memory
  * GitHub, once with default modes and once with every mode at its maximum, and asserts that the
- * writes to GitHub are exactly the Phase 0 set and that every check is `neutral`.
+ * writes to GitHub are exactly the Phase 0 set. With default modes every check is `neutral`; with
+ * every mode at its maximum, only `graft/policy` may conclude otherwise, and only through the
+ * `policy` feature client (step 2).
  */
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
-import { classifyWrite, type MutationRefusedError } from "../../src/github/mutation-guard.js";
+import {
+  classifyWrite,
+  type MutationGate,
+  type MutationRefusedError,
+} from "../../src/github/mutation-guard.js";
 import { buildServer } from "../../src/http/server.js";
 import { modesApplyJob, mutationGate } from "../../src/modules/modes/index.js";
+import { fanoutTeamChange } from "../../src/modules/policy/team-fanout.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
 import { startWorker } from "../../src/queue/worker.js";
 import {
@@ -37,6 +44,7 @@ import {
   OWNER,
   PR_NUMBER,
   REPO,
+  REPO_ID,
 } from "../helpers/github-builders.js";
 import { loadIntentScenario, scenarioLlm } from "../helpers/intent-scenario.js";
 import { B1, B2, EXAMPLE_POLICY, putContent } from "../helpers/policy-scenario.js";
@@ -45,8 +53,17 @@ import { sleep } from "../helpers/wait.js";
 const FULL_NAME = `${OWNER}/${REPO}`;
 const REPORT_LINE = "Graft mode: report. This check never blocks a merge.";
 const ENFORCE_LINE =
-  "Graft mode: enforce. Enforcement is not active in this version; this check never blocks a merge.";
+  "Graft mode: enforce. This check passes or fails on this policy; a passing check is not a review approval.";
 const HEAD_2 = fakeSha(0xbeef);
+/** Step 2: the example policy, with a team constraint as the default. */
+const TEAM_POLICY = EXAMPLE_POLICY.replace(
+  "default:\n  require: { humans: 1 }",
+  "default:\n  require: { humans: 1, team: security }",
+).replace(
+  "match: { author: agent, risk: sensitive }\n    require: { humans: 2 }",
+  "match: { author: agent, risk: sensitive }\n    require: { humans: 1, team: security }",
+);
+const OTHER_INSTALLATION = INSTALLATION_ID + 1;
 
 interface Profile {
   name: "default" | "max";
@@ -64,6 +81,7 @@ const PROFILES: Profile[] = [
       issues: "read",
       pull_requests: "write",
       checks: "write",
+      members: "read",
     },
   },
   {
@@ -75,6 +93,7 @@ const PROFILES: Profile[] = [
       issues: "read",
       pull_requests: "write",
       checks: "write",
+      members: "read",
     },
   },
 ];
@@ -84,6 +103,8 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
   let api: FakeGitHubApi;
   let server: Awaited<ReturnType<typeof buildServer>>;
   const refused: MutationRefusedError[] = [];
+  /** Every gate question, with its answer: the gate is asked only for feature-client writes. */
+  const gateCalls: { feature: string; allowed: boolean }[] = [];
   // The policy check's mode line before the mode changes, after the first and after the second.
   const lines = { before: "", first: "", second: "" };
   const writesAround = { before: 0, afterFirst: 0 };
@@ -95,17 +116,24 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
   const policyRun = () =>
     api.state.checkRuns.filter((c) => c.name === "graft/policy" && c.head_sha === HEAD_2).at(0);
   const writes = () => api.requests.filter((r) => r.method !== "GET" && r.method !== "HEAD");
+  const checkWrites = () =>
+    api.requests.filter((r) => r.method !== "GET" && /\/check-runs(\/\d+)?$/.test(r.path));
+  const nonNeutral = (r: { body?: Record<string, unknown> | undefined }) =>
+    (r.body?.status !== undefined && r.body.status !== "completed") ||
+    (r.body?.conclusion !== undefined && r.body.conclusion !== "neutral");
 
-  /** No unfinished job for four polls in a row. A failed or retrying job fails the test. */
+  /**
+   * No unfinished job for four polls in a row. A failed or retrying job fails the test. A job
+   * deferred into the future (the card wait, the team fan-out's debounce) is not waited for.
+   */
   async function drain(): Promise<void> {
     let quiet = 0;
     const deadline = Date.now() + 40_000;
     while (quiet < 4) {
       if (Date.now() > deadline) throw new Error("the queue did not drain");
       const res = await sql<{ n: string }>`
-        select count(*)::text as n from pgboss.job where state in ('created', 'retry', 'active')`.execute(
-        t.db,
-      );
+        select count(*)::text as n from pgboss.job
+        where state in ('created', 'retry', 'active') and start_after <= now()`.execute(t.db);
       quiet = res.rows[0]?.n === "0" ? quiet + 1 : 0;
       await sleep(150);
     }
@@ -139,6 +167,12 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await t.deps.queue.send(modesApplyJob, {});
     await drain();
   };
+  /** installation_repositories.added on another installation: a transfer (D13). */
+  const transfer = (to: number, delivery: string) =>
+    post("installation_repositories.added", delivery, (p) => {
+      (p.installation as { id: number }).id = to;
+      p.repositories_added = [{ id: REPO_ID, full_name: FULL_NAME, private: true }];
+    });
 
   beforeAll(async () => {
     t = await createTestApp({
@@ -149,7 +183,13 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await truncateAll(t.db);
     clearPolicyCache();
     api = createFakeGitHubApi();
-    t.deps.github = fakeGitHubFactory(api, mutationGate(t.db, config()), (e) => refused.push(e));
+    const real = mutationGate(t.db, config());
+    const gate: MutationGate = async (q) => {
+      const v = await real(q);
+      gateCalls.push({ feature: q.feature, allowed: v.allowed });
+      return v;
+    };
+    t.deps.github = fakeGitHubFactory(api, gate, (e) => refused.push(e));
     api.state.installationPermissions = profile.permissions;
     server = await buildServer(t.deps);
     await startWorker(t.deps.queue, t.deps.registry, jobContext(t), {
@@ -157,10 +197,10 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       pollingIntervalSeconds: 0.5,
     });
 
-    // The world: PR 2 by an agent, a base branch with a policy.
+    // The world: PR 2 by an agent, a base branch with a team-constrained policy.
     loadIntentScenario(api);
     api.state.branches.set("main", B1);
-    putContent(api, B1, EXAMPLE_POLICY);
+    putContent(api, B1, TEAM_POLICY);
     api.state.commits.set(PR_NUMBER, [
       makeCommit(
         HEAD_SHA,
@@ -170,6 +210,15 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
         ]),
       ),
     ]);
+    // Step 2: alice is in the team, bob is not; both can write; dave can write too.
+    api.state.teams.set("security", { members: new Map([["alice", "active"]]) });
+    for (const [login, id] of [
+      ["alice", 601],
+      ["bob", 602],
+      ["dave", 604],
+    ] as const) {
+      api.state.permissions.set(login, { id, role: "write" });
+    }
 
     // installation created
     await post("installation.created", "n-inst");
@@ -180,11 +229,26 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
         .set({ policy_mode: "enforce", guard_mode: "enforce", mcp_write: "on" })
         .execute();
     }
-    // PR opened (agent trailers), intent card, policy
+    // PR opened (agent trailers), intent card (it arrives after the PR), policy
     await post("pull_request.opened", "n-open");
-    // review approved
-    api.state.reviews.set(PR_NUMBER, [makeReview({ id: 11 })]);
+    // reviews: a team member, a non-member, and a change request
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 11, login: "alice", userId: 601 }),
+      makeReview({ id: 12, login: "bob", userId: 602 }),
+      makeReview({ id: 13, login: "dave", userId: 604, state: "CHANGES_REQUESTED" }),
+    ]);
     await post("pull_request_review.submitted", "n-review");
+    // the change request is dismissed
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 11, login: "alice", userId: 601 }),
+      makeReview({ id: 12, login: "bob", userId: 602 }),
+      makeReview({ id: 13, login: "dave", userId: 604, state: "DISMISSED" }),
+    ]);
+    await post("pull_request_review.dismissed", "n-dismiss");
+    // a team membership changes: the handler debounces, the fan-out re-evaluates
+    await post("membership.added", "n-member");
+    await fanoutTeamChange({ installationId: INSTALLATION_ID }, jobContext(t));
+    await drain();
     // label added
     const pull = api.state.pulls.get(PR_NUMBER);
     if (!pull) throw new Error("no pull");
@@ -193,7 +257,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await post("pull_request.labeled", "n-label", (p) => {
       p.label = { name: "needs-review" };
     });
-    // push to the PR
+    // push to the PR: every approval is now on an older head
     pull.head.sha = HEAD_2;
     pull.updated_at = "2026-10-14T11:20:00Z";
     api.state.commits.set(PR_NUMBER, [
@@ -208,7 +272,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     });
     // push to main changing graft.yaml (fan-out)
     api.state.branches.set("main", B2);
-    putContent(api, B2, `${EXAMPLE_POLICY}\n# tightened\n`);
+    putContent(api, B2, `${TEAM_POLICY}\n# tightened\n`);
     await post("push", "n-push", (p) => {
       p.ref = "refs/heads/main";
       p.after = B2;
@@ -271,7 +335,12 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     );
     await apply();
     lines.second = policyRun()?.output.text?.split("\n")[0] ?? "";
-  }, 180_000);
+
+    // a repository transfer, away and back: the modes reset (D13) and the apply republishes
+    await transfer(OTHER_INSTALLATION, "n-transfer-away");
+    await transfer(INSTALLATION_ID, "n-transfer-back");
+    await apply();
+  }, 240_000);
 
   afterAll(async () => {
     await server.close();
@@ -291,23 +360,90 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     expect(paths).toContain(`POST /repos/${FULL_NAME}/issues/${PR_NUMBER}/comments`);
   });
 
-  it(`N-2 [${profile.name}] every Graft check run created or updated has conclusion neutral`, () => {
-    const checkWrites = api.requests.filter(
-      (r) => r.method !== "GET" && /\/check-runs(\/\d+)?$/.test(r.path),
-    );
-    expect(checkWrites.length).toBeGreaterThan(3);
-    for (const r of checkWrites) {
-      // A write without a conclusion leaves the stored one alone; one with it says neutral.
-      if (r.body && "conclusion" in r.body) expect(r.body.conclusion).toBe("neutral");
-    }
-    const names = new Set(api.state.checkRuns.map((c) => c.name));
-    expect([...names].sort()).toEqual(["graft/intent", "graft/policy", "graft/provenance"]);
-    for (const run of api.state.checkRuns) {
-      if (run.status === "completed")
+  if (profile.name === "default") {
+    it("N-2 [default] every Graft check run created or updated has conclusion neutral", () => {
+      const all = checkWrites();
+      expect(all.length).toBeGreaterThan(3);
+      for (const r of all) {
+        // A write without a conclusion leaves the stored one alone; one with it says neutral.
+        if (r.body && "conclusion" in r.body) expect(r.body.conclusion).toBe("neutral");
+        expect(nonNeutral(r), JSON.stringify(r.body?.status)).toBe(false);
+      }
+      const names = new Set(api.state.checkRuns.map((c) => c.name));
+      expect([...names].sort()).toEqual(["graft/intent", "graft/policy", "graft/provenance"]);
+      for (const run of api.state.checkRuns) {
+        if (run.status === "completed")
+          expect(run.conclusion, `${run.name} ${run.id}`).toBe("neutral");
+      }
+      expect(
+        api.state.checkRuns
+          .filter((c) => c.name === "graft/policy")
+          .every((c) => c.status === "completed"),
+      ).toBe(true);
+      expect(api.state.checkRuns.filter((c) => c.name === "graft/policy").length).toBeGreaterThan(
+        0,
+      );
+      // The gate was never asked: nothing tried a Phase 1 write.
+      expect(gateCalls).toEqual([]);
+    });
+
+    it("N-6 [default] every verdict row was published neutral and stores what enforce would conclude", async () => {
+      const rows = await t.db.selectFrom("policy_verdicts").selectAll().execute();
+      expect(rows.length).toBeGreaterThan(1);
+      for (const r of rows) {
+        expect(r.check_conclusion).toBe("neutral");
+        expect(r.policy_mode).toBe("report");
+        expect(r.enforced_conclusion).not.toBeNull();
+        expect(r.enforced_reason).not.toBeNull();
+      }
+      // The team constraint was verified: alice counted for it while her approval was current.
+      const first = rows.filter((r) => r.head_sha === HEAD_SHA);
+      const constraints = first.flatMap(
+        (r) =>
+          ((r.approvals as { constraints?: unknown[] }).constraints ?? []) as {
+            teamCount: number;
+            met: boolean;
+            approved: number;
+          }[],
+      );
+      expect(
+        constraints.some((c) => c.teamCount > 0 && c.met && c.approved >= 1),
+        JSON.stringify(first.map((r) => r.approvals)),
+      ).toBe(true);
+      // After the push her approval is stale: what enforce would say is a failure.
+      expect(rows.find((r) => r.head_sha === HEAD_2)?.enforced_conclusion).toBe("failure");
+    });
+  } else {
+    it("N-2b [max] intent and provenance are always neutral; every non-neutral or in_progress check write is graft/policy, through the policy feature client", () => {
+      const all = checkWrites();
+      expect(all.length).toBeGreaterThan(3);
+      const byId = new Map(api.state.checkRuns.map((c) => [c.id, c.name]));
+      const nameOf = (r: (typeof all)[number]) =>
+        (r.body?.name as string | undefined) ?? byId.get(Number(r.path.split("/").at(-1)));
+      const enforcing = all.filter(nonNeutral);
+      expect(enforcing.length).toBeGreaterThan(0);
+      for (const r of enforcing) expect(nameOf(r)).toBe("graft/policy");
+      for (const r of all.filter((x) => nameOf(x) !== "graft/policy")) {
+        expect(nonNeutral(r), `${nameOf(r)} ${JSON.stringify(r.body)}`).toBe(false);
+      }
+      for (const run of api.state.checkRuns.filter((c) => c.name !== "graft/policy")) {
         expect(run.conclusion, `${run.name} ${run.id}`).toBe("neutral");
-    }
-    expect(api.state.checkRuns.filter((c) => c.name === "graft/policy").length).toBeGreaterThan(0);
-  });
+      }
+      // The gate is asked only for feature-client writes: one allowed `policy` answer per
+      // non-neutral check write that reached GitHub.
+      expect(gateCalls.every((c) => c.feature === "policy")).toBe(true);
+      expect(gateCalls.filter((c) => c.allowed)).toHaveLength(enforcing.length);
+    });
+
+    it("N-6 [max] every verdict row stores what enforce would conclude; report rows were published neutral", async () => {
+      const rows = await t.db.selectFrom("policy_verdicts").selectAll().execute();
+      for (const r of rows) {
+        expect(r.enforced_conclusion).not.toBeNull();
+        if (r.policy_mode === "report") expect(r.check_conclusion).toBe("neutral");
+        else expect(r.check_conclusion).toBe(r.enforced_conclusion);
+      }
+    });
+  }
 
   it(`N-3 [${profile.name}] the guard refused nothing in the Phase 0 flows, and no job failed`, async () => {
     expect(refused.map((e) => e.message)).toEqual([]);
@@ -337,17 +473,46 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     const history = await t.db
       .selectFrom("mode_changes")
       .selectAll()
+      .where("actor", "=", "tester")
       .orderBy("created_at")
       .execute();
     expect(history.map((h) => [h.key, h.to_value, h.applied_at !== null])).toEqual([
       ["policy_mode", FIRST, true],
       ["policy_mode", SECOND, true],
     ]);
-    // The conclusion is the literal neutral after every republication.
-    expect(policyRun()?.conclusion).toBe("neutral");
+    // The transfer reset the modes with system rows (max only: default was already at the floors),
+    // and the apply after it left the check completed and neutral.
+    const system = await t.db
+      .selectFrom("mode_changes")
+      .selectAll()
+      .where("actor", "=", "system")
+      .execute();
+    expect(system.map((s) => [s.key, s.reason]).sort()).toEqual(
+      profile.name === "max"
+        ? [
+            ["guard_mode", "installation changed"],
+            ["mcp_write", "installation changed"],
+            ["policy_mode", "installation changed"],
+          ]
+        : [],
+    );
+    expect(system.every((s) => s.applied_at !== null)).toBe(true);
+    expect(policyRun()).toMatchObject({ status: "completed", conclusion: "neutral" });
+    expect(policyRun()?.output.text?.split("\n")[0]).toBe(REPORT_LINE);
   });
 
+  /** N-5 and N-7 need the repository back at its profile's modes after the transfer. */
+  const restoreModes = async () => {
+    if (profile.name === "max") {
+      await t.db
+        .updateTable("repositories")
+        .set({ policy_mode: "enforce", guard_mode: "enforce", mcp_write: "on" })
+        .execute();
+    }
+  };
+
   it(`N-5 [${profile.name}] a Phase 1 write is refused by mode or by the missing feature, and the gate is read at request time`, async () => {
+    await restoreModes();
     const createRef = (c: Awaited<ReturnType<typeof t.deps.github.forInstallation>>) =>
       c.rest.git.createRef({
         owner: OWNER,
@@ -394,5 +559,43 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       expect(await reason(createRef(stranger))).toBe("repository_unknown");
     }
     expect(refused.length).toBeGreaterThan(before);
+  });
+
+  it(`N-7 [${profile.name}] a non-neutral check: refused without the policy feature; with it, refused in report and sent in enforce; never for another check`, async () => {
+    await restoreModes();
+    const reason = async (p: Promise<unknown>): Promise<string> => {
+      try {
+        await p;
+      } catch (e) {
+        return (e as MutationRefusedError).refusal ?? `other: ${(e as Error).message}`;
+      }
+      return "sent";
+    };
+    const failing = (c: Awaited<ReturnType<typeof t.deps.github.forInstallation>>, name: string) =>
+      c.rest.checks.create({
+        owner: OWNER,
+        repo: REPO,
+        head_sha: HEAD_2,
+        name,
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "n7", summary: "n7" },
+      });
+    const plain = await t.deps.github.forInstallation(INSTALLATION_ID);
+    const policy = await t.deps.github.forInstallation(INSTALLATION_ID, { feature: "policy" });
+    const sentFailures = () =>
+      checkWrites().filter((r) => r.body?.conclusion === "failure" && r.body?.output);
+    const before = sentFailures().length;
+
+    expect(await reason(failing(plain, "graft/policy"))).toBe("no_feature");
+    if (profile.name === "default") {
+      expect(await reason(failing(policy, "graft/policy"))).toBe("mode_report");
+      expect(sentFailures()).toHaveLength(before);
+    } else {
+      expect(await reason(failing(policy, "graft/policy"))).toBe("sent");
+      expect(sentFailures()).toHaveLength(before + 1);
+      expect(await reason(failing(policy, "graft/intent"))).toBe("feature_not_allowed");
+      expect(sentFailures()).toHaveLength(before + 1);
+    }
   });
 });

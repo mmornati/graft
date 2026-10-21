@@ -11,6 +11,7 @@ import {
   fanoutCeilingChange,
   getEffectiveModes,
   getServiceState,
+  mutationGate,
   publishModeCeiling,
   refreshPermissions,
 } from "../../src/modules/modes/index.js";
@@ -101,6 +102,8 @@ async function addSecondRepository(): Promise<void> {
 describe("modes: schema", () => {
   it("I-MODE-1 migration 0008 down removes exactly what it added, then up restores it", async () => {
     await truncateAll(t.db);
+    // Step 2's migration sits on top of 0008.
+    expect(await migrateDownOne(t.db)).toEqual(["0009_enforce"]);
     expect(await migrateDownOne(t.db)).toEqual(["0008_modes"]);
     try {
       const cols = await sql<{ table_name: string; column_name: string }>`
@@ -112,7 +115,7 @@ describe("modes: schema", () => {
       );
       expect(cols.rows).toEqual([]);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0008_modes"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0008_modes", "0009_enforce"]);
     }
     await seedWorld(t.db);
     const r = await repoRow();
@@ -746,7 +749,11 @@ describe("modes: the policy check", () => {
   const evaluate = (config: Record<string, string> = {}) =>
     evaluatePolicyJobRun(EVAL_DATA, { ...jobContext(t), config: testConfig(config) });
 
-  beforeEach(() => loadPolicyScenario(api));
+  beforeEach(() => {
+    loadPolicyScenario(api);
+    // Step 2: an effective enforce publishes a non-neutral check, which needs the real gate.
+    t.deps.github = fakeGitHubFactory(api, mutationGate(t.db, { modeCeiling: "enforce" }));
+  });
 
   it("I-MODE-10 changing only the effective mode republishes; the verdict row stores policy_mode", async () => {
     // The details are frozen so that only the facts hash can tell the two runs apart (D8).
@@ -773,14 +780,17 @@ describe("modes: the policy check", () => {
     expect((await t.db.selectFrom("policy_verdicts").selectAll().execute())[0]?.policy_mode).toBe(
       "report",
     );
-    // Every publication kept the literal neutral conclusion.
-    expect(checks().every((c) => c.conclusion === "neutral")).toBe(true);
+    // Step 2: the enforce publication carried the enforce conclusion (the card is pending, so
+    // in_progress); the rollback to report is completed and neutral again.
+    const sent = api.find("PATCH", /\/check-runs\/\d+$/).map((r) => r.body?.status);
+    expect(sent).toEqual(["in_progress", "completed"]);
+    expect(checks().at(-1)).toMatchObject({ status: "completed", conclusion: "neutral" });
   });
 
-  it("I-MODE-11 output.text starts with the mode line for each mode; title and summary do not change", async () => {
+  it("I-MODE-11 output.text starts with the mode line for each mode; enforce mode titles the check with its conclusion", async () => {
     const REPORT = "Graft mode: report. This check never blocks a merge.";
     const ENFORCE =
-      "Graft mode: enforce. Enforcement is not active in this version; this check never blocks a merge.";
+      "Graft mode: enforce. This check passes or fails on this policy; a passing check is not a review approval.";
     await evaluate();
     // The check run is updated in place, so keep what the report run said.
     const reportText = checks()[0]?.output.text ?? "";
@@ -793,10 +803,16 @@ describe("modes: the policy check", () => {
     expect(checks()).toHaveLength(1);
     const enforceRun = checks()[0];
     expect(enforceRun?.output.text?.startsWith(`${ENFORCE}\n\n**Matched rules**`)).toBe(true);
-    expect(enforceRun?.output.title).toBe(reportTitle);
-    expect(enforceRun?.output.summary).toBe(reportSummary);
-    expect(enforceRun?.output.summary).not.toContain("Graft mode");
-    expect(enforceRun?.conclusion).toBe("neutral");
+    // Step 2 (§9): report titles are the Phase 0 ones; enforce titles say what the check concludes.
+    expect(reportTitle).toMatch(/^Would require/);
+    expect(reportSummary).toContain("· report only");
+    expect(reportSummary).toContain("**In enforce mode this check would be:** `pending`");
+    expect(enforceRun?.output.title).toBe("Waiting for the intent card");
+    expect(enforceRun?.output.summary).not.toContain("report only");
+    expect(enforceRun?.output.summary).toContain(
+      "Graft mode: enforce. This check is required only if branch protection says so.",
+    );
+    expect(enforceRun).toMatchObject({ status: "in_progress", conclusion: null });
     // The details are the same text under both lines.
     expect(enforceRun?.output.text?.slice(ENFORCE.length)).toBe(reportText.slice(REPORT.length));
   });
@@ -902,5 +918,136 @@ describe("modes: purge and doctor", () => {
     const healthy = await doctor();
     expect(healthy.checks.find((c) => c.id === "permissions")?.status).toBe("OK");
     expect(healthy.checks.find((c) => c.id === "modes")?.status).toBe("OK");
+  });
+});
+
+describe("modes: Phase 1 step 2", () => {
+  const NEW_INSTALLATION = INSTALLATION_ID + 1;
+  const added = async (installationId: number, fullName = FULL_NAME, delivery = "d") => {
+    const { event, payload } = loadFixture("installation_repositories.added");
+    const p = structuredClone(payload) as {
+      installation: { id: number };
+      repositories_added: { id: number; full_name: string; private: boolean }[];
+    };
+    p.installation.id = installationId;
+    p.repositories_added = [
+      { ...p.repositories_added[0], id: REPO_ID, full_name: fullName, private: true },
+    ] as typeof p.repositories_added;
+    await trackInstallations.handle(
+      { id: delivery, deliveryId: delivery, name: event, payload: p } as never,
+      jobContext(t),
+    );
+  };
+  const enforceAll = () =>
+    t.db
+      .updateTable("repositories")
+      .set({ policy_mode: "enforce", guard_mode: "enforce", mcp_write: "on" })
+      .where("id", "=", REPO_ID)
+      .execute();
+  const modesOfRepo = async () => {
+    const r = await repoRow();
+    return [r.policy_mode, r.guard_mode, r.mcp_write];
+  };
+
+  it("I-MODE-14 a transfer or a re-add resets the modes with system rows; a rename in the same installation keeps them", async () => {
+    // Transfer: the repository shows up on another installation.
+    await enforceAll();
+    await added(NEW_INSTALLATION, FULL_NAME, "d-transfer");
+    expect(await modesOfRepo()).toEqual(["report", "report", "off"]);
+    expect((await repoRow()).installation_id).toBe(NEW_INSTALLATION);
+    const transfer = await rows();
+    expect(
+      transfer
+        .map((r) => [r.key, r.from_value, r.to_value, r.actor, r.reason, r.applied_at])
+        .sort(),
+    ).toEqual([
+      ["guard_mode", "enforce", "report", "system", "installation changed", null],
+      ["mcp_write", "on", "off", "system", "installation changed", null],
+      ["policy_mode", "enforce", "report", "system", "installation changed", null],
+    ]);
+    // `mode history` shows them like any other row.
+    const history = await run("mode", "history", "--repo", FULL_NAME);
+    expect(history.code).toBe(0);
+    expect(history.out).toContain("system");
+    expect(history.out).toContain("installation changed");
+
+    // Re-added after removal, on the same installation.
+    await t.db.deleteFrom("mode_changes").execute();
+    await enforceAll();
+    await t.db.updateTable("repositories").set({ removed_at: FIXED_NOW }).execute();
+    await added(NEW_INSTALLATION, FULL_NAME, "d-readd");
+    expect(await modesOfRepo()).toEqual(["report", "report", "off"]);
+    expect((await repoRow()).removed_at).toBeNull();
+    expect((await rows()).map((r) => [r.key, r.actor, r.reason]).sort()).toEqual([
+      ["guard_mode", "system", "repository re-added"],
+      ["mcp_write", "system", "repository re-added"],
+      ["policy_mode", "system", "repository re-added"],
+    ]);
+
+    // A rename within the same installation keeps the modes and writes nothing.
+    await t.db.deleteFrom("mode_changes").execute();
+    await enforceAll();
+    await added(NEW_INSTALLATION, `${OWNER}/renamed`, "d-rename");
+    expect(await modesOfRepo()).toEqual(["enforce", "enforce", "on"]);
+    expect((await repoRow()).full_name).toBe(`${OWNER}/renamed`);
+    expect(await rows()).toEqual([]);
+
+    // A transfer of a repository already at the floors writes nothing.
+    await t.db
+      .updateTable("repositories")
+      .set({ policy_mode: "report", guard_mode: "report", mcp_write: "off" })
+      .execute();
+    await added(INSTALLATION_ID, FULL_NAME, "d-back");
+    expect((await repoRow()).installation_id).toBe(INSTALLATION_ID);
+    expect(await rows()).toEqual([]);
+  });
+
+  it("I-MODE-15 mode show notes a missing members:read when policy enforces; doctor warns and still exits 0", async () => {
+    // A recent delivery, so that only the checks under test can warn.
+    await addDelivery(t.db, {
+      id: "dl-15",
+      installationId: INSTALLATION_ID,
+      repositoryId: null,
+      at: new Date(FIXED_NOW.getTime() - 3_600_000),
+    });
+    ceiling = "enforce";
+    expect((await set("--policy", "enforce", "--reason", "r")).code).toBe(0);
+    const NOTE = "note: team constraints cannot be verified (no members:read); they will fail";
+    // Permissions never read: the note.
+    expect((await run("mode", "show", "--repo", FULL_NAME)).out).toContain(NOTE);
+    await t.db
+      .updateTable("installations")
+      .set({ permissions: JSON.stringify({ checks: "write" }), permissions_read_at: FIXED_NOW })
+      .execute();
+    expect((await run("mode", "show", "--repo", FULL_NAME)).out).toContain(NOTE);
+    const doctor = async () => {
+      const res = await run("pilot", "doctor", "--installation", String(INSTALLATION_ID), "--json");
+      return {
+        code: res.code,
+        checks: JSON.parse(res.out).checks as { id: string; status: string; detail: string }[],
+      };
+    };
+    const warned = await doctor();
+    expect(warned.code).toBe(0);
+    expect(warned.checks.filter((c) => c.status === "FAIL")).toEqual([]);
+    expect(warned.checks.find((c) => c.id === "teams")).toMatchObject({
+      status: "WARN",
+      detail: expect.stringContaining("1 repositories enforcing policy without members:read"),
+    });
+    // With members:read: no note, no warning.
+    await t.db
+      .updateTable("installations")
+      .set({ permissions: JSON.stringify({ checks: "write", members: "read" }) })
+      .execute();
+    expect((await run("mode", "show", "--repo", FULL_NAME)).out).not.toContain(NOTE);
+    expect((await doctor()).checks.find((c) => c.id === "teams")?.status).toBe("OK");
+    // Report mode never needs it.
+    await t.db
+      .updateTable("installations")
+      .set({ permissions: JSON.stringify({ checks: "write" }) })
+      .execute();
+    ceiling = "report";
+    expect((await run("mode", "show", "--repo", FULL_NAME)).out).not.toContain(NOTE);
+    expect((await doctor()).checks.find((c) => c.id === "teams")?.status).toBe("OK");
   });
 });

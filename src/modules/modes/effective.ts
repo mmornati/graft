@@ -38,6 +38,12 @@ export function mutationGate(db: Db, config: Pick<Config, "modeCeiling">): Mutat
     const row = await findActiveRepositoryByName(db, installationId, owner, repo);
     if (!row) return { allowed: false, reason: "repository_unknown" };
     const modes = modesOf(row, config.modeCeiling);
+    // Phase 1 step 2 (D11): a non-neutral `graft/policy` check needs policy_mode enforce.
+    if (feature === "policy") {
+      return modes.policy.effective === "enforce"
+        ? { allowed: true }
+        : { allowed: false, reason: "mode_report" };
+    }
     if (feature === "guard") {
       return modes.guard.effective === "enforce"
         ? { allowed: true }

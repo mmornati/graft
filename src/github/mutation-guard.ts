@@ -6,12 +6,19 @@
  * GET or HEAD is refused in every mode: a new write is added to this table on purpose, together
  * with a test (U-MG).
  *
+ * Phase 1 step 2 (D11): the two check-run routes stay `phase0`, but their body is read too. A body
+ * whose `status` is not `completed` or whose `conclusion` is not `neutral` is a Phase 1 write: only
+ * `graft/policy`, only through a `policy` feature client, only when the gate allows it.
+ *
  * This file imports no database and no module code: the mode lookup arrives as a `MutationGate`.
  */
 import { PermanentJobError } from "../queue/errors.js";
 import type { GitHubClient } from "./client-factory.js";
 
-export type Feature = "guard" | "mcp";
+export type Feature = "guard" | "mcp" | "policy";
+
+/** The only check run that may be published with a non-neutral body (Phase 1 step 2, D11). */
+export const ENFORCEABLE_CHECK = "graft/policy";
 
 export type WriteClass =
   | { kind: "read" }
@@ -157,6 +164,56 @@ export function classifyWrite(method: string, rawPath: string): WriteClass {
   return { kind: "unknown" };
 }
 
+const CHECK_RUN_WRITES: readonly { method: string; re: RegExp }[] = [
+  { method: "POST", re: new RegExp(`${OWNER_REPO}/check-runs$`) },
+  { method: "PATCH", re: new RegExp(`${OWNER_REPO}/check-runs/\\d+$`) },
+];
+
+/**
+ * The owner and repository of a check-run write (`POST …/check-runs`, `PATCH …/check-runs/{n}`),
+ * whose body decides whether it is a Phase 0 or a Phase 1 write (D11); null for any other route.
+ * Call it only on a path `classifyWrite` accepted.
+ */
+export function checkRunWrite(
+  method: string,
+  rawPath: string,
+): { owner: string; repo: string } | null {
+  const m = method.toUpperCase();
+  const path = (rawPath.split("?")[0] ?? "").split("#")[0]?.replace(/(.)\/$/, "$1") ?? "";
+  for (const w of CHECK_RUN_WRITES) {
+    if (w.method !== m) continue;
+    const hit = w.re.exec(path);
+    if (hit) return { owner: hit[1] as string, repo: hit[2] as string };
+  }
+  return null;
+}
+
+/**
+ * The body rule of D11: what a check-run body asks for. `neutral` (completed + neutral, or no
+ * status or conclusion at all) stays a Phase 0 write; anything else is `enforce`, a Phase 1
+ * write. A body that is not a plain JSON object cannot be read reliably: `unreadable`.
+ */
+export function checkRunBodyKind(
+  body: unknown,
+): { kind: "neutral" } | { kind: "enforce"; name: unknown } | { kind: "unreadable" } {
+  if (body === undefined || body === null) return { kind: "neutral" };
+  if (typeof body !== "object" || Array.isArray(body)) return { kind: "unreadable" };
+  const proto = Object.getPrototypeOf(body);
+  if (proto !== Object.prototype && proto !== null) return { kind: "unreadable" };
+  const b = body as Record<string, unknown>;
+  // Own keys only; an `undefined` value is not sent (JSON drops it), so it is absent.
+  const own = (k: string): unknown => (Object.hasOwn(b, k) ? b[k] : undefined);
+  const status = own("status");
+  const conclusion = own("conclusion");
+  if (
+    (status !== undefined && status !== "completed") ||
+    (conclusion !== undefined && conclusion !== "neutral")
+  ) {
+    return { kind: "enforce", name: own("name") };
+  }
+  return { kind: "neutral" };
+}
+
 /** Path words that are part of a route; every other segment (names, branches) is templated. */
 const KNOWN_SEGMENTS = new Set([
   "api",
@@ -228,10 +285,10 @@ export function installMutationGuard(
     if (method === "GET" || method === "HEAD") return;
 
     const base = o.baseUrl.replace(/\/+$/, "");
-    const refusal = (reason: string): MutationRefusedError => {
+    const refusal = (reason: string, suffix = ""): MutationRefusedError => {
       const err = new MutationRefusedError(
         method,
-        routeTemplate(String(options.url)),
+        `${routeTemplate(String(options.url))}${suffix}`,
         o.feature,
         reason,
       );
@@ -255,9 +312,28 @@ export function installMutationGuard(
       case "app":
         if (o.installationId !== null) throw refusal("unknown_route");
         return;
-      case "phase0":
+      case "phase0": {
         if (o.installationId === null) throw refusal("app_client");
+        // D11: a check-run write is Phase 0 only when its body is neutral. The body read is the
+        // one Octokit sends (`data` replaces the other parameters), never the caller's options.
+        const target = checkRunWrite(method, parsed.url.slice(base.length));
+        if (target === null) return;
+        const body = checkRunBodyKind(parsed.body);
+        if (body.kind === "neutral") return;
+        const tag = " (non-neutral check run)";
+        if (body.kind === "unreadable") throw refusal("unknown_route", tag);
+        if (body.name !== ENFORCEABLE_CHECK) throw refusal("feature_not_allowed", tag);
+        if (o.feature === undefined) throw refusal("no_feature", tag);
+        if (o.feature !== "policy") throw refusal("feature_not_allowed", tag);
+        const verdict = await o.gate({
+          installationId: o.installationId,
+          owner: target.owner,
+          repo: target.repo,
+          feature: "policy",
+        });
+        if (!verdict.allowed) throw refusal(verdict.reason, tag);
         return;
+      }
       case "unknown":
         throw refusal("unknown_route");
       case "phase1": {

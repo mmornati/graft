@@ -2,18 +2,18 @@
 
 [Docs index](../README.md) · [Configuration](../configuration.md) · [Phase 1 plan](../phase-1/README.md)
 
-Every repository has modes that decide whether Graft only **reports** or may **change outcomes** on GitHub. Report is the default, and in this version nothing enforces yet: whatever the modes say, every Graft check still concludes `neutral`. This page is about the switches and the safety rails that later Phase 1 features are built on.
+Every repository has modes that decide whether Graft only **reports** or may **change outcomes** on GitHub. Report is the default: with default modes every Graft check concludes `neutral`, exactly as in Phase 0. Since Phase 1 step 2, a repository whose effective `policy_mode` is `enforce` gets a `graft/policy` check that concludes `success` or `failure` (see [Policy, enforce mode](policy.md#enforce-mode)). This page is about the switches and the safety rails.
 
 ## The three keys
 
 | Key | Values | Default | Needs on the installation |
 | --- | --- | --- | --- |
-| `policy_mode` | `report`, `enforce` | `report` | nothing beyond Phase 0 |
+| `policy_mode` | `report`, `enforce` | `report` | nothing beyond Phase 0 (without `members: read`, team constraints fail) |
 | `guard_mode` | `report`, `enforce` | `report` | `contents: write` |
 | `mcp_write` | `off`, `on` | `off` | `pull_requests: write` |
 
 - **report** (and `off`): Graft computes and shows what it would do. It makes the same GitHub writes as in Phase 0 (check runs and the managed comment) and nothing else.
-- **enforce** (and `on`): a feature may act. In this version `policy_mode: enforce` only changes one line of the `graft/policy` check details (see below); the check still never blocks a merge.
+- **enforce** (and `on`): a feature may act. `policy_mode: enforce` publishes the enforce conclusion on `graft/policy` (`success`, `failure`, or `in_progress` while the intent card is written). It blocks a merge only if branch protection makes `graft/policy` a required check. `guard_mode` and `mcp_write` have no feature behind them yet.
 
 ## Who sets a mode
 
@@ -80,13 +80,19 @@ Installation permissions are read from the GitHub API (`GET /app/installations/{
 The first line of the `graft/policy` check details (its `output.text`) names the mode:
 
 - `Graft mode: report. This check never blocks a merge.`
-- `Graft mode: enforce. Enforcement is not active in this version; this check never blocks a merge.`
+- `Graft mode: enforce. This check passes or fails on this policy; a passing check is not a review approval.`
 
-The check title, the summary and the PR comment do not change.
+In report mode the title is the Phase 0 one (`Would require …`) and the policy section adds a line saying what enforce mode would conclude, for example ``**In enforce mode this check would be:** `failure`, needs 1 more approval from `@acme/security`.`` In enforce mode the title is the conclusion itself (`Policy satisfied: required approvals present`, `Needs 1 more approval from @acme/security`, …) and the section footer reads `Graft mode: enforce. This check is required only if branch protection says so.`
+
+`pnpm graft mode show` adds `note: team constraints cannot be verified (no members:read); they will fail` when a repository enforces policy and its installation has not granted (or Graft has not read) `members: read`, and `pnpm graft pilot doctor` warns about it (`teams`).
 
 ## The mutation guard
 
-Every installation client refuses, before sending, any write that is not on an explicit allow-list ([`src/github/mutation-guard.ts`](../../src/github/mutation-guard.ts)). The Phase 0 writes (check runs and the managed comment) are always allowed. The routes later steps need (revert branches and PRs, labels) are declared there but belong to a feature, and a request is sent only by a client made for that feature **and** while the repository's effective mode permits it, read from the database at the time of the request. Everything else, GraphQL included, is refused in every mode. A refused write fails the job with `mutation_refused` and is logged at `error`.
+Every installation client refuses, before sending, any write that is not on an explicit allow-list ([`src/github/mutation-guard.ts`](../../src/github/mutation-guard.ts)). The Phase 0 writes (check runs and the managed comment) are always allowed, as long as a check run is `completed` and `neutral`. A check-run write with any other status or conclusion is a Phase 1 write: it is allowed only for `graft/policy`, only from the policy job's own client, and only while the repository's effective `policy_mode` is `enforce`. Intent and provenance can never block a merge, by construction. The routes later steps need (revert branches and PRs, labels) are declared there but belong to a feature, and a request is sent only by a client made for that feature **and** while the repository's effective mode permits it, read from the database at the time of the request. Everything else, GraphQL included, is refused in every mode. A refused write fails the job with `mutation_refused` and is logged at `error`.
+
+## Transfers and re-added repositories
+
+When a repository moves to another installation, or comes back after it was removed from the App, its three modes return to report/report/off. Each key that changed gets a `mode_changes` row with actor `system` and reason `installation changed` or `repository re-added`, which `mode history` shows like any other, and the worker republishes the check. An `enforce` set for one owner never follows the repository to another. A rename within the same installation keeps the modes.
 
 ## Report-only deployments
 

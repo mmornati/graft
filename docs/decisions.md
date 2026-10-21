@@ -330,3 +330,66 @@ Review: `docs/phase-1/reviews/step-1-review-2.md` (APPROVED, 2 minors, 2 nits).
 2. **Trailing slash in `GITHUB_API_URL` refused every write** -> `loadConfig` strips trailing slashes from `githubApiUrl` (U-CFG-1b).
 3. **Follow-up (nit): the ceiling send without `tx` can survive a mutation.** Harmless: it runs before the commit, so the fan-out is only enqueued early. Left as is.
 4. **Follow-up (nit): modes are kept on transferred or re-added repositories.** To decide in step 2.
+
+## Phase 1 step 2: approvals
+
+Spec: [phase-1/step-2-approvals.md](phase-1/step-2-approvals.md). Decisions D1 to D18 are in the spec; what follows is the library check (T1), what the spec left open, and where the build differs from it.
+
+**T1: library and API verification** (offline: Octokit against an injected `fetch`, GitHub's REST documentation from the docs as known at build time, `@octokit/webhooks-examples` 7.6.1).
+
+- **(a) Check-run bodies in `hook.before("request")`.** For `octokit.rest.checks.create`, `octokit.rest.checks.update` and `octokit.request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", …)` (template or literal URL), `status`, `conclusion` and `name` are **top-level keys of the hook's `options`**, next to `owner`, `repo` and the URL parameters; they are not nested. But a caller may pass `data`, and then Octokit sends `data` as the body and ignores the other parameters: `request("POST …/check-runs", { data: { conclusion: "success" } })` has no top-level `conclusion`, and `{ conclusion: "success", data: { conclusion: "neutral" } }` sends `neutral`. Reading `options.*` as the spec says would therefore both miss a non-neutral body and refuse a neutral one. **Deviation:** the guard reads `octokit.request.endpoint.parse(options).body`, which is exactly the body sent (a plain object for every JSON call, after `data` substitution and URL-parameter removal). A body that is not a plain object (a string, an array, a class instance) is refused `unknown_route`, never assumed neutral (U-MG-13, U-MG-17). A key whose value is `undefined` is absent (JSON drops it).
+- **(b) Teams API.** `GET /orgs/{org}/teams/{team_slug}` answers 200 with the team, **404** when the team does not exist or is not visible to the token, and **403** when the installation token lacks the organization `members` permission ("Resource not accessible by integration"). `GET /orgs/{org}/teams/{team_slug}/memberships/{username}` answers 200 with `{ url, role: "member" | "maintainer", state: "active" | "pending" }` (organization owners show as `maintainer`), **404** when the user is not a member, and it includes members of child teams (GitHub documents that a child team's members count as members of the parent). Graft counts only `state: "active"`. The fake (`test/helpers/fake-github-api.ts`, `state.teams`) implements exactly that: 404 for an unknown team or a non-member, 403 for a team marked unreadable, 200 with `state` otherwise. These shapes come from the documentation and could not be exercised against real GitHub offline (HUMAN-TODO step 2 checks them on a sandbox).
+- **(c) Event payloads.** `membership` (`added`, `removed`) carries `action`, `scope: "team"`, `member`, `team`, `organization`, `sender` and, for an App, `installation: { id, node_id }`; `team` (`created`, `deleted`, `edited`, `added_to_repository`, `removed_from_repository`) carries `action`, `team`, `organization`, `sender`, sometimes `repository`, and `installation`. The handlers' zod schema reads `installation.id` only (`test/fixtures/webhooks/membership.added.json` and `team.deleted.json` are built from the package's examples and validate against `@octokit/webhooks-schemas`, U-FIX-1).
+
+**Choices where the spec is silent**
+
+- **`ApproverFacts` and `Unverified` live in `src/policy/enforce.ts`** (re-exported by `src/modules/policy/approvals.ts`): the spec puts them in `approvals.ts`, but the pure `enforce.ts` needs them and may not import `modules`.
+- **`ConstraintStatus.approvedCount`** is added: `approvedBy` is cut to 10 for display (§6) while the stored `approved: n` and `met` need the full count.
+- **Change requesters and the bounds.** D17 bounds approver role checks at 20. Change requesters get their own bound of 20 role checks (the user cache is shared, so nobody is checked twice). A requester past the bound counts as blocking, and so does one whose role check answered **403** (Graft cannot tell); a **404** (not a collaborator) does not block, as D2 says "does not count". Both choices fail toward `failure`.
+- **A membership answer of 403** marks the team `team_unreadable` (fail closed); a 404 is "not a member" (§5).
+- **Teams cut by the 100-membership bound** become `check_limit` as a whole: their partial member list is not trusted.
+- **A team named in a constraint but absent from `ApproverFacts.teams`** (never looked up) is treated as `check_limit`; `resolveApprovers` always fills every named team, so this only matters for hand-built facts.
+- **`enforcedConclusion` with `approvers: null` on a valid policy** concludes `approvals_missing` (nothing could be verified); the job never passes null there.
+- **The card wait is computed with the job's clock.** `headFirstEvaluatedAt` is `MIN(policy_verdicts.created_at)` for (change, head), and `upsertVerdict` now sets `created_at` from the job's clock on insert (the database default was `now()`), so the window is measured on one clock (I-ENF-8 uses an injected clock). The `card_wait` job is sent after the lock, in every mode, with `startAfterSeconds` = seconds left (at least 1) and singleton `policy:cardwait:<changeId>:<headSha>`, so it is scheduled once per head even though every evaluation in the window asks.
+- **Rendering details.** The would-be line is its own paragraph right after the headline in all three section variants (valid, missing, invalid policy). Enforce mode replaces the headline with the enforce title (no ` · report only`) and drops the `· risk provisional` suffix. Several unmet constraints read `Needs approvals: 1 from @acme/security, 1 more from anyone` ("more" when some approvals already count toward that constraint). The approvals line keeps the Phase 0 list form (`` `alice` and `bob` ``) and appends `; N count(s) (write access).`; at most three change requesters are named. The "Approvals counted" block appears only when there is a constraint or a not-counted approver; logins and team names are code spans.
+- **`mode show` note** is printed indented inside the repository block. **`pilot doctor`** gains a 13th check, `teams` (OK or WARN), after `modes`; the Phase 0 and step 1 doctor tests now expect thirteen checks.
+- **Team fan-out.** `policy.team_fanout` lives in the policy module (`team-fanout.ts`) and is registered through `modules/policy/index.ts`, so `src/app/registry.ts` needs no new line (the registry lists modules, not jobs). Each re-evaluation it sends is keyed `policy:team:<repo>:<pr>:<5-minute window>`.
+- **`hasMembersRead`** (the `members` level is `read` or above, never-read permissions count as missing) is in `src/modes/index.ts`, shared by the approvals, `mode show` and the doctor.
+- **The neutral suite's `drain`** ignores jobs deferred into the future (`start_after > now()`): the card wait and the team fan-out's debounce would otherwise never let it settle. The suite runs the team fan-out job directly after posting `membership.added`, and transfers the repository away and back at the end, followed by one `modes.apply`.
+
+**Deviations from the spec**
+
+- **D4 (from the Phase 1 plan):** team membership is checked per approver through the memberships API, with no cache across jobs and nothing stored, instead of listing team members with a TTL cache (as the spec itself records).
+- **§8, the body rule** reads the parsed body, not `options.status`/`options.conclusion`/`options.name` (T1 (a) above).
+- **I-ENF-9 and the `published` hash term.** With the rendering frozen, a mode flip changes both `policyMode` (step 1 D8) and `published` in the facts hash, so removing only one of them is not observable through the job: each is sufficient. I-ENF-9 therefore also checks the hash function directly (`policyFactsHash`, exported from `job.ts`): two inputs that differ only in `published` must hash differently. The same redundancy means I-MODE-10 alone no longer catches "policyMode removed from the hash" (the enforced/published terms change too); I-MODE-10 still passes and still asserts the republication.
+- **Step 1 tests that pinned "enforce changes nothing"** were updated, since step 2 changes exactly that: I-MODE-10 (the enforce publication is `in_progress`, the rollback completed and neutral), I-MODE-11 (enforce title and footer), N-4 (the enforce mode line), I-MODE-1, I-DB and the pilot-ops rollback tests (one more migration), U-PA-4 (`countApprovals` has two more fields), the U-PR render fixtures and I-POL-9 (the new footer and approvals wording), U-MAN-1 (`members: read`, two events).
+- **The website and video snapshots** (`website/`) still show the Phase 0 wording; they are captured marketing material, not generated from the code.
+
+**Known limits (spec §2)**
+
+- Approvals are counted like GitHub counts them: the PR author is excluded, the last pusher and commit co-authors are not.
+- A collaborator permission change (`member` event) does not re-evaluate anything; it is picked up at the next trigger.
+- Changing the footer and the approvals line changes the rendered text, and so the facts hash, of every open PR: each is republished once, at its next evaluation, not proactively.
+- Merge queues (`merge_group`) are not handled; a repository that uses one must stay in report mode.
+
+**Mutation checks (§15), run by the developer.** Each mutation was applied alone, the named tests run, then the file restored from git. All thirteen were caught:
+
+| Mutation (as applied) | Failing tests |
+| --- | --- |
+| Stale approvals counted (`commit_id === headSha \|\| true` in `countApprovals`) | U-ENF-1, I-ENF-3 |
+| Triage counts as write (`atLeast("triage", "write")` true) | U-COL-4, I-ENF-4 |
+| Unverified team treated as satisfied (every counted approver added as a member) | U-ENF-8, I-ENF-5, I-ENF-6 |
+| Change requests ignored | U-ENF-6, I-ENF-7 |
+| `no_policy` concludes `success` | U-ENF-2, I-ENF-13 |
+| Truncated reviews ignored | U-ENF-5, I-ENF-14 |
+| Guard ignores the body (check-run bodies never read) | U-MG-13, N-7 (both profiles) |
+| Guard lets a non-`graft/policy` check be non-neutral (name check removed) | U-MG-15, N-7 [max] |
+| Conclusion published from `enforced` in report mode (`publishedCheck` ignores the mode) | N-2 [default], N-6 [default], I-ENF-2 |
+| `published` removed from `factsHash` | I-ENF-9 (the direct hash check; see the deviation above) |
+| `MutationRefusedError` rethrown on `mode_report` | I-ENF-10 |
+| Modes kept on transfer (`resetModesOnTransfer` not called) | I-MODE-14 |
+| Team fan-out ignores `teamCount` (`>= 0`) | I-ENF-11 |
+
+N-4 note (step 1 review finding 6): the mode line is still part of the rendered details, and a mode flip now also changes the `enforced`/`published` hash terms, so removing `policyMode` alone from the hash is still not observable through N-4 or I-MODE-10 (each remaining term is sufficient to republish).
+
+**Not run:** the manual smoke test of §15 (it needs a running server, worker and a real or tunnelled GitHub App); it is listed in [HUMAN-TODO](phase-1/HUMAN-TODO.md#step-2-approvals). `pnpm db:up` could not start a compose project from this worktree because port 55432 is already bound by the shared `scionhub-postgres-1` container, which every command reused; the migrate, rollback and migrate sequence ran against a separate database (`graft_s2_dod`) in that container, and the tests against `TEST_DATABASE_URL=…/graft_test_s2`, so other checkouts were not disturbed.

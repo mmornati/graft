@@ -578,8 +578,10 @@ export async function collectEvidence(ctx: RunCtx, input: CollectInput): Promise
       };
     }
   }
+  // The raw route, not the `rest` method: this probes the API's answer (assumption A08), and
+  // Graft's own role decisions go through `src/github/collaborator.ts` only (Phase 1 step 2, D16).
   const perm = await safe(() =>
-    probe.rest.repos.getCollaboratorPermissionLevel({
+    probe.request("GET /repos/{owner}/{repo}/collaborators/{username}/permission", {
       owner: ctx.owner,
       repo: ctx.repo,
       username: ctx.actor.login,

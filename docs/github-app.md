@@ -9,7 +9,7 @@ The [quickstart](getting-started.md#quickstart-offline) runs with a throwaway ke
 Two manifests live in `github/`:
 
 - `app-manifest.json`: the full permission set. Register this one for a deployment that may enforce.
-- `app-manifest.report.json`: the permission set for a deployment that only ever evaluates Graft (name and description say "report only"). In this version both carry the Phase 0 permissions; from step 2 on, later steps add read permissions to both and `contents: write` to the full manifest only. `test/unit/manifest.test.ts` (U-MAN-2) pins that the report manifest never has a write permission other than `checks` and `pull_requests`, so an evaluating deployment cannot be enforced on by construction.
+- `app-manifest.report.json`: the permission set for a deployment that only ever evaluates Graft (name and description say "report only"). Phase 1 step 2 adds `members: read` and the `membership` and `team` events to both; later steps add more read permissions to both and `contents: write` to the full manifest only. `test/unit/manifest.test.ts` (U-MAN-2) pins that the report manifest never has a write permission other than `checks` and `pull_requests`, so an evaluating deployment cannot be enforced on by construction.
 
 Registering the report manifest is the safest default. See [Modes](features/modes.md).
 
@@ -45,13 +45,16 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 | `push` event | — | A push to a branch that changes `graft.yaml` (or a forced or 20-commit push) re-evaluates the open PRs of that branch, at most 100 (step 5). No new permission: covered by `contents: read`. |
 | `check_run` event | — | `rerequested` re-runs our checks; `requested_action` delivers the card buttons (step 3). |
 | `installation`, `installation_repositories` | — | Delivered to every App without a subscription; drive the installations module. |
+| `members` (organization) | read | Phase 1 step 2: verify that an approver is an active member of a team named in `graft.yaml` (`GET /orgs/{org}/teams/{team_slug}` and `…/memberships/{username}`). Read only; nothing about teams is stored. Without it every team constraint is unverified and never met. |
+| `membership`, `team` events | — | Phase 1 step 2: `membership` (added, removed) and `team` (deleted, edited, added or removed from a repository) re-evaluate the installation's open PRs that have a team constraint, at most once per five minutes. The payload is a trigger: only the installation id is read. |
 
 **Deferred** (not requested in Phase 0):
 
-- `members: read` (team approvals, Phase 1).
 - `contents: write` (revert branches and PRs, Phase 1).
 - `statuses: read` and `actions: read`, plus the `status`, `workflow_run` and `check_suite` events (post-merge guard, Phase 1).
 - `administration`: never.
+
+**Phase 1 step 2: accepting the new permission on existing installations.** GitHub does not grant a new permission by itself: after the App's permissions are updated, an organization owner must accept `members: read` and the two events on each installation (GitHub shows a banner on the installation's settings page, and the App receives `installation.new_permissions_accepted`). Graft re-reads the permissions on that event, once a day and on `pnpm graft mode refresh-permissions --installation <id>`; `pnpm graft mode show` prints the permissions line and, for a repository that enforces policy without `members: read`, a note that team constraints will fail. Until then the installation keeps working: it fails closed on team constraints only.
 
 Comment reactions have no webhook; step 3 polls them every 15 minutes using `pull_requests: read`.
 

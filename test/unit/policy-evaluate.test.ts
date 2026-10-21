@@ -588,11 +588,17 @@ describe("approval counting", () => {
       review(3, "old", "APPROVED", { commit: OLD }),
       review(4, "none", "APPROVED", { commit: null }),
     ];
+    // Phase 1 step 2 adds `currentApprovers` and `changesRequested` (U-PA-6, U-PA-7).
     expect(count(reviews)).toEqual({
       current: 2,
       stale: 2,
       users: ["amy", "zed"],
       truncated: false,
+      currentApprovers: [
+        { id: 2, login: "amy" },
+        { id: 1, login: "zed" },
+      ],
+      changesRequested: [],
     });
     const many = Array.from({ length: 12 }, (_, i) =>
       review(100 + i, `u${String(i).padStart(2, "0")}`, "APPROVED"),
@@ -606,6 +612,50 @@ describe("approval counting", () => {
   it("U-PA-5 truncated is passed through", () => {
     expect(count([], { truncated: true }).truncated).toBe(true);
     expect(count([], { truncated: false }).truncated).toBe(false);
+  });
+
+  it("U-PA-6 currentApprovers lists every current approver in login order; users is still capped at 10", () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      review(200 + i, `U${String(11 - i).padStart(2, "0")}`, "APPROVED"),
+    );
+    many.push(review(300, "stale-one", "APPROVED", { commit: OLD }));
+    const c = count(many);
+    expect(c.users).toHaveLength(10);
+    expect(c.currentApprovers).toHaveLength(12);
+    expect(c.currentApprovers.map((u) => u.login)).toEqual(
+      Array.from({ length: 12 }, (_, i) => `U${String(i).padStart(2, "0")}`),
+    );
+    expect(c.currentApprovers[0]).toEqual({ id: 211, login: "U00" });
+    expect(c.users).toEqual(c.currentApprovers.slice(0, 10).map((u) => u.login));
+    // A stale approval is never a current approver.
+    expect(c.currentApprovers.map((u) => u.login)).not.toContain("stale-one");
+  });
+
+  it("U-PA-7 changesRequested: the latest review wins, APPROVED or DISMISSED clears it, author and bots are ignored, any commit counts", () => {
+    const reviews = [
+      // Latest is CHANGES_REQUESTED, on an older commit: still outstanding.
+      review(1, "carol", "APPROVED", { at: "2026-10-14T10:00:00Z" }),
+      review(1, "carol", "CHANGES_REQUESTED", { at: "2026-10-14T10:05:00Z", commit: OLD }),
+      // Cleared by a later approval.
+      review(2, "dave", "CHANGES_REQUESTED", { at: "2026-10-14T10:00:00Z" }),
+      review(2, "dave", "APPROVED", { at: "2026-10-14T10:05:00Z" }),
+      // Cleared by a dismissal.
+      review(3, "erin", "CHANGES_REQUESTED", { at: "2026-10-14T10:00:00Z" }),
+      review(3, "erin", "DISMISSED", { at: "2026-10-14T10:05:00Z" }),
+      // A comment does not clear it.
+      review(4, "Bob", "CHANGES_REQUESTED", { at: "2026-10-14T10:00:00Z" }),
+      review(4, "Bob", "COMMENTED", { at: "2026-10-14T10:09:00Z" }),
+      // The author and bots are ignored.
+      review(5, "author", "CHANGES_REQUESTED"),
+      review(6, "ci[bot]", "CHANGES_REQUESTED", { type: "Bot" }),
+      review(7, "ghost", "CHANGES_REQUESTED", { nullUser: true }),
+    ];
+    const c = count(reviews);
+    expect(c.changesRequested).toEqual([
+      { id: 4, login: "Bob" },
+      { id: 1, login: "carol" },
+    ]);
+    expect(c.currentApprovers).toEqual([{ id: 2, login: "dave" }]);
   });
 });
 

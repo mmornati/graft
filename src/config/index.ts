@@ -168,6 +168,7 @@ const EnvSchema = z.object({
   GRAFT_MODE_CEILING: withDefault(z.enum(["report", "enforce"]), "report"),
   GRAFT_MODE_APPLY_CRON: withDefault(cronOrOff, "* * * * *"),
   GRAFT_PERMISSIONS_REFRESH_CRON: withDefault(cronOrOff, "30 3 * * *"),
+  GRAFT_POLICY_CARD_WAIT_SECONDS: withDefault(intString(0, 3600), "600"),
 });
 
 export interface Config {
@@ -230,6 +231,8 @@ export interface Config {
   readonly modeApplyCron: string | null;
   /** Cron for the daily installation permissions refresh, or null when switched off. */
   readonly permissionsRefreshCron: string | null;
+  /** Phase 1 step 2 (D9): how long enforce mode waits for the intent card; 0 = never. */
+  readonly policyCardWaitSeconds: number;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -339,5 +342,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     modeCeiling: d.GRAFT_MODE_CEILING,
     modeApplyCron: d.GRAFT_MODE_APPLY_CRON,
     permissionsRefreshCron: d.GRAFT_PERMISSIONS_REFRESH_CRON,
+    policyCardWaitSeconds: d.GRAFT_POLICY_CARD_WAIT_SECONDS,
   });
 }
