@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mmornati/graft/main/schema/graft.v1.schema.json
+#
+# Graft's policy for its own repository. Graft reads this file from `main` only; a pull request
+# that changes it is always flagged and needs a human. While the deployment runs in report mode,
+# nothing here approves or blocks anything: the `graft/policy` check shows what it would do.
+#
+# mmornati/graft belongs to a user account, so team constraints could never be verified here
+# (Phase 1 step 2: `owner_not_org`). The rules count humans only.
+version: 1
+
+# Changes here raise the intent card's risk floor to `sensitive`: the code that decides what Graft
+# may write to GitHub, verifies webhooks, sets modes, evaluates policy, or holds secrets at deploy.
+sensitive_paths:
+  - "src/github/**"
+  - "src/webhooks/**"
+  - "src/modes/**"
+  - "src/modules/modes/**"
+  - "src/policy/**"
+  - "src/db/migrations/**"
+  - "github/**"
+  - ".github/workflows/**"
+  - "Dockerfile"
+  - "compose.coolify.yaml"
+  - "deploy/**"
+  - "SECURITY.md"
+
+# Used when no rule matches.
+default:
+  require: { humans: 1 }
+
+rules:
+  # Secrets and keys never come from an agent.
+  - name: no-agent-secrets
+    match: { author: agent, paths: [".env*", "**/*.pem", "**/*.key"] }
+    block: true
+
+  # Documentation-only changes that the card rates trivial need no human.
+  - name: docs-only
+    match: { risk: trivial, only_paths: ["docs/**", "*.md", "website/**"] }
+    approve: auto
+
+  # Any other change the card rates trivial needs no human either.
+  - name: trivial
+    match: { risk: trivial }
+    approve: auto
+
+  # The safety core and the deployment: always one human.
+  - name: safety-core
+    match: { paths: ["src/github/**", "src/webhooks/**", "src/modes/**", "src/modules/modes/**", "src/policy/**", "github/**", ".github/workflows/**", "Dockerfile", "compose.coolify.yaml", "deploy/**"] }
+    require: { humans: 1 }
+
+  # Large agent-written changes: one human (the repository has one maintainer).
+  - name: agent-large
+    match: { author: agent, size: { min_lines: 1000 } }
+    require: { humans: 1 }
