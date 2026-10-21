@@ -11,6 +11,7 @@ import {
 } from "../../src/policy/enforce.js";
 import {
   type Constraint,
+  countApprovals,
   evaluatePolicy,
   type PolicyFacts,
   type PolicyVerdict,
@@ -198,8 +199,21 @@ describe("enforce conclusion (Phase 1 step 2, §7)", () => {
       const v = evaluatePolicy(policy, f);
       expect(enforce(v, NONE), `${id} without approvals`).toEqual(without);
       expect(enforce(v, SATISFYING), `${id} with approvals`).toEqual(withApprovals);
-      // Stale approvals never reach `counted`: only current ones are listed there.
-      const stale = { ...NONE, notCounted: [] };
+      // The same approvers on an older commit: stale, so never current approvers, never counted.
+      const count = countApprovals(
+        ["alice", "bob"].map((login, i) => ({
+          user: { id: i + 1, login, type: "User" },
+          state: "APPROVED",
+          commit_id: "b".repeat(40),
+          submitted_at: "2026-10-14T10:00:00Z",
+        })),
+        { headSha: "a".repeat(40), prAuthorLogin: "author", truncated: false },
+      );
+      expect(count.stale).toBe(2);
+      const stale: ApproverFacts = {
+        ...SATISFYING,
+        counted: count.currentApprovers,
+      };
       expect(enforce(v, stale), `${id} with stale approvals only`).toEqual(without);
     }
   });
