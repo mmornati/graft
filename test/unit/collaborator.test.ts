@@ -54,10 +54,12 @@ describe("collaborator role (Phase 1 step 2, D16)", () => {
     expect(limited).not.toBeInstanceOf(PermanentJobError);
   });
 
-  it("U-COL-3 a response for another user id (a recycled login) is none", async () => {
+  it("U-COL-3 a response for another user id (a recycled login), or with no user, is none", async () => {
     const { api, ask } = await setup();
     api.state.permissions.set("recycled", { id: 99999, role: "admin" });
     expect(await ask("recycled", 50)).toEqual({ role: "none", denied: null });
+    api.state.permissions.set("anonymous", { id: 51, role: "admin", noUser: true });
+    expect(await ask("anonymous", 51)).toEqual({ role: "none", denied: null });
   });
 
   it("U-COL-4 atLeast orders the roles; triage is not write, maintain is", () => {

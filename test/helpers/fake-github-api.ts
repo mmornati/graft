@@ -103,7 +103,11 @@ export function createFakeGitHubApi(
      * `repos.getCollaboratorPermissionLevel` by lowercased login. A login with no entry is a 404,
      * like a user who is not a collaborator.
      */
-    permissions: new Map<string, { id: number; role: string; permission?: string }>(),
+    /** `noUser` answers without the `user` field (a malformed response). */
+    permissions: new Map<
+      string,
+      { id: number; role: string; permission?: string; noUser?: boolean }
+    >(),
     /**
      * Organisation teams of the fake owner, by slug (Phase 1 step 2, T1 (b)). A slug with no
      * entry is a 404 on `GET /orgs/{org}/teams/{slug}`; `status: 403` answers 403 there (no
@@ -319,7 +323,7 @@ export function createFakeGitHubApi(
       return json(200, {
         permission: legacy,
         role_name: p.role,
-        user: { id: p.id, login, type: "User" },
+        ...(p.noUser ? {} : { user: { id: p.id, login, type: "User" } }),
       });
     }
     m = is("GET", /^\/issues\/(\d+)\/timeline$/);
