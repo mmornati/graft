@@ -50,6 +50,7 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_MODE_CEILING` | `report` | `report` or `enforce`. The most any repository can be set to; `report` makes every repository report/off whatever `graft mode set` recorded. Read by the worker at start; see [Modes](features/modes.md). Leave it at `report` until the Phase 1 rollout runbook says otherwise. |
 | `GRAFT_MODE_APPLY_CRON` | `* * * * *` | Cron for the worker job that republishes the policy check of a repository after `graft mode set`, or `off`. |
 | `GRAFT_PERMISSIONS_REFRESH_CRON` | `30 3 * * *` | Cron for the daily refresh of each installation's permissions from the GitHub API, or `off`. |
+| `GRAFT_POLICY_CARD_WAIT_SECONDS` | `600` | Integer 0 to 3600. In enforce mode, how long `graft/policy` stays `in_progress` after a head is first evaluated while its intent card is still being written; after that it concludes on the conservative pending-card rules. `0` never waits. Report mode never waits (it still schedules the re-evaluation). See [Policy](features/policy.md#enforce-mode). |
 
 ## Deploying with federation
 
