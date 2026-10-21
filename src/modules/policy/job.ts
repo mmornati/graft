@@ -260,6 +260,13 @@ export async function evaluatePolicyJobRun(
         verdict: view.verdict,
         accountType: installation.account_type,
         permissions: installation.permissions_read_at === null ? null : installation.permissions,
+        associations: new Map(
+          reviews.flatMap((r) =>
+            r.user && r.author_association !== undefined
+              ? [[r.user.id, r.author_association] as const]
+              : [],
+          ),
+        ),
       });
     } else if (loaded.status === "missing") {
       const listed = await listChangedPaths(octokit, {
