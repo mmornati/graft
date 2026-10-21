@@ -371,3 +371,25 @@ Spec: [phase-1/step-2-approvals.md](phase-1/step-2-approvals.md). Decisions D1 t
 - A collaborator permission change (`member` event) does not re-evaluate anything; it is picked up at the next trigger.
 - Changing the footer and the approvals line changes the rendered text, and so the facts hash, of every open PR: each is republished once, at its next evaluation, not proactively.
 - Merge queues (`merge_group`) are not handled; a repository that uses one must stay in report mode.
+
+**Mutation checks (§15), run by the developer.** Each mutation was applied alone, the named tests run, then the file restored from git. All thirteen were caught:
+
+| Mutation (as applied) | Failing tests |
+| --- | --- |
+| Stale approvals counted (`commit_id === headSha \|\| true` in `countApprovals`) | U-ENF-1, I-ENF-3 |
+| Triage counts as write (`atLeast("triage", "write")` true) | U-COL-4, I-ENF-4 |
+| Unverified team treated as satisfied (every counted approver added as a member) | U-ENF-8, I-ENF-5, I-ENF-6 |
+| Change requests ignored | U-ENF-6, I-ENF-7 |
+| `no_policy` concludes `success` | U-ENF-2, I-ENF-13 |
+| Truncated reviews ignored | U-ENF-5, I-ENF-14 |
+| Guard ignores the body (check-run bodies never read) | U-MG-13, N-7 (both profiles) |
+| Guard lets a non-`graft/policy` check be non-neutral (name check removed) | U-MG-15, N-7 [max] |
+| Conclusion published from `enforced` in report mode (`publishedCheck` ignores the mode) | N-2 [default], N-6 [default], I-ENF-2 |
+| `published` removed from `factsHash` | I-ENF-9 (the direct hash check; see the deviation above) |
+| `MutationRefusedError` rethrown on `mode_report` | I-ENF-10 |
+| Modes kept on transfer (`resetModesOnTransfer` not called) | I-MODE-14 |
+| Team fan-out ignores `teamCount` (`>= 0`) | I-ENF-11 |
+
+N-4 note (step 1 review finding 6): the mode line is still part of the rendered details, and a mode flip now also changes the `enforced`/`published` hash terms, so removing `policyMode` alone from the hash is still not observable through N-4 or I-MODE-10 (each remaining term is sufficient to republish).
+
+**Not run:** the manual smoke test of §15 (it needs a running server, worker and a real or tunnelled GitHub App); it is listed in [HUMAN-TODO](phase-1/HUMAN-TODO.md#step-2-approvals). `pnpm db:up` could not start a compose project from this worktree because port 55432 is already bound by the shared `scionhub-postgres-1` container, which every command reused; the migrate, rollback and migrate sequence ran against a separate database (`graft_s2_dod`) in that container, and the tests against `TEST_DATABASE_URL=…/graft_test_s2`, so other checkouts were not disturbed.
