@@ -503,7 +503,7 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(lastCheck()).toMatchObject({ status: "completed", conclusion: "neutral" });
   });
 
-  it("I-ENF-11 membership.added → one team fan-out per installation per 5 minutes; only team-constrained open PRs are re-evaluated", async () => {
+  it("I-ENF-11 membership.added → one team fan-out per installation per 5 minutes, after the window closes; only team-constrained open PRs are re-evaluated", async () => {
     // PR 2: team constraint. PR 3: no team constraint. PR 4: team constraint, closed.
     await run();
     putContent(api, "b".repeat(40), "version: 1\n");
@@ -530,15 +530,18 @@ describe("approvals Graft can enforce (integration)", () => {
     await scheduleTeamFanout.handle(event("team.deleted", "d-t1"), ctx);
     const fanouts = await jobsNamed(t.db, "policy.team_fanout");
     expect(fanouts).toHaveLength(1);
-    expect(fanouts[0]?.data).toEqual({ installationId: INSTALLATION_ID });
     const window = Math.floor(FIXED_NOW.getTime() / 300_000);
+    expect(fanouts[0]?.data).toEqual({ installationId: INSTALLATION_ID, window });
     expect(fanouts[0]?.singleton_key).toBe(`policy:team:${INSTALLATION_ID}:${window}`);
+    // Trailing edge: it starts after the window closes, plus a margin.
     const delay =
       (fanouts[0]?.start_after.getTime() ?? 0) - (fanouts[0]?.created_on.getTime() ?? 0);
-    expect(delay).toBeGreaterThan(55_000);
+    const windowEnd = (window + 1) * 300_000;
+    expect(delay).toBeGreaterThanOrEqual(windowEnd - FIXED_NOW.getTime() + 55_000);
+    expect(delay).toBeLessThan(windowEnd - FIXED_NOW.getTime() + 65_000);
 
     const before = (await jobsNamed(t.db, "policy.evaluate")).length;
-    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID }, ctx)).toBe(1);
+    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID, window }, ctx)).toBe(1);
     const sent = (await jobsNamed(t.db, "policy.evaluate")).slice(before);
     expect(sent.map((j) => j.data)).toEqual([
       {
@@ -550,11 +553,53 @@ describe("approvals Graft can enforce (integration)", () => {
         trigger: "team",
       },
     ]);
+    expect(sent[0]?.singleton_key).toBe(`policy:team:${REPO_ID}:${PR_NUMBER}:${window}`);
     // An inactive installation fans out nothing.
     await t.db.updateTable("installations").set({ suspended_at: FIXED_NOW }).execute();
-    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID }, ctx)).toBe(0);
+    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID, window }, ctx)).toBe(0);
     await scheduleTeamFanout.handle(event("membership.added", "d-m3"), ctx);
     expect(await jobsNamed(t.db, "policy.team_fanout")).toHaveLength(1);
+  });
+
+  it("I-ENF-11b membership.removed after a fan-out already ran: a later fan-out re-evaluates the PR (trailing-edge debounce)", async () => {
+    await setMode("enforce");
+    approve(ALICE);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("success");
+    const T0 = FIXED_NOW.getTime();
+    const at = (ms: number) => ({ ...jobContext(t), clock: { now: () => new Date(ms) } });
+
+    // 1. membership.added: one fan-out, which runs at its start time.
+    await scheduleTeamFanout.handle(event("membership.added", "d-r1"), at(T0));
+    const [first] = await jobsNamed(t.db, "policy.team_fanout");
+    if (!first) throw new Error("no fan-out");
+    const ranAt = T0 + (first.start_after.getTime() - first.created_on.getTime());
+    const before = (await jobsNamed(t.db, "policy.evaluate")).length;
+    expect(await fanoutTeamChange(first.data as never, at(ranAt))).toBe(1);
+    await sql`update pgboss.job set state = 'completed', completed_on = now()
+              where id = ${first.id}::uuid`.execute(t.db);
+
+    // 2. alice leaves the team, one second after the fan-out ran.
+    api.state.teams.get("security")?.members.delete("alice");
+    const removedAt = ranAt + 1000;
+    const removed = event("membership.added", "d-r2") as { payload: { action: string } };
+    removed.payload.action = "removed";
+    await scheduleTeamFanout.handle(removed as never, at(removedAt));
+    const later = (await jobsNamed(t.db, "policy.team_fanout")).filter((j) => j.id !== first.id);
+    // A new fan-out exists, and it starts after the removal.
+    expect(later).toHaveLength(1);
+    const second = later[0];
+    if (!second) throw new Error("no second fan-out");
+    const secondRunsAt = removedAt + (second.start_after.getTime() - second.created_on.getTime());
+    expect(secondRunsAt).toBeGreaterThan(removedAt);
+    // Its per-PR re-evaluation is not swallowed by the first fan-out's.
+    expect(await fanoutTeamChange(second.data as never, at(secondRunsAt))).toBe(1);
+    const sent = (await jobsNamed(t.db, "policy.evaluate")).slice(before);
+    expect(sent).toHaveLength(2);
+    expect(new Set(sent.map((j) => j.singleton_key)).size).toBe(2);
+    // The re-evaluation reads the new membership: the approval no longer qualifies.
+    expect(await run({ data: { trigger: "team" }, nowMs: secondRunsAt })).toBe("published");
+    expect(lastCheck()?.conclusion).toBe("failure");
   });
 
   it("I-ENF-12 bounds: 25 approvers → 20 permission checks and 5 check_limit; at most 100 membership requests", async () => {
