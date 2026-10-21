@@ -189,14 +189,20 @@ export function checkRunWrite(
 }
 
 /**
- * The body rule of D11: what a check-run body asks for. `neutral` (completed + neutral, or no
- * status or conclusion at all) stays a Phase 0 write; anything else is `enforce`, a Phase 1
- * write. A body that is not a plain JSON object cannot be read reliably: `unreadable`.
+ * The body rule of D11: what a check-run body asks for. A `POST` (create) is `neutral`, a Phase 0
+ * write, only when it says `completed` + `neutral`: GitHub creates a run without a `status` as
+ * `queued`, which is pending and can block a merge (step 2 review 1, finding 2). A `PATCH`
+ * (update) is `neutral` when what it sets is `completed`/`neutral` or absent, since an absent key
+ * leaves the stored value alone. Anything else is `enforce`, a Phase 1 write. A body that is not a
+ * plain JSON object cannot be read reliably: `unreadable`.
  */
 export function checkRunBodyKind(
   body: unknown,
+  method: "POST" | "PATCH",
 ): { kind: "neutral" } | { kind: "enforce"; name: unknown } | { kind: "unreadable" } {
-  if (body === undefined || body === null) return { kind: "neutral" };
+  if (body === undefined || body === null) {
+    return method === "POST" ? { kind: "enforce", name: undefined } : { kind: "neutral" };
+  }
   if (typeof body !== "object" || Array.isArray(body)) return { kind: "unreadable" };
   const proto = Object.getPrototypeOf(body);
   if (proto !== Object.prototype && proto !== null) return { kind: "unreadable" };
@@ -205,13 +211,12 @@ export function checkRunBodyKind(
   const own = (k: string): unknown => (Object.hasOwn(b, k) ? b[k] : undefined);
   const status = own("status");
   const conclusion = own("conclusion");
-  if (
-    (status !== undefined && status !== "completed") ||
-    (conclusion !== undefined && conclusion !== "neutral")
-  ) {
-    return { kind: "enforce", name: own("name") };
-  }
-  return { kind: "neutral" };
+  const neutral =
+    method === "POST"
+      ? status === "completed" && conclusion === "neutral"
+      : (status === undefined || status === "completed") &&
+        (conclusion === undefined || conclusion === "neutral");
+  return neutral ? { kind: "neutral" } : { kind: "enforce", name: own("name") };
 }
 
 /** Path words that are part of a route; every other segment (names, branches) is templated. */
@@ -318,10 +323,14 @@ export function installMutationGuard(
         // one Octokit sends (`data` replaces the other parameters), never the caller's options.
         const target = checkRunWrite(method, parsed.url.slice(base.length));
         if (target === null) return;
-        const body = checkRunBodyKind(parsed.body);
+        const body = checkRunBodyKind(parsed.body, method === "POST" ? "POST" : "PATCH");
         if (body.kind === "neutral") return;
         const tag = " (non-neutral check run)";
         if (body.kind === "unreadable") throw refusal("unknown_route", tag);
+        // A PATCH may carry a new `name`, so this checks the name the body asks for, not the
+        // stored name of the run it targets (review 1, nit 8). Only the policy job holds a
+        // `policy` client, and it PATCHes only a run id it found as `graft/policy` (its stored id
+        // or `listForRef` with `check_name`), so a rename of another run cannot happen in practice.
         if (body.name !== ENFORCEABLE_CHECK) throw refusal("feature_not_allowed", tag);
         if (o.feature === undefined) throw refusal("no_feature", tag);
         if (o.feature !== "policy") throw refusal("feature_not_allowed", tag);

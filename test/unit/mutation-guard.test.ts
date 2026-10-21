@@ -162,7 +162,14 @@ describe("mutation guard: the hook", () => {
     // A phase 0 write passes the guard: the request goes on to the token call (the fake serves
     // no /api/v3 paths, so it ends there with a 404, which is not a refusal).
     const sent = await client.rest.checks
-      .create({ owner: OWNER, repo: REPO, name: "x", head_sha: SHA })
+      .create({
+        owner: OWNER,
+        repo: REPO,
+        name: "x",
+        head_sha: SHA,
+        status: "completed",
+        conclusion: "neutral",
+      })
       .catch((e: unknown) => e);
     expect(sent).not.toBeInstanceOf(MutationRefusedError);
     expect(api.requests.map((r) => r.path)).toContain("/api/v3/app/installations/1/access_tokens");
@@ -321,7 +328,14 @@ describe("mutation guard: the hook", () => {
       throw new Error("the gate must not be asked");
     });
     const client = await factory.forInstallation(1);
-    await client.rest.checks.create({ owner: OWNER, repo: REPO, name: "x", head_sha: SHA });
+    await client.rest.checks.create({
+      owner: OWNER,
+      repo: REPO,
+      name: "x",
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "neutral",
+    });
     await client.rest.issues.createComment({
       owner: OWNER,
       repo: REPO,
@@ -343,6 +357,14 @@ describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
     { conclusion: "failure" },
     { status: "in_progress" },
     { status: "queued" },
+  ];
+  // GitHub creates a run without a status as `queued`: on a POST these are not neutral, while a
+  // PATCH with the same body leaves the stored status and conclusion alone (review 1, finding 2).
+  const POST_ONLY_NON_NEUTRAL: Record<string, unknown>[] = [
+    {},
+    { status: "completed" },
+    { conclusion: "neutral" },
+    { output: { title: "t", summary: "s" } },
   ];
   const create = (c: Client, body: Record<string, unknown>) =>
     c.request("POST /repos/{owner}/{repo}/check-runs", {
@@ -386,7 +408,10 @@ describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
       name: "graft/provenance",
       output: { title: "t", summary: "s" },
     }).catch(() => undefined);
-    expect(checkWrites(api)).toHaveLength(3);
+    for (const body of POST_ONLY_NON_NEUTRAL) {
+      await patchRaw(client, { name: "graft/policy", ...body }).catch(() => undefined);
+    }
+    expect(checkWrites(api)).toHaveLength(3 + POST_ONLY_NON_NEUTRAL.length);
   });
 
   it("U-MG-13 a non-neutral body through the default client is refused no_feature, for every form of the call", async () => {
@@ -408,6 +433,24 @@ describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
         } as never),
       );
       expect(viaData.refusal).toBe("no_feature");
+    }
+    // A create that does not say completed + neutral would be queued: refused, in every form.
+    for (const body of POST_ONLY_NON_NEUTRAL) {
+      const named = { name: "graft/policy", ...body };
+      for (const call of [create, createRest]) {
+        const e = await refusal(call(client, named));
+        expect(e.refusal, `POST ${JSON.stringify(named)}`).toBe("no_feature");
+      }
+      const viaData = await refusal(
+        client.request("POST /repos/{owner}/{repo}/check-runs", {
+          owner: OWNER,
+          repo: REPO,
+          status: "completed",
+          conclusion: "neutral",
+          data: { ...named, head_sha: SHA },
+        } as never),
+      );
+      expect(viaData.refusal, `POST data ${JSON.stringify(named)}`).toBe("no_feature");
     }
     expect(checkWrites(api)).toEqual([]);
   });
