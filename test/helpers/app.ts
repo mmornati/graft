@@ -23,11 +23,17 @@ import { sign } from "./sign.js";
 import { silentLog } from "./stubs.js";
 
 /** A GitHub factory that fails the test if anything in step 1 calls the GitHub API. */
-export function forbiddenGitHub(): GitHubClientFactory & { calls: number } {
+/** `calls` counts both kinds; `installationCalls` only installation-token clients. */
+export function forbiddenGitHub(): GitHubClientFactory & {
+  calls: number;
+  installationCalls: number;
+} {
   const f = {
     calls: 0,
+    installationCalls: 0,
     forInstallation: async () => {
       f.calls++;
+      f.installationCalls++;
       throw new Error("GitHub API must not be called");
     },
     asApp: () => {
@@ -35,7 +41,7 @@ export function forbiddenGitHub(): GitHubClientFactory & { calls: number } {
       throw new Error("GitHub API must not be called");
     },
   };
-  return f as unknown as GitHubClientFactory & { calls: number };
+  return f as unknown as GitHubClientFactory & { calls: number; installationCalls: number };
 }
 
 export interface TestApp {

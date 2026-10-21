@@ -57,7 +57,10 @@ function prOf(scenario: string): number {
 
 const failures = (r: Report) =>
   r.scenarios.flatMap((s) => [
-    ...s.assertions.filter((a) => !a.ok && a.kind !== "soft").map((a) => `${s.id}:${a.id}`),
+    // The observed value says why (s10.stable: which fingerprint keys changed, and how).
+    ...s.assertions
+      .filter((a) => !a.ok && a.kind !== "soft")
+      .map((a) => `${s.id}:${a.id} observed ${JSON.stringify(a.observed)}`),
     ...s.invariants.filter((i) => i.status === "fail").map((i) => `${s.id}:${i.id}`),
     ...(s.error ? [`${s.id}:error ${s.error.message}`] : []),
   ]);
