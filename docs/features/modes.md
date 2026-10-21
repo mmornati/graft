@@ -61,6 +61,8 @@ pnpm graft mode set --repo acme/payments --policy report --reason "rollback"
 
 The CLI only writes the request. The worker's `modes.apply` job (every minute by default, `GRAFT_MODE_APPLY_CRON`) picks it up and re-evaluates every open PR of the repository, so each `graft/policy` check is republished within about a minute plus the stagger of the fan-out (5 seconds per ten PRs, at most 100 PRs), without a webhook. Changing `GRAFT_MODE_CEILING` and restarting the worker does the same for every repository.
 
+**Lowering the ceiling needs a full stop, not a rolling restart.** Each worker trusts its own environment's ceiling. During a rolling deploy that lowers `GRAFT_MODE_CEILING` to `report`, an old worker still running with `enforce` can publish a `success` or `failure` after the new worker has republished `neutral`, and that conclusion stays until the PR's next trigger. Stop every worker, then start the new ones.
+
 ## "Requested but not effective"
 
 `show` prints a reason after the effective value when it differs from the request:
