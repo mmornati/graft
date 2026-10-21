@@ -1,0 +1,86 @@
+{
+  "_doc": "Scenes and narration of 'What a reviewer sees'. One entry per scene; each language is a list of sentences (cues). Write numbers in words. Then run narrate.py on this folder. The pull requests shown are simulated: the offline e2e run e2e-20261021-ugrjhd (fake GitHub, canned model answers, Graft's real renderers).",
+  "langs": ["en"],
+  "engine": "kokoro",
+  "voices": {"kokoro": {"en": {"voice": "af_heart"}}},
+  "scenes": [
+    {
+      "id": "title", "min": 9, "lead": 1.4,
+      "chapter": {"en": "What a reviewer sees"},
+      "en": [
+        "This is what a reviewer sees on a pull request once Graft is installed.",
+        "The four pull requests in this video are simulated: a fake GitHub and canned model answers, rendered by Graft's real code."
+      ]
+    },
+    {
+      "id": "comment", "min": 16,
+      "chapter": {"en": "The managed comment"},
+      "en": [
+        "Pull request two is a typo fix written by Claude Code.",
+        "Graft posts one managed comment, and keeps it up to date.",
+        "The intent card states the goal, the risk, and the behavior changes.",
+        "Provenance says who wrote it: the agent, the model, and the task, read from commit trailers.",
+        "The policy section says what the repository's graft dot yaml would do: here, auto-approve."
+      ]
+    },
+    {
+      "id": "checks", "min": 14,
+      "chapter": {"en": "Three neutral checks"},
+      "en": [
+        "Below, Graft adds three check runs: intent, provenance, and policy.",
+        "Each one concludes neutral.",
+        "On the intent check, two buttons rate the card: card is accurate, or card is wrong.",
+        "And the policy check says it plainly: report mode never blocks a merge."
+      ]
+    },
+    {
+      "id": "misleading", "min": 14,
+      "chapter": {"en": "The verifier disagrees"},
+      "en": [
+        "Pull request four says it fixes a typo, with no behavior change.",
+        "The verifier sees only the diff and the card, and it disagrees.",
+        "A warning tells the reviewer to read the diff instead of relying on the card.",
+        "The risk is logic, and the policy would require one human."
+      ]
+    },
+    {
+      "id": "injection", "min": 14,
+      "chapter": {"en": "Text aimed at AI reviewers"},
+      "en": [
+        "Pull request five hides instructions for AI reviewers in its description.",
+        "It asks to be classified as trivial, and approved.",
+        "Graft treats that text as data: the card describes the real change, a heart-rate zone threshold.",
+        "A caution note says the text was ignored, and the risk was set to at least logic."
+      ]
+    },
+    {
+      "id": "ratings", "min": 15,
+      "chapter": {"en": "How ratings count"},
+      "en": [
+        "Ratings count only when they come from a reviewer.",
+        "On pull request eight, the approving reviewer clicked card is accurate, and reacted with a thumbs up.",
+        "The two signals become one counted rating: the latest one wins.",
+        "On pull request two, a click from an outsider, and the author's own thumbs up, were dropped."
+      ]
+    },
+    {
+      "id": "report", "min": 13,
+      "chapter": {"en": "Report mode"},
+      "en": [
+        "Report mode is the default.",
+        "Would auto-approve and would require are reports, not decisions.",
+        "Every Graft check stays neutral, so Graft never blocks a merge.",
+        "Only the operator can change a mode, never a pull request."
+      ]
+    },
+    {
+      "id": "close", "min": 9, "tail": 2.0,
+      "chapter": {"en": "Try it"},
+      "en": [
+        "Read the card before you read the diff.",
+        "Everything shown here came from an offline run, with a fake GitHub.",
+        "The documentation shows how to run it yourself."
+      ]
+    }
+  ]
+}

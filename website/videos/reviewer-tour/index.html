@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What a reviewer sees</title>
+<meta name="description" content="A narrated tour of a pull request once Graft is installed: the managed comment, the three neutral check runs and how card ratings are counted, on four simulated sandbox pull requests. Drawn in JavaScript on a canvas.">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=IM+Fell+English:ital@0;1&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=block">
+<link rel="stylesheet" href="../engine/player.css">
+<style>
+  /* the herbarium world of the landing page and the docs (DESIGN.md) */
+  :root { --bg: #e4e8df; --panel: #f6f7f2; --line: #bcc5b8; --ink: #16212a; --soft: #3c4950; --faint: #536066; --accent: #22681a; --deep: #d5e8c8; }
+  html, body { font-family: Literata, Georgia, serif; }
+  h1 { font: 400 1.7rem/1.1 "IM Fell English", Georgia, serif; letter-spacing: 0; }
+  .kicker, .chapters-title, .time, .chapters button .t { font-family: "Courier Prime", monospace; }
+  button, select { font-family: Literata, Georgia, serif; border-radius: 3px; }
+  .chapters button { border-radius: 3px; }
+  .chapters button.on { background: rgba(47, 138, 34, 0.1); }
+  .stage { border-radius: 4px; box-shadow: 0 1px 2px rgb(22 33 42 / .1), 0 8px 16px -8px rgb(22 33 42 / .3); }
+  .note code { font-family: "Courier Prime", monospace; }
+</style>
+</head>
+<body>
+<script src="../engine/engine.js"></script>
+<script src="timing.js"></script>
+<script src="data.js"></script>
+<script src="scenes.js"></script>
+</body>
+</html>

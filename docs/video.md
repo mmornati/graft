@@ -10,6 +10,8 @@ A narrated tour of Graft in two and a half minutes: the review problem, the thre
 
 <p markdown="0"><a href="../../videos/graft-explained/">Open the video on its own page</a> for chapters and subtitles (press <kbd>c</kbd>).</p>
 
+A second video, [What a reviewer sees](video-reviewer-tour.md), walks through four simulated pull requests as GitHub would show them.
+
 ## Chapters
 
 | Chapter | What it covers | Read more |
