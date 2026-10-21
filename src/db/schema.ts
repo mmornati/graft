@@ -264,6 +264,18 @@ export interface IntentDisplaysTable {
  * Step 5 (spec §11). Rule indices, reason codes, PR paths (at most 5 per reason), counts, SHAs,
  * logins and the policy hash. Never globs, rule names, team slugs or YAML text.
  */
+/** `policy_verdicts.enforced_reason` (0009); the same values as `EnforcedReason` in src/policy. */
+export type EnforcedReasonColumn =
+  | "approved_by_policy"
+  | "requirements_met"
+  | "no_policy"
+  | "policy_invalid"
+  | "blocked"
+  | "reviews_truncated"
+  | "changes_requested"
+  | "approvals_missing"
+  | "card_pending";
+
 export interface PolicyVerdictsTable {
   id: Generated<string>;
   change_id: string;
@@ -279,7 +291,19 @@ export interface PolicyVerdictsTable {
   /** The effective `policy_mode` the verdict was published under (Phase 1 step 1). */
   policy_mode: Generated<"report" | "enforce">;
   outcome: "would_approve" | "would_require" | "would_block" | "no_policy" | "policy_invalid";
-  check_conclusion: Generated<"neutral" | "success" | "failure" | "action_required">;
+  /** What was published (D10 of Phase 1 step 2); `pending` = published `in_progress`. */
+  check_conclusion: Generated<"neutral" | "success" | "failure" | "action_required" | "pending">;
+  /** What enforce mode would publish, in every mode; NULL on rows from before step 2. */
+  enforced_conclusion: ColumnType<
+    "success" | "failure" | "pending" | null,
+    "success" | "failure" | "pending" | null | undefined,
+    "success" | "failure" | "pending" | null
+  >;
+  enforced_reason: ColumnType<
+    EnforcedReasonColumn | null,
+    EnforcedReasonColumn | null | undefined,
+    EnforcedReasonColumn | null
+  >;
   risk_class: RiskClass | null;
   risk_final: Generated<boolean>;
   risk_source: "card" | "card_unavailable" | "card_pending" | null;
