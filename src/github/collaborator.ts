@@ -7,7 +7,8 @@
  * read, so only the role name tells them apart. A custom role is judged by its base permission
  * (`admin` → admin, `write` → write, anything else → read). A 403 or 404 fails closed (`none`, and
  * `denied` says which); rate limits and 5xx throw a retryable job error. A response whose user id
- * differs from the one asked about means the login was recycled: `none`.
+ * differs from the one asked about means the login was recycled: `none`, and so does a response
+ * with no user.
  */
 import type { GitHubClient } from "./client-factory.js";
 import { classifyGitHubError, toJobError } from "./errors.js";
@@ -60,8 +61,9 @@ export async function collaboratorRole(
       repo: o.repo,
       username: o.user.login,
     });
-    // The login came from the same API a moment ago; a different id means it was recycled.
-    if (res.data.user && res.data.user.id !== o.user.id) return { role: "none", denied: null };
+    // The login came from the same API a moment ago; a different id means it was recycled. A
+    // response with no user cannot be matched to the one asked about: none (fail closed).
+    if (!res.data.user || res.data.user.id !== o.user.id) return { role: "none", denied: null };
     return { role: roleFrom(res.data), denied: null };
   } catch (err) {
     const cls = classifyGitHubError(err);
