@@ -320,6 +320,24 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(teamRequests().filter((r) => r.path.includes("/memberships/"))).toEqual([]);
   });
 
+  it("I-ENF-6b enforce: a pending team membership does not count", async () => {
+    await setMode("enforce");
+    const PAT = { login: "pat", userId: 504 };
+    api.state.permissions.set(PAT.login, { id: PAT.userId, role: "write" });
+    approve(PAT);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "approvals_missing" });
+    expect((await lastVerdict())?.approvals).toMatchObject({
+      counted: 1,
+      constraints: [{ met: false, approved: 0, unverified: [] }],
+    });
+    // The membership was asked, and answered pending.
+    expect(teamRequests().map((r) => r.path)).toContain(
+      `/orgs/${OWNER}/teams/security/memberships/pat`,
+    );
+  });
+
   it("I-ENF-7 enforce: a writer's change request fails the check; once dismissed it is re-evaluated and succeeds", async () => {
     await setMode("enforce");
     api.state.reviews.set(PR_NUMBER, [
@@ -344,6 +362,39 @@ describe("approvals Graft can enforce (integration)", () => {
       "published",
     );
     expect(lastCheck()?.conclusion).toBe("success");
+  });
+
+  it("I-ENF-7b enforce: a change requester whose role check answers 403, or past the bound, blocks", async () => {
+    await setMode("enforce");
+    // 403: Graft cannot tell whether bob can write, so his request blocks.
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 10, ...ALICE }),
+      makeReview({ id: 11, ...BOB, state: "CHANGES_REQUESTED" }),
+    ]);
+    api.failNext("GET", /\/collaborators\/bob\/permission$/, 403);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "changes_requested" });
+    expect(lastCheck()?.output.title).toBe("Changes requested by bob");
+
+    // Past the bound: 20 readers (checked, not blocking), then a 21st requester never checked.
+    const readers = Array.from({ length: 21 }, (_, i) => ({
+      login: `rd${String(i).padStart(2, "0")}`,
+      userId: 800 + i,
+    }));
+    for (const u of readers) api.state.permissions.set(u.login, { id: u.userId, role: "read" });
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 10, ...ALICE }),
+      ...readers.map((u, i) => makeReview({ id: 30 + i, ...u, state: "CHANGES_REQUESTED" })),
+    ]);
+    api.requests.length = 0;
+    await run({ nowMs: FIXED_NOW.getTime() + 1000 });
+    expect(
+      permissionRequests().filter((r) => /\/collaborators\/rd\d+\//.test(r.path)),
+    ).toHaveLength(20);
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "changes_requested" });
+    expect(lastCheck()?.output.title).toBe("Changes requested by rd20");
   });
 
   it("I-ENF-8 enforce: a pending card publishes in_progress and schedules card_wait; the card or the deadline completes it", async () => {
