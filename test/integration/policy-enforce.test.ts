@@ -704,6 +704,38 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(lastCheck()?.output.text).toContain("(too many approvers to check)");
   });
 
+  it("I-ENF-15 transfer race: a job for the new installation on a row still owned by the old one never acts on the old modes", async () => {
+    await setMode("enforce");
+    approve(ALICE);
+    const NEW_INSTALLATION = INSTALLATION_ID + 1;
+    await t.db
+      .insertInto("installations")
+      .values({
+        id: NEW_INSTALLATION,
+        account_id: 9000002,
+        account_login: "new-owner",
+        account_type: "Organization",
+        repository_selection: "selected",
+        permissions: JSON.stringify(PERMISSIONS),
+        permissions_read_at: FIXED_NOW,
+      })
+      .execute();
+    expect(await run({ data: { installationId: NEW_INSTALLATION } })).toBe("published");
+    // Nothing refused, nothing failed: the check is neutral and the row is untouched.
+    expect(refused).toEqual([]);
+    expect(lastCheck()).toMatchObject({ status: "completed", conclusion: "neutral" });
+    expect(await lastVerdict()).toMatchObject({
+      policy_mode: "report",
+      check_conclusion: "neutral",
+    });
+    const row = await t.db
+      .selectFrom("repositories")
+      .select(["installation_id", "policy_mode"])
+      .where("id", "=", REPO_ID)
+      .executeTakeFirstOrThrow();
+    expect(row).toMatchObject({ installation_id: INSTALLATION_ID, policy_mode: "enforce" });
+  });
+
   it("I-ENF-13 enforce: no policy and an invalid policy fail with the fix text; report mode stays neutral", async () => {
     for (const [policy, reason, fix] of [
       [null, "no_policy", "Add one to report what Graft would require"],
