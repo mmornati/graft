@@ -9,16 +9,19 @@ import {
   schedulePolicy,
 } from "./handlers.js";
 import { policyEvaluateJob, policyFanoutJob } from "./job.js";
+import { scheduleTeamFanout, teamFanoutJob } from "./team-fanout.js";
 
 export const webhookHandlers: WebhookHandler[] = [
   schedulePolicy,
   reviewPolicy,
   rerequestPolicy,
   basePushPolicy,
+  scheduleTeamFanout,
 ];
 export const jobs: JobDefinition<unknown>[] = [
   policyEvaluateJob as JobDefinition<unknown>,
   policyFanoutJob as JobDefinition<unknown>,
+  teamFanoutJob as JobDefinition<unknown>,
 ];
 export const signalListeners: SignalListener[] = [onChangeSignal];
 export { POLICY_CHECK_NAME } from "./render.js";
