@@ -46,7 +46,7 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 | `check_run` event | — | `rerequested` re-runs our checks; `requested_action` delivers the card buttons (step 3). |
 | `installation`, `installation_repositories` | — | Delivered to every App without a subscription; drive the installations module. |
 | `members` (organization) | read | Phase 1 step 2: verify that an approver is an active member of a team named in `graft.yaml` (`GET /orgs/{org}/teams/{team_slug}` and `…/memberships/{username}`). Read only; nothing about teams is stored. Without it every team constraint is unverified and never met. |
-| `membership`, `team` events | — | Phase 1 step 2: `membership` (added, removed) and `team` (deleted, edited, added or removed from a repository) re-evaluate the installation's open PRs that have a team constraint, at most once per five minutes. The payload is a trigger: only the installation id is read. |
+| `membership`, `team` events | — | Phase 1 step 2: `membership` (added, removed) and `team` (deleted, edited, added or removed from a repository) re-evaluate the installation's open PRs that have a team constraint, once per five-minute window, after the window closes. The payload is a trigger: only the installation id is read. |
 
 **Deferred** (not requested in Phase 0):
 
