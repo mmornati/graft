@@ -1,0 +1,85 @@
+# Graft on Coolify (Docker Compose build pack). See docs/deploy/coolify.md.
+#
+# SERVICE_FQDN_SERVER_3000, SERVICE_USER_POSTGRES and SERVICE_PASSWORD_POSTGRES are Coolify magic
+# variables: Coolify generates them (a domain routed to the server's port 3000, a database user and
+# a random password). Everything else marked `:?` must be set in the resource's Environment
+# Variables page. Nothing secret belongs in this file.
+
+x-graft-env: &graft-env
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  PORT: "3000"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/graft
+  GITHUB_APP_ID: ${GITHUB_APP_ID:?}
+  GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:?}
+  GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GRAFT_MODE_CEILING: ${GRAFT_MODE_CEILING:-report}
+
+x-graft-build: &graft-build
+  context: .
+  dockerfile: Dockerfile
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${SERVICE_USER_POSTGRES}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: graft
+    volumes:
+      - graft-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d graft"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # No ports: only the other services of this stack reach the database.
+
+  migrate:
+    build: *graft-build
+    image: graft:coolify
+    command: ["node", "dist/bin/migrate.js", "up"]
+    environment:
+      DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/graft
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    # Coolify: a one-shot container must not count toward the stack's health.
+    exclude_from_hc: true
+
+  server:
+    build: *graft-build
+    image: graft:coolify
+    environment:
+      <<: *graft-env
+      SERVICE_FQDN_SERVER_3000: ""
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    build: *graft-build
+    image: graft:coolify
+    command: ["node", "dist/bin/worker.js"]
+    environment: *graft-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    # The worker serves no HTTP: the image's healthcheck does not apply to it.
+    healthcheck:
+      disable: true
+
+volumes:
+  graft-pgdata:
