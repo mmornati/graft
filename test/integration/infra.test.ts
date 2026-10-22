@@ -103,6 +103,45 @@ describe("permanent job errors", () => {
       }
     }
   });
+
+  it("I-Q-4b the handler sees the job's own retryLimit, not the current definition's", async () => {
+    const attempts: unknown[] = [];
+    const def = (retryLimit: number) =>
+      defineJob({
+        name: "test.limit",
+        schema: z.object({}),
+        options: { retryLimit, retryDelaySeconds: 600 },
+        handle: async (_data, ctx) => {
+          attempts.push(ctx.attempt);
+        },
+      });
+    const queueFor = (job: ReturnType<typeof def>) =>
+      createPgBossQueue({
+        connectionString: t.deps.config.databaseUrl,
+        schema: t.deps.config.pgbossSchema,
+        registry: { jobs: [job] },
+        log: t.deps.log,
+        supervise: true,
+      });
+    // Queued under a definition with 5 retries, run by a worker deployed with 1.
+    const before = queueFor(def(5));
+    await before.start();
+    const id = await before.send(def(5), {});
+    await before.stop();
+    const after = def(1);
+    const queue = queueFor(after);
+    await queue.start();
+    try {
+      await startWorker(queue, { jobs: [after] }, jobContext(t), { concurrency: 1 });
+      await waitFor(async () => attempts.length > 0);
+      expect(attempts).toEqual([{ retryCount: 0, retryLimit: 5 }]);
+      expect(id).not.toBeNull();
+    } finally {
+      await queue.stop();
+      await sql`delete from pgboss.job where name = 'test.limit'`.execute(t.db);
+      await t.deps.queue.boss.deleteQueue("test.limit");
+    }
+  });
 });
 
 describe("scheduling", () => {
