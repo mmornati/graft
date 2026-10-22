@@ -344,6 +344,11 @@ export interface AuditLogTable {
   self: Generated<boolean>;
   policy_mode: "report" | "enforce";
   label_event_at: Date | null;
+  /**
+   * Review 1 (0012): the issue event id of the `labeled` event an `applied` row was verified
+   * from; null on other kinds and on rows written before 0012.
+   */
+  label_event_id: Generated<number | null>;
   created_at: Date;
 }
 

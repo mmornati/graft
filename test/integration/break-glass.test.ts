@@ -8,7 +8,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
 import { migrateDownOne, migrateToLatest } from "../../src/db/migrator.js";
 import { parseManagedComment } from "../../src/github/managed-comment.js";
-import { mergedUnderBreakGlass } from "../../src/modules/audit/index.js";
+import {
+  activeBreakGlass,
+  insertAuditRow,
+  mergedUnderBreakGlass,
+} from "../../src/modules/audit/index.js";
 import { getChangeByNumber } from "../../src/modules/changes/index.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { schedulePolicy } from "../../src/modules/policy/handlers.js";
@@ -19,6 +23,7 @@ import {
 } from "../../src/modules/policy/job.js";
 import { purgeInstallation } from "../../src/pilot/purge.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
+import { PermanentJobError } from "../../src/queue/errors.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
 import { FIXED_NOW, testConfig } from "../helpers/config.js";
 import { testDb, truncateAll } from "../helpers/db.js";
@@ -58,6 +63,8 @@ let t: TestApp;
 let api: FakeGitHubApi;
 let tick = 0;
 let eventId = 1;
+/** Who last added a label through `label()`: the sender of the next `runLabeled()`. */
+let labeller: Who | null = null;
 
 beforeAll(async () => {
   t = await createTestApp();
@@ -71,6 +78,7 @@ async function setMode(policy: "report" | "enforce"): Promise<void> {
 beforeEach(async () => {
   tick = 0;
   eventId = 1;
+  labeller = null;
   await truncateAll(t.db);
   await seedWorld(t.db);
   await t.db
@@ -95,19 +103,46 @@ beforeEach(async () => {
 const config = (over: Record<string, string> = {}) =>
   testConfig({ GRAFT_MODE_CEILING: "enforce", GRAFT_POLICY_CARD_WAIT_SECONDS: "0", ...over });
 /** Each run one second after the previous one, so that the order of evaluations is clear. */
-const run = (o: { data?: Partial<EvaluateData>; config?: Record<string, string> } = {}) => {
+const run = (
+  o: {
+    data?: Partial<EvaluateData>;
+    config?: Record<string, string>;
+    attempt?: { retryCount: number; retryLimit: number };
+  } = {},
+) => {
   const at = FIXED_NOW.getTime() + 1000 * tick++;
   return evaluatePolicyJobRun(
     { ...EVAL_DATA, ...o.data },
-    { ...jobContext(t), config: config(o.config), clock: { now: () => new Date(at) } },
+    {
+      ...jobContext(t),
+      config: config(o.config),
+      clock: { now: () => new Date(at) },
+      ...(o.attempt ? { attempt: o.attempt } : {}),
+    },
   );
 };
-/** The run the `labeled` handler queues for the break-glass label (D4). */
-const runLabeled = (o: { head?: string; config?: Record<string, string> } = {}) =>
+/**
+ * The run the `labeled` handler queues for the break-glass label: the delivery's head (D4) and
+ * its sender's id (review 1, finding 1), by default the last user `label()` acted as.
+ */
+const runLabeled = (
+  o: {
+    head?: string;
+    by?: Who;
+    config?: Record<string, string>;
+    attempt?: { retryCount: number; retryLimit: number };
+  } = {},
+) =>
   run({
-    data: { breakGlassHeadSha: o.head ?? HEAD_SHA },
+    data: {
+      breakGlassHeadSha: o.head ?? HEAD_SHA,
+      breakGlassActorId: (o.by ?? labeller ?? MAYA).id,
+    },
     ...(o.config ? { config: o.config } : {}),
+    ...(o.attempt ? { attempt: o.attempt } : {}),
   });
+/** The run the `unlabeled` handler queues for the break-glass label (review 1, finding 2). */
+const runUnlabeled = () => run({ data: { breakGlassUnlabeled: true } });
 
 const pull = () => {
   const p = api.state.pulls.get(PR_NUMBER);
@@ -128,15 +163,16 @@ function labelEvent(kind: "labeled" | "unlabeled", who: Who, name = LABEL): void
 /** `who` adds the label on GitHub: an issue event, and the label on the pull. */
 function label(who: Who, name = LABEL): void {
   labelEvent("labeled", who, name);
+  labeller = who;
   pull().labels = [...(pull().labels ?? []).filter((l) => l.name !== name), { name }];
 }
 function unlabel(who: Who): void {
   labelEvent("unlabeled", who);
   pull().labels = (pull().labels ?? []).filter((l) => l.name !== LABEL);
 }
-function push(sha: string): void {
+function push(sha: string, at = "2026-10-14T11:30:00Z"): void {
   pull().head.sha = sha;
-  pull().updated_at = "2026-10-14T11:30:00Z";
+  pull().updated_at = at;
 }
 
 const policyChecks = (head = HEAD_SHA) =>
@@ -156,7 +192,8 @@ const changeId = async () => (await getChangeByNumber(t.db, 2000001, PR_NUMBER))
 describe("break-glass and audit log (integration)", () => {
   it("I-BG-1 migration 0010 down then up; down refuses while a break_glass verdict exists", async () => {
     await truncateAll(t.db);
-    // Step 4's migration sits on top of 0010.
+    // Step 4's migration and review 1's (I-BG-24) sit on top of 0010.
+    expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
     const reasonCheck = async () =>
@@ -172,7 +209,11 @@ describe("break-glass and audit log (integration)", () => {
       expect(await reasonCheck()).not.toContain("break_glass");
       expect(await reasonCheck()).toContain("card_pending");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0010_audit_log", "0011_guard"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0010_audit_log",
+        "0011_guard",
+        "0012_audit_label_event",
+      ]);
     }
     expect(await reasonCheck()).toContain("break_glass");
     const indexes = await sql<{ indexname: string }>`
@@ -193,13 +234,13 @@ describe("break-glass and audit log (integration)", () => {
     label(MAYA);
     expect(await runLabeled()).toBe("published");
     expect((await lastVerdict())?.enforced_reason).toBe("break_glass");
-    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
     try {
       await expect(migrateDownOne(t.db)).rejects.toThrow();
       expect(await auditRows()).toHaveLength(1);
       expect(await reasonCheck()).toContain("break_glass");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0011_guard"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
     }
 
     // The CHECKs: a reason iff ignored or stale; a 40-hex head; known kinds and roles.
@@ -335,35 +376,43 @@ describe("break-glass and audit log (integration)", () => {
     expect(await auditRows()).toHaveLength(2);
   });
 
-  it("I-BG-4 the actor comes from the issue events API, not the payload: the delivery names a maintainer, the events a triage user → ignored", async () => {
-    const fixture = loadFixture("pull_request.labeled.break-glass").payload;
-    // The signed delivery says maya (maintain) labelled; GitHub's record says tom did.
-    (fixture as { sender: unknown }).sender = {
-      login: MAYA.login,
-      id: MAYA.id,
-      type: "User",
+  it("I-BG-4 the actor comes from the issue events API, not the payload: the delivery names a maintainer, the events a triage user → not applied; when both say tom → role_too_low", async () => {
+    const deliver = async (who: Who, id: string, minute: number): Promise<EvaluateData> => {
+      const fixture = loadFixture("pull_request.labeled.break-glass").payload;
+      (fixture as { sender: unknown }).sender = { login: who.login, id: who.id, type: "User" };
+      // Another label action: another `updated_at`, so the handler's schedule key differs.
+      (fixture as { pull_request: { updated_at: string } }).pull_request.updated_at =
+        `2026-10-14T11:0${minute}:00Z`;
+      await schedulePolicy.handle(
+        { name: "pull_request", id, deliveryId: id, payload: structuredClone(fixture) } as never,
+        { ...jobContext(t), config: config() },
+      );
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      return queued.at(-1)?.data as EvaluateData;
     };
+    // The signed delivery says maya (maintain) labelled; GitHub's record says tom did.
     label(TOM);
-    const ctx = { ...jobContext(t), config: config() };
-    await schedulePolicy.handle(
-      {
-        name: "pull_request",
-        id: "d-bg-4",
-        deliveryId: "d-bg-4",
-        payload: structuredClone(fixture),
-      } as never,
-      ctx,
-    );
-    const queued = await jobsNamed(t.db, "policy.evaluate");
-    expect(queued).toHaveLength(1);
-    const data = queued[0]?.data as EvaluateData;
+    let data = await deliver(MAYA, "d-bg-4", 1);
     expect(data.breakGlassHeadSha).toBe(HEAD_SHA);
-    // Ids and the head SHA only: no login from the payload reaches the job.
+    // Review 1: the sender's id travels as a filter; ids and the head SHA only, no login.
+    expect(data.breakGlassActorId).toBe(MAYA.id);
     expect(JSON.stringify(data)).not.toContain(MAYA.login);
     expect(await run({ data })).toBe("published");
     expect(lastCheck()).toMatchObject({ conclusion: "failure" });
-    const rows = await auditRows();
-    expect(rows.map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+    expect((await auditRows()).map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+      ["ignored", "actor_unknown", null],
+    ]);
+    // Nothing the payload says is ever the actor: no role is read for maya.
+    expect(roleReads()).toEqual([]);
+
+    // The delivery and the events agree on tom: tom's own role decides, read from the API.
+    labelEvent("unlabeled", TOM);
+    label(TOM);
+    data = await deliver(TOM, "d-bg-4b", 2);
+    expect(await run({ data })).toMatch(/published|unchanged/);
+    expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+    expect((await auditRows()).map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+      ["ignored", "actor_unknown", null],
       ["ignored", "role_too_low", "tom"],
     ]);
     expect(roleReads().map((r) => r.path)).toEqual([
@@ -401,7 +450,7 @@ describe("break-glass and audit log (integration)", () => {
     expect(eventReads()).toEqual([]);
   });
 
-  it("I-BG-6 after an applied break-glass, a push: the new head gets the normal conclusion; the label stays and no row is written", async () => {
+  it("I-BG-6 after an applied break-glass, a push: the new head gets the normal conclusion; the label stays and the bypass is recorded as ended", async () => {
     label(MAYA);
     await runLabeled();
     expect(lastCheck()).toMatchObject({ conclusion: "success" });
@@ -412,7 +461,11 @@ describe("break-glass and audit log (integration)", () => {
     expect(lastCheck(HEAD_2)).toMatchObject({ status: "completed", conclusion: "failure" });
     expect((await lastVerdict())?.enforced_reason).toBe("blocked");
     expect(pull().labels?.map((l) => l.name)).toContain(LABEL);
-    expect(await auditRows()).toHaveLength(1);
+    // Review 1 (finding 3): the push ends the bypass for good, with no actor and no read.
+    expect((await auditRows()).map((r) => [r.kind, r.head_sha, r.actor_id])).toEqual([
+      ["applied", HEAD_SHA, MAYA.id],
+      ["removed", HEAD_SHA, null],
+    ]);
     expect(policySection()).not.toContain("Break-glass");
     expect(eventReads()).toHaveLength(reads);
     // The old head keeps its success; only the new head is evaluated.
@@ -541,9 +594,14 @@ describe("break-glass and audit log (integration)", () => {
       expect(lastCheck()).toMatchObject({ conclusion: "success" });
       expect((await lastVerdict())?.enforced_reason).toBe("break_glass");
     }
-    // Even the label's own trigger again: the applied row is enough.
+    // The label's own trigger again (a redelivery): one events read to check the bypass is still
+    // bound to the newest label event (review 1, finding 2), and no role read.
     await runLabeled();
-    expect({ events: eventReads().length, roles: roleReads().length }).toEqual(reads);
+    expect(lastCheck()).toMatchObject({ conclusion: "success" });
+    expect({ events: eventReads().length, roles: roleReads().length }).toEqual({
+      events: reads.events + 1,
+      roles: reads.roles,
+    });
     expect(await auditRows()).toHaveLength(1);
   });
 
@@ -584,6 +642,13 @@ describe("break-glass and audit log (integration)", () => {
     await runLabeled();
     expect(await mergedUnderBreakGlass(t.db, id, HEAD_SHA)).toBe(true);
     expect((await auditRows()).map((r) => r.kind)).toEqual(["applied", "removed", "applied"]);
+    // Review 1 (finding 2): a removal recorded at ANOTHER head ends the bypass for the change.
+    await sql`insert into audit_log (repository_id, change_id, pr_number, head_sha, kind,
+      policy_mode, created_at)
+      values (2000001, ${id}, ${PR_NUMBER}, ${HEAD_2}, 'removed', 'enforce',
+        ${new Date(FIXED_NOW.getTime() + 60_000)})`.execute(t.db);
+    expect(await mergedUnderBreakGlass(t.db, id, HEAD_SHA)).toBe(false);
+    expect(await activeBreakGlass(t.db, id, HEAD_SHA)).toBeUndefined();
   });
 
   it("I-BG-14 graft audit list: text and --json, filters, usage errors; pilot purge removes the rows", async () => {
@@ -610,16 +675,18 @@ describe("break-glass and audit log (integration)", () => {
     };
     const text = await ops("audit", "list", "--repo", FULL_NAME);
     expect(text.code, text.err).toBe(0);
+    // The push ended maya's bypass first (review 1, finding 3), then the late delivery was stale.
     expect(text.out.trimEnd().split("\n")).toEqual([
-      `2026-10-14T12:00:02.000Z  stale  #2  ${HEAD_2.slice(0, 7)}  unknown  enforce  head_moved`,
+      `2026-10-14T12:00:02.001Z  stale  #2  ${HEAD_2.slice(0, 7)}  unknown  enforce  head_moved`,
+      "2026-10-14T12:00:02.000Z  removed  #2  ec26c3e  unknown  enforce",
       "2026-10-14T12:00:01.000Z  applied  #2  ec26c3e  maya (maintain)  enforce",
       "2026-10-14T12:00:00.000Z  ignored  #2  ec26c3e  tom (triage)  enforce  role_too_low",
     ]);
     const json = await ops("audit", "list", "--repo", FULL_NAME.toUpperCase(), "--json");
     expect(json.code).toBe(0);
     const entries = JSON.parse(json.out).entries;
-    expect(entries).toHaveLength(3);
-    expect(entries[1]).toEqual({
+    expect(entries).toHaveLength(4);
+    expect(entries[2]).toEqual({
       createdAt: "2026-10-14T12:00:01.000Z",
       kind: "applied",
       prNumber: PR_NUMBER,
@@ -673,7 +740,7 @@ describe("break-glass and audit log (integration)", () => {
       dryRun: false,
       evenIfActive: true,
     });
-    expect(purged.counts.audit_log).toBe(3);
+    expect(purged.counts.audit_log).toBe(4);
     expect(await auditRows()).toEqual([]);
   });
 
@@ -700,5 +767,226 @@ describe("break-glass and audit log (integration)", () => {
     expect(await auditRows()).toEqual([]);
     expect(eventReads()).toEqual([]);
     expect(policySection()).not.toContain("Break-glass");
+  });
+  describe("review 1: the actor is bound to the label action, and revocation does not drift", () => {
+    it("I-BG-16 R3-A1: the newest label event is an unlabel (the re-label is not listed yet) → not applied, actor_unknown", async () => {
+      label(MAYA);
+      unlabel(MAYA);
+      // Tom re-adds the label: pulls.get shows it, the events API does not list it yet.
+      label(TOM);
+      api.state.issueEventsLag = 1;
+      expect(await runLabeled({ by: TOM })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await lastVerdict())?.enforced_reason).toBe("blocked");
+      const rows = await auditRows();
+      expect(rows.map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+        ["ignored", "actor_unknown", null],
+      ]);
+      expect(roleReads()).toEqual([]);
+    });
+
+    it("I-BG-17 R3-A2: the delivery's actor is not the newest labeller the API lists → ignored actor_unknown, no role read", async () => {
+      label(MAYA);
+      unlabel(MAYA);
+      label(TOM);
+      // Both the unlabel and tom's re-label lag: the API still says maya labelled last.
+      api.state.issueEventsLag = 2;
+      expect(await runLabeled({ by: TOM })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+        ["ignored", "actor_unknown", null],
+      ]);
+      expect(roleReads()).toEqual([]);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+    });
+
+    it("I-BG-18 R3-B1: a removal no run saw, then a re-label by a triage user → removed for maya, ignored for tom, not merged under break-glass", async () => {
+      label(MAYA);
+      await runLabeled();
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      // Maya takes the label off; no evaluation sees it (lost webhook, or its job runs later).
+      unlabel(MAYA);
+      label(TOM);
+      expect(await runLabeled()).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await lastVerdict())?.enforced_reason).toBe("blocked");
+      const rows = await auditRows();
+      expect(rows.map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+        ["applied", null, "maya"],
+        ["removed", null, "maya"],
+        ["ignored", "role_too_low", "tom"],
+      ]);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+      expect(policySection()).toContain(
+        "**Break-glass label ignored:** applied by `tom` (triage).",
+      );
+    });
+
+    it("I-BG-18b R3-B1 variant: the unlabeled job runs after the re-label → removed from the delivery alone", async () => {
+      label(MAYA);
+      await runLabeled();
+      unlabel(MAYA);
+      label(TOM);
+      // The handler marks an unlabeled delivery of the label.
+      const payload = structuredClone(loadFixture("pull_request.labeled.break-glass").payload) as {
+        action: string;
+      };
+      payload.action = "unlabeled";
+      await schedulePolicy.handle(
+        { name: "pull_request", id: "d-bg-18b", deliveryId: "d-bg-18b", payload } as never,
+        { ...jobContext(t), config: config() },
+      );
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      expect(queued).toHaveLength(1);
+      const data = queued[0]?.data as EvaluateData;
+      expect(data.breakGlassUnlabeled).toBe(true);
+      expect(data).not.toHaveProperty("breakGlassHeadSha");
+      expect(data).not.toHaveProperty("breakGlassActorId");
+      // pulls.get shows the label again, but the unlabel ended maya's bypass.
+      expect(await run({ data })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+        ["removed", "maya"],
+      ]);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+      // Tom's own label job then verifies tom, from scratch.
+      await runLabeled();
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+        ["removed", "maya"],
+        ["ignored", "tom"],
+      ]);
+    });
+
+    it("I-BG-19 R3-B2: a removal at another head ends the bypass for the change; a force push back to the bypassed commit is not success", async () => {
+      label(MAYA);
+      await runLabeled();
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      push(HEAD_2);
+      await run();
+      expect(lastCheck(HEAD_2)).toMatchObject({ conclusion: "failure" });
+      unlabel(MAYA);
+      await runUnlabeled();
+      label(TOM);
+      await runLabeled({ head: HEAD_2 });
+      expect(lastCheck(HEAD_2)).toMatchObject({ conclusion: "failure" });
+      // The author force-pushes back to the commit maya bypassed.
+      push(HEAD_SHA, "2026-10-14T11:45:00Z");
+      expect(await run()).toBe("published");
+      expect(lastCheck(HEAD_SHA)).toMatchObject({ conclusion: "failure" });
+      expect((await lastVerdict())?.enforced_reason).toBe("blocked");
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+    });
+
+    it("I-BG-20 R3-B3: a push ends the bypass for good; pushing the labelled commit again with the label untouched is not success", async () => {
+      label(MAYA);
+      await runLabeled();
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      push(HEAD_2);
+      await run();
+      expect(lastCheck(HEAD_2)).toMatchObject({ conclusion: "failure" });
+      push(HEAD_SHA, "2026-10-14T11:45:00Z");
+      expect(await run()).toBe("published");
+      expect(lastCheck(HEAD_SHA)).toMatchObject({ conclusion: "failure" });
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+      expect(pull().labels?.map((l) => l.name)).toContain(LABEL);
+    });
+
+    it("I-BG-21 the events lag: the label run retries while its retry policy allows, then fails closed (actor_unknown, and an active bypass ends)", async () => {
+      label(MAYA);
+      api.state.issueEventsLag = 1;
+      // Maya's event is not listed yet: a retryable error, nothing written or published.
+      const err = await runLabeled({ attempt: { retryCount: 0, retryLimit: 5 } }).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(PermanentJobError);
+      expect(String(err.message)).toMatch(/do not list the label action/);
+      expect(await auditRows()).toEqual([]);
+      expect(policyChecks()).toEqual([]);
+      // Listed by the retry: verified as usual.
+      api.state.issueEventsLag = 0;
+      expect(await runLabeled({ attempt: { retryCount: 1, retryLimit: 5 } })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+
+      // Tom's re-label never shows up (nor maya's unlabel): retried, then on the last attempt the
+      // run fails closed. Maya's bypass ends, and nothing is applied.
+      unlabel(MAYA);
+      label(TOM);
+      api.state.issueEventsLag = 2;
+      await expect(runLabeled({ attempt: { retryCount: 4, retryLimit: 5 } })).rejects.toThrow();
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect(await runLabeled({ attempt: { retryCount: 5, retryLimit: 5 } })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+        ["applied", null, "maya"],
+        ["removed", null, null],
+        ["ignored", "actor_unknown", null],
+      ]);
+      expect(roleReads()).toHaveLength(1);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+    });
+
+    it("I-BG-24 migration 0012: label_event_id and an ignored index with NULLS NOT DISTINCT, down then up; the applied row keeps its event id; a removal at the same instant ends a bypass", async () => {
+      await truncateAll(t.db);
+      const column = async () =>
+        (
+          await sql<{ n: number }>`select count(*)::int as n from information_schema.columns
+            where table_name = 'audit_log' and column_name = 'label_event_id'`.execute(t.db)
+        ).rows[0]?.n;
+      const indexDef = async () =>
+        (
+          await sql<{ def: string }>`select indexdef as def from pg_indexes
+            where indexname = 'audit_log_ignored_once'`.execute(t.db)
+        ).rows[0]?.def ?? "";
+      expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
+      try {
+        expect(await column()).toBe(0);
+        expect(await indexDef()).not.toContain("NULLS NOT DISTINCT");
+      } finally {
+        expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event"]);
+      }
+      expect(await column()).toBe(1);
+      expect(await indexDef()).toContain("NULLS NOT DISTINCT");
+
+      await seedWorld(t.db);
+      await setMode("enforce");
+      label(MAYA);
+      await runLabeled();
+      const [applied] = await auditRows();
+      if (!applied) throw new Error("no row");
+      // The issue event the bypass is bound to (the fake numbers events from 1).
+      expect(applied).toMatchObject({ kind: "applied", label_event_id: 1 });
+
+      // The database itself keeps one unknown-actor `ignored` row per (change, head).
+      const unknown = () =>
+        sql`insert into audit_log (repository_id, change_id, pr_number, head_sha, kind, reason,
+          policy_mode, created_at)
+          values (${applied.repository_id}, ${applied.change_id}, 2, ${HEAD_2}, 'ignored',
+            'actor_unknown', 'enforce', now())`.execute(t.db);
+      await unknown();
+      await expect(unknown()).rejects.toThrow(/unique/);
+
+      // The tie rule: a `removed` row at the same instant as the `applied` one ends it.
+      expect(await mergedUnderBreakGlass(t.db, applied.change_id, HEAD_SHA)).toBe(true);
+      const wrote = await t.db.transaction().execute((tx) =>
+        insertAuditRow(tx, {
+          repositoryId: applied.repository_id,
+          changeId: applied.change_id,
+          prNumber: PR_NUMBER,
+          headSha: HEAD_SHA,
+          kind: "removed",
+          reason: null,
+          actor: null,
+          role: null,
+          self: false,
+          policyMode: "enforce",
+          labelEventAt: null,
+          createdAt: applied.created_at,
+        }),
+      );
+      expect(wrote).toBe(true);
+      expect(await mergedUnderBreakGlass(t.db, applied.change_id, HEAD_SHA)).toBe(false);
+    });
   });
 });

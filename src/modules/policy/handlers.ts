@@ -29,6 +29,8 @@ const pullRequestPayload = z
       updated_at: z.string().min(1),
     }),
     label: z.looseObject({ name: z.string() }).nullish(),
+    // Step 3 review 1 (finding 1): the id only, a refuse-only filter for the break-glass label.
+    sender: z.looseObject({ id: z.number().int().positive() }).optional(),
     repository: z.looseObject({ id: z.number().int().positive(), full_name: FULL_NAME }),
     installation: z.looseObject({ id: z.number().int().positive() }),
   })
@@ -117,14 +119,18 @@ export const schedulePolicy = defineWebhookHandler({
       trigger: "pr",
       deliveryId: event.deliveryId,
     };
-    // Step 3 (D4): the head at labelling time, from the signed delivery. The job uses it only as
-    // an equality filter against the live head: it can refuse a break-glass, never grant one.
-    if (
-      p.action === "labeled" &&
-      p.label &&
-      isBreakGlassLabel(ctx.config.breakGlassLabel, p.label.name)
-    ) {
-      data.breakGlassHeadSha = p.pull_request.head.sha;
+    // Step 3 (D4): the head at labelling time, from the signed delivery, and (review 1, finding
+    // 1) the id of the user who labelled. The job uses both only as equality filters against API
+    // data: they can refuse a break-glass, never grant one. A delivery without a sender id carries
+    // no actor filter, and the job then applies nothing.
+    if (p.label && isBreakGlassLabel(ctx.config.breakGlassLabel, p.label.name)) {
+      if (p.action === "labeled") {
+        data.breakGlassHeadSha = p.pull_request.head.sha;
+        if (p.sender) data.breakGlassActorId = p.sender.id;
+      } else if (p.action === "unlabeled") {
+        // Review 1, finding 2: an unlabel ends an active break-glass, even if the label is back.
+        data.breakGlassUnlabeled = true;
+      }
     }
     await ctx.queue.send(policyEvaluateJob, data, {
       singletonKey: scheduleKey({

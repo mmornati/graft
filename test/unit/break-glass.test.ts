@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/index.js";
-import { isBreakGlassLabel } from "../../src/modules/policy/break-glass.js";
+import { type BreakGlassFacts, isBreakGlassLabel } from "../../src/modules/policy/break-glass.js";
 import { breakGlassHashTerm, policyFactsHash } from "../../src/modules/policy/job.js";
 import {
   type BreakGlassView,
@@ -291,6 +291,7 @@ describe("break-glass rendering (§7, U-BG-4)", () => {
           self: false,
           headSha: HEAD,
           labelEventAt: null,
+          labelEventId: 9,
         },
         HEAD,
       ),
@@ -309,9 +310,11 @@ describe("break-glass rendering (§7, U-BG-4)", () => {
     ];
     const hashes = new Set(terms.map((breakGlass) => policyFactsHash({ ...base, breakGlass })));
     expect(hashes.size).toBe(terms.length);
-    // `removed` is the same as no break-glass at all.
-    expect(breakGlassHashTerm({ state: "removed", actor: null, labelEventAt: null }, HEAD)).toEqual(
-      terms[0],
-    );
+    // A bypass that ended (a `removed` row, review 1) is the same as no break-glass at all.
+    const ended: BreakGlassFacts = {
+      state: "none",
+      revoke: { headSha: HEAD, actor: null, labelEventAt: null },
+    };
+    expect(breakGlassHashTerm(ended, HEAD)).toEqual(terms[0]);
   });
 });
