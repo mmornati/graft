@@ -8,10 +8,12 @@
  * check concludes `neutral`, whatever the verdict says. This job never names a non-neutral
  * conclusion itself: it passes through what `publishedCheck` returns.
  */
+import type { Transaction } from "kysely";
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import { GlobBudget } from "../../core/glob.js";
 import { withChangeLock } from "../../db/locks.js";
+import type { Database } from "../../db/schema.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { toJobError } from "../../github/errors.js";
 import { upsertManagedSection } from "../../github/managed-comment.js";
@@ -28,7 +30,7 @@ import { type LoadedPolicy, loadBasePolicy, resolveBaseCommit } from "../../poli
 import { canonicalHash } from "../../policy/parse.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
-import { getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
+import { type Change, getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import {
   ensureRepository,
   getActiveInstallation,
@@ -125,6 +127,28 @@ export type RepositoryFanoutData = Extract<FanoutData, { scope: "repository" }>;
 
 export type PolicyOutcomeResult = "published" | "unchanged" | "stale" | "closed" | "skipped";
 
+/** How many times one run may re-read the PR to catch up with a newer snapshot of its head. */
+export const MAX_CATCH_UPS = 3;
+
+/**
+ * What the verdict and its rendering read from the pull that can change without a new head: the
+ * base branch, the labels, the size, the author and the state. Compared in memory between two
+ * snapshots of the same PR; never stored or logged.
+ */
+function verdictInputsKey(p: LivePull): string {
+  return JSON.stringify([
+    p.head.sha,
+    p.base.ref,
+    p.state,
+    (p.labels ?? []).map((l) => l.name),
+    p.additions,
+    p.deletions,
+    p.changed_files,
+    p.user?.login ?? null,
+    p.user?.type ?? null,
+  ]);
+}
+
 export async function evaluatePolicyJobRun(
   data: EvaluateData,
   ctx: JobContext,
@@ -182,7 +206,45 @@ export async function evaluatePolicyJobRun(
     moved ? { modeCeiling: "report" } : config,
   );
   const { change, applied } = await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now);
-  if (!applied) return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
+
+  /**
+   * Another job stored a newer snapshot of the SAME head. Usually that is Graft's own comment or
+   * check run bumping the PR's `updated_at`, not a change to what the verdict is made of. Re-read
+   * the PR: if `verdictInputsKey` is unchanged, adopt the newer snapshot and carry on; otherwise the
+   * change is real, and the job its webhook queued publishes instead. Bounded by MAX_CATCH_UPS per
+   * run. Never called inside a lock (it reads GitHub). The D16 order is untouched: `factsReadAt`
+   * stays the time the facts were read, and a later evaluation still wins.
+   */
+  let catchUps = 0;
+  const catchUp = async (): Promise<boolean> => {
+    while (catchUps < MAX_CATCH_UPS) {
+      catchUps++;
+      let live: LivePull;
+      try {
+        const res = await octokit.rest.pulls.get({
+          owner: data.owner,
+          repo: data.repo,
+          pull_number: data.prNumber,
+        });
+        live = res.data as unknown as LivePull;
+      } catch (err) {
+        throw toJobError(err, "pulls.get");
+      }
+      if (verdictInputsKey(live) !== verdictInputsKey(pull)) return false;
+      const stored = await upsertChangeFromPull(ctx.db, data.repositoryId, live, ctx.clock.now());
+      pull = live;
+      if (stored.applied) {
+        ctx.log.info({ changeId: change.id, catchUps }, "caught up with a newer snapshot");
+        return true;
+      }
+      if (stored.change.head_sha !== live.head.sha) return false;
+    }
+    return false;
+  };
+
+  if (!applied && !(change.head_sha === pull.head.sha && (await catchUp()))) {
+    return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
+  }
   if (pull.state === "closed") return done("closed", { changeId: change.id });
 
   // 2. Everything read from here on is "as of" this instant (D16).
@@ -331,18 +393,37 @@ export async function evaluatePolicyJobRun(
   });
 
   const identity = { changeId: change.id, headSha, policyFileSha: view.fileSha };
-  const fresh = (current: Awaited<ReturnType<typeof getChange>>): boolean =>
+  const fresh = (current: Change | undefined): boolean =>
     !!current &&
     current.head_sha === headSha &&
     !(current.pr_updated_at !== null && current.pr_updated_at > new Date(pull.updated_at));
+  /**
+   * Run `fn` under the change lock while the stored snapshot is this run's. When it is behind on
+   * the same head, release the lock, catch up and try again; `null` when the run is out of date.
+   */
+  const underFreshLock = async <T>(
+    fn: (tx: Transaction<Database>, current: Change) => Promise<T>,
+  ): Promise<T | null> => {
+    for (;;) {
+      const r: { ok: true; value: T } | { ok: false; behind: boolean } = await withChangeLock(
+        ctx.db,
+        change.id,
+        async (tx) => {
+          const current = await getChange(tx, change.id);
+          if (!current || !fresh(current)) {
+            ctx.log.info({ changeId: change.id }, "stale: head moved or newer snapshot stored");
+            return { ok: false, behind: !!current && current.head_sha === headSha };
+          }
+          return { ok: true, value: await fn(tx, current) };
+        },
+      );
+      if (r.ok) return r.value;
+      if (!r.behind || !(await catchUp())) return null;
+    }
+  };
 
   // 7. Lock, re-check, publish.
-  const publish = withChangeLock(ctx.db, change.id, async (tx) => {
-    const current = await getChange(tx, change.id);
-    if (!current || !fresh(current)) {
-      ctx.log.info({ changeId: change.id }, "stale: head moved or newer snapshot stored");
-      return "stale" as const;
-    }
+  const publish = underFreshLock(async (tx, current) => {
     const latest = await maxFactsReadAt(tx, change.id);
     if (latest !== null && latest > factsReadAt) {
       ctx.log.info({ changeId: change.id }, "stale: a later evaluation already published");
@@ -454,7 +535,7 @@ export async function evaluatePolicyJobRun(
 
   let result: Exclude<PolicyOutcomeResult, "closed" | "skipped">;
   try {
-    result = await publish;
+    result = (await publish) ?? "stale";
   } catch (err) {
     if (!(err instanceof ModeChangedDuringEvaluation)) throw err;
     ctx.log.info(
