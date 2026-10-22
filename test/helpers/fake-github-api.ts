@@ -435,12 +435,20 @@ export function createFakeGitHubApi(
     if (m) {
       const name = url.searchParams.get("check_name");
       const app = url.searchParams.get("app_id");
-      const runs = state.checkRuns.filter(
+      let runs = state.checkRuns.filter(
         (r) =>
           r.head_sha === m?.[1] &&
           (name === null || r.name === name) &&
           (app === null || String(r.app.id) === app),
       );
+      // GitHub's default `filter=latest` returns the most recent run per name and app (the one
+      // pushed last here); only `filter=all` returns every run (step 4 review 2, finding B).
+      if (url.searchParams.get("filter") !== "all") {
+        const latest = new Map<string, (typeof runs)[number]>();
+        for (const r of runs) latest.set(`${r.app.id}\u0000${r.name}`, r);
+        const keep = new Set(latest.values());
+        runs = runs.filter((r) => keep.has(r));
+      }
       if (state.checkRunsPageSize !== null) {
         const size = state.checkRunsPageSize;
         const page = Number(url.searchParams.get("page") ?? "1");

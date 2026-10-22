@@ -18,8 +18,10 @@ export interface JobContext {
   llm: LlmClient;
   signals: Signals;
   /**
-   * The attempt the worker is running: pg-boss's `retryCount` (0 on the first run) and the
-   * queue's `retryLimit`. Absent outside the worker (direct calls, tests): treat as the last one.
+   * The attempt the worker is running: pg-boss's `retryCount` (0 on the first run) and the job's
+   * own `retryLimit` (copied from the queue when the job was inserted, so a later change to the
+   * definition does not apply to it). Absent outside the worker (direct calls, tests): treat as the
+   * last one.
    */
   attempt?: { retryCount: number; retryLimit: number };
 }

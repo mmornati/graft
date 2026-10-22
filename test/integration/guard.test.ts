@@ -518,6 +518,10 @@ describe("guard: detection and confirmation", () => {
     await confirmEvent({ eventId: e?.id as string }, ctx());
     expect((await events())[0]?.status).toBe("flaky");
     expect(comments()).toEqual([]);
+    // Green again: plain `flaky` in the list.
+    expect((await ops(["guard", "list", "--repo", FULL_NAME])).out).toContain(
+      `  flaky  ${C(2).slice(0, 7)}  test  `,
+    );
   });
 
   it("I-GRD-7 flaky: the next commit green: flaky, no comment", async () => {
@@ -592,6 +596,38 @@ describe("guard: detection and confirmation", () => {
     expect(e?.confirmed_at).toEqual(now);
     expect(comments()).toEqual([]);
     expect(await jobs("guard.confirm")).toHaveLength(3);
+    // Step 4 review 2, nit D: an undecided `flaky` is told apart from a green-again one.
+    const list = await ops(["guard", "list", "--repo", FULL_NAME]);
+    expect(list.out).toContain(`  flaky (unconfirmed)  ${C(2).slice(0, 7)}  test  culprit #7`);
+    const json = JSON.parse((await ops(["guard", "list", "--repo", FULL_NAME, "--json"])).out);
+    expect(json.events[0]).toMatchObject({ status: "flaky", confirmReason: null });
+  });
+
+  it("I-GRD-8d an event still red at the final confirm attempt settles culprit_found, not flaky", async () => {
+    const id = await confirming();
+    advance(60);
+    run(C(2), "test", "cancelled");
+    await observe(C(2));
+    for (const attempt of [0, 1]) {
+      advance(7260);
+      await confirmEvent(attempt === 0 ? { eventId: id } : { eventId: id, attempt }, ctx());
+      expect((await events())[0]?.status).toBe("confirming");
+    }
+    // After the second re-send, a fresh re-run on C2 ends red again. The worker that observes it
+    // has a clock behind the window's deadline (finding 4), so that pass leaves the event open
+    // and only the final attempt can settle it.
+    advance(60);
+    run(C(2), "test", "failure");
+    const [open] = await events();
+    const behind = new Date((open as { detected_at: Date }).detected_at.getTime() + 7199 * 1000);
+    await observeCommit({ ...IDS, sha: C(2) }, { ...ctx(), clock: { now: () => behind } });
+    expect((await events())[0]?.status).toBe("confirming");
+    advance(7200);
+    await confirmEvent({ eventId: id, attempt: 2 }, ctx());
+    const [e] = await events();
+    expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
+    expect(comments()).toHaveLength(1);
+    expect(comments()[0]?.path).toBe(`/repos/${FULL_NAME}/issues/7/comments`);
   });
 
   it("I-GRD-9 ambiguous (two merges) and no_culprit (direct push): rows, no comment, guard list shows them", async () => {
@@ -720,6 +756,123 @@ describe("guard: detection and confirmation", () => {
     [e] = await events();
     expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "next_commit" });
     expect(comments().map((c) => c.path)).toEqual([`/repos/${FULL_NAME}/issues/8/comments`]);
+  });
+
+  // Step 4 review 2, finding A: the three conditions narrowing depends on.
+  const prId = async (n: number) =>
+    (
+      await t.db
+        .selectFrom("changes")
+        .select("id")
+        .where("pr_number", "=", n)
+        .executeTakeFirstOrThrow()
+    ).id;
+
+  it("I-GRD-10d two failing keys, only one turns green late on the parent: the event keeps the widest line", async () => {
+    history(4);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    mergedPull(9, C(4));
+    await track(C(4), null);
+    run(C(1), "test", "success");
+    run(C(1), "lint", "success");
+    await observe(C(1));
+    run(C(2), "test", null);
+    run(C(2), "lint", null);
+    await observe(C(2));
+    advance(60);
+    run(C(3), "test", "failure");
+    run(C(3), "lint", "failure");
+    await observe(C(3));
+    const before = await events();
+    expect(before.map((r) => [r.failing_sha, r.last_green_sha, r.failing_checks.length])).toEqual([
+      [C(3), C(1), 2],
+    ]);
+    // Only `test` turns green on C2; `lint` on C2 is still running, so it may have broken there.
+    advance(60);
+    run(C(2), "test", "success");
+    await observe(C(2));
+    const [e] = await events();
+    expect(e).toMatchObject({
+      status: "confirming",
+      failing_sha: C(3),
+      last_green_sha: C(1),
+      candidates: [
+        { sha: C(2), prNumber: 7, kind: "pr" },
+        { sha: C(3), prNumber: 8, kind: "pr" },
+      ],
+      culprit_change_id: null,
+    });
+  });
+
+  it("I-GRD-10e a key that joined on a later commit (D8) has no transition at the failing commit: no narrowing", async () => {
+    // PR 7 is a rebase merge of C2..C5: one culprit for every candidate.
+    history(5);
+    mergedPull(7, C(2), C(3), C(4), C(5));
+    await track(C(5), null);
+    run(C(1), "test", "success");
+    run(C(1), "lint", "success");
+    await observe(C(1));
+    run(C(2), "test", null);
+    run(C(2), "lint", "success");
+    await observe(C(2));
+    advance(60);
+    run(C(3), "test", "failure");
+    run(C(3), "lint", "success");
+    await observe(C(3));
+    run(C(4), "lint", "success");
+    await observe(C(4));
+    // `lint` goes red on C5, for the same culprit: it joins the event at C3.
+    advance(60);
+    run(C(5), "lint", "failure");
+    await observe(C(5));
+    let [e] = await events();
+    expect(e?.failing_checks.map((c) => c.key)).toEqual([TEST_KEY, `run:${ACTIONS}:lint`]);
+    expect(e).toMatchObject({ status: "confirming", failing_sha: C(3), last_green_sha: C(1) });
+    // `test` turns green on C2. `lint` was green at C3, so it does not vouch for C3: no narrowing.
+    advance(60);
+    run(C(2), "test", "success");
+    await observe(C(2));
+    [e] = await events();
+    expect(e).toMatchObject({
+      status: "confirming",
+      failing_sha: C(3),
+      last_green_sha: C(1),
+      candidates: [
+        { sha: C(2), prNumber: 7, kind: "pr" },
+        { sha: C(3), prNumber: 7, kind: "pr" },
+      ],
+    });
+  });
+
+  it("I-GRD-10f the green at the last green commit is replaced by a cancelled re-run: the event never widens", async () => {
+    history(4);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    mergedPull(9, C(4));
+    await track(C(4), null);
+    run(C(1), "test", "success");
+    await observe(C(1));
+    run(C(2), "test", "success");
+    await observe(C(2));
+    advance(60);
+    run(C(3), "test", "failure");
+    await observe(C(3));
+    expect((await events()).map((r) => [r.last_green_sha, r.candidates.length])).toEqual([
+      [C(2), 1],
+    ]);
+    // A re-run on C2 ends cancelled: `test`'s last green is now C1, older than the event's.
+    advance(60);
+    run(C(2), "test", "cancelled");
+    await observe(C(2));
+    const [e] = await events();
+    expect(e).toMatchObject({
+      status: "confirming",
+      failing_sha: C(3),
+      last_green_sha: C(2),
+      candidates: [{ sha: C(3), prNumber: 8, kind: "pr" }],
+      culprit_change_id: await prId(8),
+    });
   });
 
   it("I-GRD-11 without statuses:read no status request is made and check runs still drive detection; with it, a status opens an event", async () => {
@@ -851,6 +1004,37 @@ describe("guard: detection and confirmation", () => {
     expect(rows.map((r) => [r.failing_sha, r.last_green_sha, r.candidates])).toEqual([
       [C(3), C(2), [{ sha: C(3), prNumber: 8, kind: "pr" }]],
     ]);
+  });
+
+  it("I-GRD-17b more check runs than the pages read: the commit's results are ignored, so a dropped red never makes it a green baseline", async () => {
+    history(3);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    await track(C(3), null);
+    run(C(1), "test", "success");
+    await observe(C(1));
+    // C2: the red run is listed last (oldest), behind 550 others and a later green decoy in
+    // another suite, so the five pages read never reach it.
+    run(C(2), "test", "failure", { suite: 1 });
+    for (let i = 0; i < 550; i++) run(C(2), `job-${i}`, "success", { suite: 2 });
+    run(C(2), "test", "success", { suite: 3, at: new Date(now.getTime() + 4000) });
+    api.state.checkRunsPageSize = 100;
+    await observe(C(2));
+    expect(await events()).toEqual([]);
+    advance(60);
+    run(C(3), "test", "failure");
+    await observe(C(3));
+    // Not "culprit PR 8": C2 is no baseline, so the event reaches back to C1 and names both PRs.
+    const [e] = await events();
+    expect(e).toMatchObject({
+      failing_sha: C(3),
+      last_green_sha: C(1),
+      culprit_change_id: null,
+      candidates: [
+        { sha: C(2), prNumber: 7, kind: "pr" },
+        { sha: C(3), prNumber: 8, kind: "pr" },
+      ],
+    });
   });
 
   it("I-GRD-17 a decoy: a later green run of the same key in another check suite does not hide the red one", async () => {
@@ -1057,6 +1241,7 @@ describe("guard: retention, purge and the CLI", () => {
       [
         "candidatePrs",
         "commentId",
+        "confirmReason",
         "confirmedAt",
         "culpritPr",
         "detectedAt",
@@ -1077,6 +1262,7 @@ describe("guard: retention, purge and the CLI", () => {
       candidatePrs: [7],
       unresolvedCommits: 0,
       guardMode: "report",
+      confirmReason: "off",
     });
     expect((await ops(["guard", "list", "--repo", "other/repo"])).code).toBe(1);
     expect((await ops(["guard", "list", "--repo", FULL_NAME, "--status", "nope"])).code).toBe(2);
