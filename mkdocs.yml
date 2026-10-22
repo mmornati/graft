@@ -162,4 +162,5 @@ nav:
       - phase-1/README.md
       - "Step 1: Modes": phase-1/step-1-modes.md
       - "Step 2: Approvals": phase-1/step-2-approvals.md
+      - "Step 4: Guard detection": phase-1/step-4-guard-detection.md
       - Human to-do: phase-1/HUMAN-TODO.md
