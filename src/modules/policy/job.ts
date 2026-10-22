@@ -264,7 +264,22 @@ export async function evaluatePolicyJobRun(
     return false;
   };
 
+  /**
+   * Review 1, finding 4: a run queued by the break-glass label that ends `stale` before it wrote
+   * its audit row would drop the request silently (the next run is not the label's trigger). Send
+   * it again with its filters, once per delivery; they only refuse, so a re-run grants nothing new.
+   */
+  const resendLabelRun = async (headSha: string): Promise<void> => {
+    if (data.breakGlassHeadSha === undefined || config.breakGlassLabel === null) return;
+    const stored = await getChange(ctx.db, change.id);
+    if (stored?.head_sha !== headSha) return;
+    await ctx.queue.send(policyEvaluateJob, data, {
+      singletonKey: `policy:breakglass:${change.id}:${headSha}:${data.deliveryId ?? "none"}`,
+    });
+  };
+
   if (!applied && !(change.head_sha === pull.head.sha && (await catchUp()))) {
+    await resendLabelRun(pull.head.sha);
     return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
   }
   if (pull.state === "closed") return done("closed", { changeId: change.id });
@@ -633,8 +648,12 @@ export async function evaluatePolicyJobRun(
   });
 
   let result: Exclude<PolicyOutcomeResult, "closed" | "skipped">;
+  // Whether this run's audit rows were written (or found already there) in a committed transaction.
+  let auditCommitted = false;
   try {
-    result = (await publish) ?? "stale";
+    const r = await publish;
+    auditCommitted = r !== null;
+    result = r ?? "stale";
   } catch (err) {
     if (!(err instanceof ModeChangedDuringEvaluation)) throw err;
     ctx.log.info(
@@ -643,6 +662,8 @@ export async function evaluatePolicyJobRun(
     );
     result = "stale";
   }
+  // Review 1, finding 4: out of date, or rolled back by a mode change, before the row was written.
+  if (!auditCommitted) await resendLabelRun(headSha);
 
   // Step 3: a break-glass row written by a run that lost the race is shown by a new evaluation.
   if (auditWrittenWhileStale) {

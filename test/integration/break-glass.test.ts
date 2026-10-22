@@ -988,5 +988,65 @@ describe("break-glass and audit log (integration)", () => {
       expect(wrote).toBe(true);
       expect(await mergedUnderBreakGlass(t.db, applied.change_id, HEAD_SHA)).toBe(false);
     });
+
+    it("I-BG-22 a verification whose run lost the race to a later evaluation keeps its row and queues one re-evaluation, which applies it", async () => {
+      label(MAYA);
+      const at = (s: number) => ({ now: () => new Date(FIXED_NOW.getTime() + s * 1000) });
+      // A later evaluation (not the label's trigger) publishes first.
+      expect(
+        await evaluatePolicyJobRun(
+          { ...EVAL_DATA, trigger: "review" },
+          { ...jobContext(t), config: config(), clock: at(10) },
+        ),
+      ).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      // The label's run read its facts earlier: it loses, but keeps what it verified.
+      expect(
+        await evaluatePolicyJobRun(
+          { ...EVAL_DATA, breakGlassHeadSha: HEAD_SHA, breakGlassActorId: MAYA.id },
+          { ...jobContext(t), config: config(), clock: at(5) },
+        ),
+      ).toBe("stale");
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+      ]);
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.singleton_key).toMatch(/^policy:breakglass:/);
+      expect(
+        await evaluatePolicyJobRun(queued[0]?.data as EvaluateData, {
+          ...jobContext(t),
+          config: config(),
+          clock: at(20),
+        }),
+      ).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect(await auditRows()).toHaveLength(1);
+    });
+
+    it("I-BG-23 a label run that ends stale before verifying (a newer snapshot with another label) is sent again with its filters, and applies", async () => {
+      label(MAYA);
+      // Right after the label run's first pulls.get, another label is added and its job stores
+      // the newer snapshot and publishes.
+      api.afterNext("GET", new RegExp(`/pulls/${PR_NUMBER}$`), async () => {
+        pull().labels = [...(pull().labels ?? []), { name: "hotfix" }];
+        pull().updated_at = "2026-10-14T11:50:00Z";
+        expect(await run({ data: { trigger: "pr", deliveryId: "d-hotfix" } })).toBe("published");
+      });
+      expect(await runLabeled()).toBe("stale");
+      expect(await auditRows()).toEqual([]);
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.singleton_key).toBe(
+        `policy:breakglass:${await changeId()}:${HEAD_SHA}:${EVAL_DATA.deliveryId}`,
+      );
+      const data = queued[0]?.data as EvaluateData;
+      expect(data).toMatchObject({ breakGlassHeadSha: HEAD_SHA, breakGlassActorId: MAYA.id });
+      expect(await run({ data })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+      ]);
+    });
   });
 });
