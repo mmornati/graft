@@ -29,12 +29,10 @@ export interface KeyResult {
   key: string;
   sha: string;
   class: ResultClass;
-  /** D17: the key is outside `guard.checks` at that commit (stored as `ignored`). */
-  filtered?: boolean;
 }
 
 export type Transition =
-  | { kind: "none"; why: "not_red" | "already_red" | "no_baseline" | "filtered" }
+  | { kind: "none"; why: "not_red" | "already_red" | "no_baseline" }
   | {
       kind: "new";
       key: string;
@@ -133,7 +131,6 @@ export function detectTransition(
   const byCommit = new Map<string, KeyResult>();
   for (const r of results) if (r.key === key) byCommit.set(r.sha, r);
   const here = byCommit.get(sha);
-  if (here?.filtered) return { kind: "none", why: "filtered" };
   if (here?.class !== "red") return { kind: "none", why: "not_red" };
   const line = chainUpTo(chain, sha);
   if (line.length === 0) return { kind: "none", why: "no_baseline" };
@@ -152,6 +149,15 @@ export function detectTransition(
     };
   }
   return { kind: "none", why: "no_baseline" };
+}
+
+/**
+ * D17, as corrected by the security review: does a transition of the check `name` count, given
+ * `guard.checks` read at the transition's baseline (its last green commit)? `null` (no list, or
+ * no usable file there) means every check counts.
+ */
+export function allowedByGuardChecks(allowed: ReadonlySet<string> | null, name: string): boolean {
+  return allowed === null || allowed.has(name);
 }
 
 /** D7: the one PR behind every candidate, or why there is none. */

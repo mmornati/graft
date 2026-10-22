@@ -155,6 +155,27 @@ describe("guard comment", () => {
     }
   });
 
+  it("U-GCM-5 a repository prefix cannot be escaped with dot segments or encodings", () => {
+    const web = githubWebBase("https://api.github.com");
+    const repo = `${web}acme/app/`;
+    expect(safeHtmlUrl("https://github.com/acme/app/runs/123", repo)).toBe(
+      "https://github.com/acme/app/runs/123",
+    );
+    for (const bad of [
+      "https://github.com/acme/app/../../evil/repo/pull/1",
+      "https://github.com/acme/app/./../other/x",
+      "https://github.com/acme/app/%2e%2e/%2e%2e/evil/x",
+      "https://github.com/acme/app/%2E%2E/x",
+      "https://github.com/acme/app/..%2fevil",
+      "https://github.com/acme/app/%5c..%5cevil",
+      "https://GITHUB.com/acme/app/runs/1",
+      "https://github.com:443/acme/app/runs/1",
+      "https://github.com/acme/application/runs/1",
+    ]) {
+      expect(safeHtmlUrl(bad, repo), bad).toBeNull();
+    }
+  });
+
   it("U-GCM-4 confirmation off: no 'Confirmed by' line", () => {
     const body = renderGuardComment({ ...SAMPLE, confirmation: null });
     expect(body).toBe(expected(null, REPORT_LINE));

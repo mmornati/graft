@@ -70,8 +70,21 @@ export function githubWebBase(apiUrl: string): string {
  */
 export function safeHtmlUrl(url: string | null | undefined, webBase: string): string | null {
   if (typeof url !== "string" || url.length > 500) return null;
-  if (!url.startsWith(webBase)) return null;
   if (!/^https?:\/\/[A-Za-z0-9._~:/?#[\]!$&'*+,;=%-]+$/.test(url) || /[@()]/.test(url)) return null;
+  // A raw prefix check is not enough: `…/owner/repo/../../other` starts with the prefix but
+  // resolves elsewhere. Refuse encoded dots, slashes and backslashes, and anything the URL parser
+  // would rewrite (dot segments, case, default ports), then compare the PARSED origin and path.
+  if (/%2e|%2f|%5c/i.test(url)) return null;
+  let parsed: URL;
+  let base: URL;
+  try {
+    parsed = new URL(url);
+    base = new URL(webBase);
+  } catch {
+    return null;
+  }
+  if (parsed.href !== url) return null;
+  if (parsed.origin !== base.origin || !parsed.pathname.startsWith(base.pathname)) return null;
   return url;
 }
 

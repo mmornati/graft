@@ -15,6 +15,8 @@ import { guardTrackJob } from "./track.js";
 const SHA = z.string().regex(/^[0-9a-f]{40}$/);
 const FULL_NAME = z.string().regex(/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/);
 const ZERO_SHA = "0".repeat(40);
+/** GitHub lists at most this many branches in a `status` payload. */
+const STATUS_BRANCHES_CAP = 10;
 
 const repository = z.looseObject({
   id: z.number().int().positive(),
@@ -138,7 +140,11 @@ export const guardStatus = defineWebhookHandler({
     if (!ctx.config.guardDetection) return;
     const p = parsePayload(statusPayload, event, ctx.log);
     if (!p) return;
-    if (!p.branches.some((b) => b.name === p.repository.default_branch)) return;
+    // `branches` lists branches that CONTAIN the SHA, at most 10, so a full list may have cut the
+    // default branch (step 4 review 1, finding 3). It is only a hint: with 10 entries the job
+    // decides, since it keeps only SHAs on the tracked default branch (`not_on_default_branch`).
+    const named = p.branches.some((b) => b.name === p.repository.default_branch);
+    if (!named && p.branches.length < STATUS_BRANCHES_CAP) return;
     await observe(ctx, p, p.sha);
   },
 });

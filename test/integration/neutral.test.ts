@@ -41,6 +41,7 @@ import {
   HEAD_SHA,
   INSTALLATION_ID,
   makeCommit,
+  makePull,
   makeReview,
   OWNER,
   PR_NUMBER,
@@ -65,7 +66,11 @@ const TEAM_POLICY = EXAMPLE_POLICY.replace(
   "match: { author: agent, risk: sensitive }\n    require: { humans: 1, team: security }",
 );
 const OTHER_INSTALLATION = INSTALLATION_ID + 1;
-/** Phase 1 step 4: the default branch after PR 2 is merged (M) and one more commit (N). */
+/**
+ * Phase 1 step 4: the default branch after PR 3 (the guard scenario's own PR) is merged (M) and
+ * one more commit (N). PR 2 stays open for the break-glass scenario.
+ */
+const GUARD_PR = 3;
 const MERGE_SHA = fakeSha(0x4e01);
 const NEXT_SHA = fakeSha(0x4e02);
 const ACTIONS_APP = 15368;
@@ -376,21 +381,27 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
         .set({ policy_mode: "enforce", guard_mode: "enforce", mcp_write: "on" })
         .execute();
     }
-    // The pull request is merged last: the mode changes above re-evaluate open PRs only.
-    const merged = api.state.pulls.get(PR_NUMBER);
-    if (!merged) throw new Error("no pull");
-    // Phase 1 step 4 (T12): the guard. PR 2 is merged into main as M; CI was green on the
-    // parent (B2), is red on M, and red again on the next commit N. Both pushes and the check
-    // runs arrive as webhooks; the confirm job runs too.
-    merged.state = "closed";
-    merged.merged = true;
-    merged.merge_commit_sha = MERGE_SHA;
-    merged.merged_at = "2026-10-14T11:40:00Z";
-    merged.closed_at = "2026-10-14T11:40:00Z";
+    // Phase 1 step 4 (T12): the guard. Its own PR 3 is merged into main as M (PR 2 stays open for
+    // the break-glass scenario); CI was green on the parent (B2), is red on M, and red again on
+    // the next commit N. Both pushes and the check runs arrive as webhooks; the confirm job runs
+    // too. The guard scenario runs after the mode changes, which re-evaluate open PRs only.
+    api.state.pulls.set(
+      GUARD_PR,
+      makePull({
+        number: GUARD_PR,
+        node_id: `PR_fake${GUARD_PR}`,
+        state: "closed",
+        merged: true,
+        merge_commit_sha: MERGE_SHA,
+        merged_at: "2026-10-14T11:40:00Z",
+        closed_at: "2026-10-14T11:40:00Z",
+        head: { sha: fakeSha(0x4e03) },
+      }),
+    );
     api.state.history.set(B2, { parents: [] });
     api.state.history.set(MERGE_SHA, { parents: [B2] });
     api.state.history.set(NEXT_SHA, { parents: [MERGE_SHA] });
-    api.state.commitPulls.set(MERGE_SHA, [PR_NUMBER]);
+    api.state.commitPulls.set(MERGE_SHA, [GUARD_PR]);
     const ciRun = (sha: string, conclusion: string) => {
       const id = api.state.nextId++;
       api.state.checkRuns.push({
@@ -419,6 +430,8 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await pushMain("n-guard-merge", B2, MERGE_SHA);
     ciRun(NEXT_SHA, "failure");
     api.state.branches.set("main", NEXT_SHA);
+    // N keeps the team policy: the break-glass scenario after this one evaluates against it.
+    putContent(api, NEXT_SHA, `${TEAM_POLICY}\n# tightened\n`);
     await pushMain("n-guard-next", MERGE_SHA, NEXT_SHA);
     await post("check_run.completed", "n-guard-run", (p) => {
       const run = p.check_run as { head_sha: string; check_suite: { head_sha: string } };
@@ -566,7 +579,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       c.body.startsWith("<!-- graft:guard-event "),
     );
     expect(guardComments).toHaveLength(1);
-    expect(guardComments[0]?.issue_number).toBe(PR_NUMBER);
+    expect(guardComments[0]?.issue_number).toBe(GUARD_PR);
     expect(guardComments[0]?.body.split("\n")[0]).toBe(`<!-- graft:guard-event ${rows[0]?.id} -->`);
     // Report mode in the default profile; enforce (effective) in max, which only changes the line.
     expect(guardComments[0]?.body.split("\n").at(-1)).toBe(
@@ -766,13 +779,6 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     breakGlass.refusedFrom = refused.length;
     const pull = api.state.pulls.get(PR_NUMBER);
     if (!pull) throw new Error("no pull");
-    // The step 4 guard scenario merged PR 2 earlier in this suite; break-glass needs an open PR,
-    // so it is reopened here with times after that merge (the change row then takes them).
-    pull.state = "open";
-    pull.merged = false;
-    pull.merge_commit_sha = null;
-    pull.merged_at = null;
-    pull.closed_at = null;
     breakGlass.labelledHead = pull.head.sha;
     api.state.permissions.set("maya", { id: 701, role: "maintain" });
     api.state.permissions.set("tom", { id: 702, role: "triage" });
@@ -818,6 +824,28 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       p.after = breakGlass.nextHead;
     });
     await labelAction("unlabeled", "maya", 701);
+    // The precondition: break-glass bypasses the team policy that the default branch's tip
+    // serves, not a missing file (step 4 review 1, finding 1).
+    const evaluated = await t.db
+      .selectFrom("policy_verdicts")
+      .selectAll()
+      .where((eb) =>
+        eb.or([
+          eb("enforced_reason", "=", "break_glass"),
+          eb("head_sha", "=", breakGlass.nextHead),
+        ]),
+      )
+      .execute();
+    expect(evaluated.filter((v) => v.enforced_reason === "break_glass").length).toBeGreaterThan(0);
+    expect(evaluated.filter((v) => v.head_sha === breakGlass.nextHead).length).toBeGreaterThan(0);
+    for (const v of evaluated) {
+      expect(v, v.head_sha).toMatchObject({
+        policy_status: "ok",
+        policy_commit_sha: NEXT_SHA,
+        outcome: "would_require",
+        required: { constraints: [expect.objectContaining({ teamCount: 1 })] },
+      });
+    }
   };
   const scenarioWrites = () =>
     api.requests.slice(breakGlass.from).filter((r) => r.method !== "GET" && r.method !== "HEAD");

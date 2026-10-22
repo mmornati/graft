@@ -19,7 +19,9 @@ Spec: [phase-1/step-4-guard-detection.md](../phase-1/step-4-guard-detection.md).
 
 `cancelled` is ignored because `cancel-in-progress` cancels superseded runs on a busy branch: counting it as red would blame innocent merges.
 
-A check is identified by its source: `run:<app id>:<name>` for a check run (the same name from another app is another check) and `status:<context>` for a status.
+A check is identified by its source: `run:<app id>:<name>` for a check run (the same name from another app is another check) and `status:<context>` for a status. When one check has several runs, the latest completed run wins inside one check suite (a re-run). Across check suites (two workflows with a job of the same name) a red run wins, so a later green run elsewhere cannot hide a failure.
+
+The `status` event's branch list only names up to 10 branches that contain the commit, so a full list without the default branch still schedules an observe; the job keeps only commits on the default branch.
 
 ## The culprit rule
 
@@ -44,13 +46,17 @@ flowchart LR
 
 Several checks going red on the same commit are one event. A check that goes red later while an event is open for the same culprit joins that event.
 
+Results arrive in any order. If a candidate's CI finishes later than the failing commit's and turns out green, the open event narrows to the commits after it (so two candidates can become one culprit). If it turns out red, the event moves to that earlier commit.
+
 ## Confirmation
 
 On by default (`GRAFT_GUARD_CONFIRM=on`). A new event starts as `confirming` and is settled when:
 
 1. the next commit is red on one of the event's checks: confirmed;
 2. every failing check is green again, on N (a re-run) or on the next commit: **flaky**, and nothing else happens;
-3. the window (`GRAFT_GUARD_CONFIRM_SECONDS`, 2 hours by default) has passed and a failing check is still red on N: confirmed. A `guard.confirm` job runs at the deadline, so a quiet repository is still settled.
+3. the window (`GRAFT_GUARD_CONFIRM_SECONDS`, 2 hours by default) has passed and a failing check is still red on N: confirmed. A `guard.confirm` job runs a minute after the deadline, so a quiet repository is still settled.
+
+An event still undecided then (for example its re-run ended `cancelled`, so the check is neither red nor green) is examined twice more, a window apart. If it is still undecided at the last attempt, the failure did not persist: the event settles as **flaky** with no reason, and nothing is written.
 
 With `GRAFT_GUARD_CONFIRM=off` the outcome is final at detection.
 
@@ -84,6 +90,10 @@ guard:
 
 When present, only these check names and status contexts (exact, case-sensitive) can open an event. The list is read from `graft.yaml` at the **last green commit before the candidates**, never from the failing commit, so a pull request cannot remove its own failing check from the list. A missing or invalid file there means every check counts. See [graft.yaml](../graft-yaml.md#keys).
 
+## The trust boundary
+
+The guard detects breakage; it is **not** a control against a hostile merge. A merged pull request controls the CI that judges it: it can change its own tests or workflows, and a workflow running on `main` with the default token can post check runs or statuses on other commits. Such a change can hide its own failure (a later green on N makes the event `flaky`, a red on the commit before makes `main` "already red"). The routes found so far hide a failure; none was found that makes Graft blame another pull request in report mode. Reading `guard.checks` from the baseline and letting red win across check suites close the cheapest routes, not every route. Step 5 revisits this in its threat model before a confirmed culprit can become a revert.
+
 ## `graft guard list`
 
 ```sh
@@ -103,7 +113,7 @@ One line per event, newest first:
 ## Switches and retention
 
 - `GRAFT_GUARD_DETECTION=off` stops the guard: the handlers drop every event and the jobs and crons do nothing.
-- `main_commits` and `ci_results` rows older than `GRAFT_GUARD_RETENTION_DAYS` (30) are deleted by the daily `guard.prune` cron, except the commits an open event still refers to. `pnpm graft pilot purge` deletes both tables with the installation.
+- `main_commits` and `ci_results` rows older than `GRAFT_GUARD_RETENTION_DAYS` (30) are deleted by the daily `guard.prune` cron, except the commits an open event still refers to and each repository's newest commit (so a quiet repository's next merge still has a green baseline). `pnpm graft pilot purge` deletes both tables with the installation.
 
 ## What step 5 adds
 

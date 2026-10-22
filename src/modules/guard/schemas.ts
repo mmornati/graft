@@ -13,8 +13,20 @@ export const observeSchema = z.object({
 });
 export type ObserveData = z.infer<typeof observeSchema>;
 
-export const confirmSchema = z.object({ eventId: z.uuid() });
+/**
+ * `attempt` (step 4 review 1, finding 4): 0 or absent for the first run at the deadline; an event
+ * still undecided is re-sent as attempt 1, then 2, each with its own key
+ * (`guard:confirm:<id>:<attempt>`), and the last attempt settles it.
+ */
+export const confirmSchema = z.object({
+  eventId: z.uuid(),
+  attempt: z.number().int().min(0).max(10).optional(),
+});
 export type ConfirmData = z.infer<typeof confirmSchema>;
+
+/** The singleton key of one `guard.confirm` attempt; attempt 0 keeps the step 4 key. */
+export const confirmKey = (eventId: string, attempt: number): string =>
+  attempt === 0 ? `guard:confirm:${eventId}` : `guard:confirm:${eventId}:${attempt}`;
 
 /**
  * D12: one `guard.observe` per repository, commit and window. The window is the observe delay
