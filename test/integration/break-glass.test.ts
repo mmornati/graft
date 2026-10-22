@@ -783,6 +783,19 @@ describe("break-glass and audit log (integration)", () => {
         ["ignored", "actor_unknown", null],
       ]);
       expect(roleReads()).toEqual([]);
+
+      // Even when the delivery's user is the one who labelled before: the newest listed event is
+      // the unlabel, so the older `labeled` event is never used.
+      api.state.issueEventsLag = 0;
+      api.state.issueEvents.set(PR_NUMBER, []);
+      label(MAYA);
+      unlabel(MAYA);
+      label(MAYA);
+      api.state.issueEventsLag = 1;
+      expect(await runLabeled({ by: MAYA })).toMatch(/published|unchanged/);
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect(await auditRows()).toHaveLength(1);
+      expect(roleReads()).toEqual([]);
     });
 
     it("I-BG-17 R3-A2: the delivery's actor is not the newest labeller the API lists → ignored actor_unknown, no role read", async () => {
