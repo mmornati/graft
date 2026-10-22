@@ -26,6 +26,7 @@ export {
   type AuditRole,
   type AuditRow,
   activeBreakGlass,
+  activeBreakGlassForChange,
   countAppliedSince,
   insertAuditRow,
   latestAuditForHead,

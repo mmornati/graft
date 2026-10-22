@@ -26,6 +26,8 @@ Things only a person can do. The developer agent never ticks these. Each item na
 - [ ] **On a sandbox PR in enforce mode:** label as a maintainer → `success`; push → back to the normal conclusion; label as a triage user → ignored. Then run `pnpm graft audit list --repo …` and check all three rows. Who: repo owner.
 - [ ] **Check the issue events API on a real PR** (T1 could not, offline): the `labeled` event's `actor` is the person who added the label, events are listed oldest first, and the installation token can read them with `issues: read` / `pull_requests: read`. Who: operator.
 - [ ] **Run the step 3 manual smoke test** against a real or tunnelled App (not run by the developer agent). Who: operator.
+- [ ] **Measure how late the issue events API lists a label change** (step 3 review 1, finding 1): add and remove the label a few times and note how long after each webhook the `labeled` / `unlabeled` event appears in `GET /issues/{n}/events`. Graft retries a label run for about 15 minutes (5 retries, backoff from 30 s); if the lag is longer, the label is ignored as `actor_unknown`. Also check whether the response carries `Link: rel="last"` (review 1, nit 8: reading the newest page first). Who: operator.
+- [ ] **On the sandbox PR, check the review 1 cases:** a maintainer labels (success), a triage user removes and re-adds the label (normal conclusion, a `removed` row for the removal and an `ignored` row for the triage user); push and push the labelled commit back (normal conclusion). Who: repo owner.
 
 ## Step 4: guard detection
 

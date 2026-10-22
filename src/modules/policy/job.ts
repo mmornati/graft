@@ -10,7 +10,7 @@
  */
 import type { Transaction } from "kysely";
 import { z } from "zod";
-import type { JobContext } from "../../core/context.js";
+import { canRetry, type JobContext } from "../../core/context.js";
 import { GlobBudget } from "../../core/glob.js";
 import { withChangeLock } from "../../db/locks.js";
 import type { Database } from "../../db/schema.js";
@@ -41,7 +41,7 @@ import { latestPublishedCard } from "../intent/index.js";
 import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
 import { resolveApprovers } from "./approvals.js";
-import { type BreakGlassFacts, resolveBreakGlass } from "./break-glass.js";
+import { type BreakGlassFacts, type BreakGlassState, resolveBreakGlass } from "./break-glass.js";
 import { buildFacts, listChangedPaths, listReviews } from "./facts.js";
 import {
   type BreakGlassView,
@@ -98,6 +98,17 @@ export const evaluateSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{40}$/)
     .optional(),
+  /**
+   * Step 3 review 1 (finding 1): the user id of the `labeled` delivery, set with
+   * `breakGlassHeadSha`. A filter only: the newest label event (API data) must be a `labeled` one
+   * by this user, or nothing is applied. The actor, login and role still come from the API.
+   */
+  breakGlassActorId: z.number().int().positive().optional(),
+  /**
+   * Step 3 review 1 (finding 2): set for an `unlabeled` delivery of the break-glass label. A
+   * refusal only: it ends an active break-glass of the change, whatever `pulls.get` shows now.
+   */
+  breakGlassUnlabeled: z.literal(true).optional(),
 });
 export type EvaluateData = z.infer<typeof evaluateSchema>;
 
@@ -253,7 +264,22 @@ export async function evaluatePolicyJobRun(
     return false;
   };
 
+  /**
+   * Review 1, finding 4: a run queued by the break-glass label that ends `stale` before it wrote
+   * its audit row would drop the request silently (the next run is not the label's trigger). Send
+   * it again with its filters, once per delivery; they only refuse, so a re-run grants nothing new.
+   */
+  const resendLabelRun = async (headSha: string): Promise<void> => {
+    if (data.breakGlassHeadSha === undefined || config.breakGlassLabel === null) return;
+    const stored = await getChange(ctx.db, change.id);
+    if (stored?.head_sha !== headSha) return;
+    await ctx.queue.send(policyEvaluateJob, data, {
+      singletonKey: `policy:breakglass:${change.id}:${headSha}:${data.deliveryId ?? "none"}`,
+    });
+  };
+
   if (!applied && !(change.head_sha === pull.head.sha && (await catchUp()))) {
+    await resendLabelRun(pull.head.sha);
     return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
   }
   if (pull.state === "closed") return done("closed", { changeId: change.id });
@@ -366,7 +392,7 @@ export async function evaluatePolicyJobRun(
   }
 
   // 4b. Break-glass (step 3, §6): only when the feature is on. Outside the lock; it writes nothing.
-  let breakGlass: BreakGlassFacts = { state: "none" };
+  let breakGlass: BreakGlassFacts = { state: "none", revoke: null };
   if (config.breakGlassLabel !== null) {
     try {
       breakGlass = await resolveBreakGlass(octokit, ctx.db, {
@@ -379,6 +405,9 @@ export async function evaluatePolicyJobRun(
         labels: (pull.labels ?? []).map((l) => l.name),
         authorId: pull.user?.id ?? null,
         breakGlassHeadSha: data.breakGlassHeadSha,
+        breakGlassActorId: data.breakGlassActorId,
+        breakGlassUnlabeled: data.breakGlassUnlabeled,
+        canRetry: canRetry(ctx),
       });
     } catch (err) {
       throw toJobError(err, "break-glass");
@@ -428,21 +457,44 @@ export async function evaluatePolicyJobRun(
   });
 
   /**
-   * The audit row this evaluation calls for (§6 step 4, D7, D9), in the caller's transaction. The
-   * store applies the dedup rules; replayed states (`record: false`) write nothing.
+   * The audit rows this evaluation calls for (§6 step 4, D7, D9), in the caller's transaction: the
+   * `removed` row of a bypass it ended (review 1), then the state's own row. The store applies the
+   * dedup rules; replayed states (`record: false`) write nothing. A row written after a `removed`
+   * one is stamped 1 ms later, so that the removal (which ends every earlier or simultaneous
+   * `applied` row of the change) never ends the bypass verified in the same run.
    */
   const recordAudit = async (tx: Transaction<Database>): Promise<boolean> => {
-    const row = auditRowFor(breakGlass);
-    if (row === null) return false;
-    return insertAuditRow(tx, {
-      ...row,
+    const common = {
       repositoryId: data.repositoryId,
       changeId: change.id,
       prNumber: data.prNumber,
-      headSha,
       policyMode: modes.policy.effective,
-      createdAt: ctx.clock.now(),
+    };
+    const at = ctx.clock.now();
+    let wrote = false;
+    const revoke = breakGlass.revoke;
+    if (revoke !== null) {
+      wrote = await insertAuditRow(tx, {
+        ...common,
+        headSha: revoke.headSha,
+        kind: "removed",
+        reason: null,
+        actor: revoke.actor,
+        role: null,
+        self: false,
+        labelEventAt: revoke.labelEventAt,
+        createdAt: at,
+      });
+    }
+    const row = auditRowFor(breakGlass);
+    if (row === null) return wrote;
+    const own = await insertAuditRow(tx, {
+      ...common,
+      ...row,
+      headSha,
+      createdAt: revoke === null ? at : new Date(at.getTime() + 1),
     });
+    return own || wrote;
   };
   // A newly verified break-glass whose run lost the race to a later evaluation (below).
   let auditWrittenWhileStale = false;
@@ -596,8 +648,12 @@ export async function evaluatePolicyJobRun(
   });
 
   let result: Exclude<PolicyOutcomeResult, "closed" | "skipped">;
+  // Whether this run's audit rows were written (or found already there) in a committed transaction.
+  let auditCommitted = false;
   try {
-    result = (await publish) ?? "stale";
+    const r = await publish;
+    auditCommitted = r !== null;
+    result = r ?? "stale";
   } catch (err) {
     if (!(err instanceof ModeChangedDuringEvaluation)) throw err;
     ctx.log.info(
@@ -606,6 +662,8 @@ export async function evaluatePolicyJobRun(
     );
     result = "stale";
   }
+  // Review 1, finding 4: out of date, or rolled back by a mode change, before the row was written.
+  if (!auditCommitted) await resendLabelRun(headSha);
 
   // Step 3: a break-glass row written by a run that lost the race is shown by a new evaluation.
   if (auditWrittenWhileStale) {
@@ -734,7 +792,7 @@ export interface BreakGlassHashTerm {
   headSha: string;
 }
 
-export function breakGlassHashTerm(b: BreakGlassFacts, headSha: string): BreakGlassHashTerm {
+export function breakGlassHashTerm(b: BreakGlassState, headSha: string): BreakGlassHashTerm {
   switch (b.state) {
     case "applied":
     case "ignored":
@@ -742,13 +800,13 @@ export function breakGlassHashTerm(b: BreakGlassFacts, headSha: string): BreakGl
     case "stale":
       return { state: "stale", actorId: null, headSha };
     default:
-      // `removed` returns the check to normal: the same term as no break-glass at all.
+      // A bypass that ended returns the check to normal: the same term as no break-glass at all.
       return { state: "none", actorId: null, headSha };
   }
 }
 
 /** What the rendering shows (§7); `removed` and `none` show nothing. */
-function breakGlassView(b: BreakGlassFacts): BreakGlassView | null {
+function breakGlassView(b: BreakGlassState): BreakGlassView | null {
   switch (b.state) {
     case "applied":
       return {
@@ -775,10 +833,13 @@ function breakGlassView(b: BreakGlassFacts): BreakGlassView | null {
   }
 }
 
-/** The audit row fields a state calls for, or null (D7, D9). */
+/** The audit row fields a state calls for, or null (D7). Removals come from `revoke`. */
 function auditRowFor(
-  b: BreakGlassFacts,
-): Pick<NewAuditRow, "kind" | "reason" | "actor" | "role" | "self" | "labelEventAt"> | null {
+  b: BreakGlassState,
+): Pick<
+  NewAuditRow,
+  "kind" | "reason" | "actor" | "role" | "self" | "labelEventAt" | "labelEventId"
+> | null {
   switch (b.state) {
     case "applied":
       return b.record
@@ -789,6 +850,7 @@ function auditRowFor(
             role: b.role,
             self: b.self,
             labelEventAt: b.labelEventAt,
+            labelEventId: b.labelEventId,
           }
         : null;
     case "ignored":
@@ -813,15 +875,6 @@ function auditRowFor(
             labelEventAt: null,
           }
         : null;
-    case "removed":
-      return {
-        kind: "removed",
-        reason: null,
-        actor: b.actor,
-        role: null,
-        self: false,
-        labelEventAt: b.labelEventAt,
-      };
     default:
       return null;
   }

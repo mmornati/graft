@@ -2,8 +2,12 @@
  * The audit log (Phase 1 step 3, spec §5, D6 to D8). Append-only: this file inserts and reads,
  * never updates or deletes (only `pilot purge` deletes, through the cascade from `repositories`).
  *
- * "Later" between two rows of the same (change, head) compares `created_at`; on a tie a `removed`
- * row counts as later than an `applied` one, so an ambiguous order never keeps a bypass alive.
+ * "Later" between two rows of a change compares `created_at`; on a tie a `removed` row counts as
+ * later than an `applied` one, so an ambiguous order never keeps a bypass alive.
+ *
+ * Review 1 (finding 2): a `removed` row ends every `applied` row of the CHANGE written at or before
+ * it, whatever head either was written for. A bypass that ended stays ended, even when the PR
+ * goes back to the commit it was verified on.
  */
 import { type Selectable, sql, type Transaction } from "kysely";
 import type { Db } from "../../db/client.js";
@@ -29,23 +33,17 @@ export interface NewAuditRow {
   self: boolean;
   policyMode: "report" | "enforce";
   labelEventAt: Date | null;
+  /** The issue event id an `applied` row was verified from (review 1); null otherwise. */
+  labelEventId?: number | null;
   createdAt: Date;
 }
 
-/**
- * The `applied` row that makes a break-glass active for (change, head) (D6, D8): the latest
- * `applied` row with no `removed` row at or after it. Undefined when there is none.
- */
-export async function activeBreakGlass(
-  ex: Executor,
-  changeId: string,
-  headSha: string,
-): Promise<AuditRow | undefined> {
+/** `applied` rows of a change that no `removed` row of the change, at or after them, has ended. */
+function activeRows(ex: Executor, changeId: string) {
   return ex
     .selectFrom("audit_log as a")
     .selectAll("a")
     .where("a.change_id", "=", changeId)
-    .where("a.head_sha", "=", headSha)
     .where("a.kind", "=", "applied")
     .where((eb) =>
       eb.not(
@@ -54,20 +52,42 @@ export async function activeBreakGlass(
             .selectFrom("audit_log as r")
             .select(sql<number>`1`.as("one"))
             .whereRef("r.change_id", "=", "a.change_id")
-            .whereRef("r.head_sha", "=", "a.head_sha")
             .where("r.kind", "=", "removed")
             .whereRef("r.created_at", ">=", "a.created_at"),
         ),
       ),
     )
     .orderBy("a.created_at", "desc")
-    .limit(1)
-    .executeTakeFirst();
+    .limit(1);
+}
+
+/**
+ * The `applied` row that makes a break-glass active for (change, head) (D6, D8): the latest
+ * `applied` row for that head with no `removed` row of the change at or after it. Undefined when
+ * there is none.
+ */
+export async function activeBreakGlass(
+  ex: Executor,
+  changeId: string,
+  headSha: string,
+): Promise<AuditRow | undefined> {
+  return activeRows(ex, changeId).where("a.head_sha", "=", headSha).executeTakeFirst();
+}
+
+/**
+ * The newest active `applied` row of the change, for any head (review 1). The job ends it when
+ * it is for another head than the current one (a push ends the bypass, finding 3).
+ */
+export async function activeBreakGlassForChange(
+  ex: Executor,
+  changeId: string,
+): Promise<AuditRow | undefined> {
+  return activeRows(ex, changeId).executeTakeFirst();
 }
 
 /**
  * D8, for the post-merge guard (step 5): was this change merged under break-glass? True when an
- * `applied` row exists for its final head with no later `removed` row.
+ * `applied` row exists for its final head with no later `removed` row of the change (any head).
  */
 export async function mergedUnderBreakGlass(
   ex: Executor,
@@ -97,19 +117,21 @@ export async function latestAuditForHead(
 /**
  * Insert one row, with the D7 rules; returns whether a row was written. Call it inside the change
  * lock (every writer of a change's rows holds it), so the checks below cannot race:
- * - `applied`: never a second one while one is active for (change, head);
- * - `removed`: only while one is active (the label taken off while applied);
+ * - `applied`: never while one is active for the change (the job writes `removed` first);
+ * - `removed`: only while one is active for its head (the head of the bypass it ends);
  * - `ignored`: at most one per (change, head, actor), the unknown actor included;
  * - `stale`: at most one per (change, head).
- * The partial unique indexes back the last two (`ON CONFLICT DO NOTHING`).
+ * The partial unique indexes back the last two (`ON CONFLICT DO NOTHING`); since 0012 the
+ * `ignored` one treats the unknown actor (NULL) as one actor too.
  */
 export async function insertAuditRow(
   tx: Transaction<Database>,
   row: NewAuditRow,
 ): Promise<boolean> {
-  const active = await activeBreakGlass(tx, row.changeId, row.headSha);
-  if (row.kind === "applied" && active) return false;
-  if (row.kind === "removed" && !active) return false;
+  if (row.kind === "applied" && (await activeBreakGlassForChange(tx, row.changeId))) return false;
+  if (row.kind === "removed" && !(await activeBreakGlass(tx, row.changeId, row.headSha))) {
+    return false;
+  }
   if (row.kind === "ignored" || row.kind === "stale") {
     let q = tx
       .selectFrom("audit_log")
@@ -140,6 +162,7 @@ export async function insertAuditRow(
       self: row.self,
       policy_mode: row.policyMode,
       label_event_at: row.labelEventAt,
+      label_event_id: row.labelEventId ?? null,
       created_at: row.createdAt,
     })
     .onConflict((oc) => oc.doNothing())

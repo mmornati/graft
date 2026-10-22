@@ -794,6 +794,8 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       pull.updated_at = at;
       await post("pull_request.labeled.break-glass", `n-bg-${eventId}`, (p) => {
         p.action = action;
+        // The signed sender (review 1): the job uses its id only as a refuse-only filter.
+        p.sender = { login, id, type: "User" };
         const pr = p.pull_request as { head: { sha: string }; updated_at: string };
         pr.head.sha = pull.head.sha;
         pr.updated_at = at;
@@ -844,11 +846,13 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       }
       expect(gateCalls.slice(breakGlass.gateFrom)).toEqual([]);
       expect(refused.slice(breakGlass.refusedFrom).map((e) => e.message)).toEqual([]);
-      // Recorded in report mode: the triage label ignored, the maintainer's applied, in report.
+      // Recorded in report mode: the triage label ignored, the maintainer's applied and ended.
       const rows = await scenarioAudit();
       expect(rows.map((r) => [r.kind, r.reason, r.actor_login, r.policy_mode])).toEqual([
         ["applied", null, "maya", "report"],
         ["ignored", "role_too_low", "tom", "report"],
+        // Review 1 (finding 3): the push ended the bypass, for the labelled head, with no actor.
+        ["removed", null, null, "report"],
       ]);
       expect(rows.every((r) => r.head_sha === breakGlass.labelledHead)).toBe(true);
       // What enforce would have said for the labelled head: bypassed.
@@ -911,6 +915,8 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       expect(rows.map((r) => [r.kind, r.reason, r.actor_login, r.policy_mode])).toEqual([
         ["applied", null, "maya", "enforce"],
         ["ignored", "role_too_low", "tom", "enforce"],
+        // Review 1 (finding 3): the push ended the bypass, for the labelled head, with no actor.
+        ["removed", null, null, "enforce"],
       ]);
     });
   }

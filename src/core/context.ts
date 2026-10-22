@@ -17,6 +17,16 @@ export interface JobContext {
   config: Config;
   llm: LlmClient;
   signals: Signals;
+  /**
+   * The attempt the worker is running: pg-boss's `retryCount` (0 on the first run) and the
+   * queue's `retryLimit`. Absent outside the worker (direct calls, tests): treat as the last one.
+   */
+  attempt?: { retryCount: number; retryLimit: number };
+}
+
+/** True when a retryable failure of this run will be tried again by the queue. */
+export function canRetry(ctx: Pick<JobContext, "attempt">): boolean {
+  return ctx.attempt !== undefined && ctx.attempt.retryCount < ctx.attempt.retryLimit;
 }
 
 export interface AppDeps extends JobContext {
