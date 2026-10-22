@@ -1006,6 +1006,37 @@ describe("guard: detection and confirmation", () => {
     ]);
   });
 
+  it("I-GRD-17b more check runs than the pages read: the commit's results are ignored, so a dropped red never makes it a green baseline", async () => {
+    history(3);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    await track(C(3), null);
+    run(C(1), "test", "success");
+    await observe(C(1));
+    // C2: the red run is listed last (oldest), behind 550 others and a later green decoy in
+    // another suite, so the five pages read never reach it.
+    run(C(2), "test", "failure", { suite: 1 });
+    for (let i = 0; i < 550; i++) run(C(2), `job-${i}`, "success", { suite: 2 });
+    run(C(2), "test", "success", { suite: 3, at: new Date(now.getTime() + 4000) });
+    api.state.checkRunsPageSize = 100;
+    await observe(C(2));
+    expect(await events()).toEqual([]);
+    advance(60);
+    run(C(3), "test", "failure");
+    await observe(C(3));
+    // Not "culprit PR 8": C2 is no baseline, so the event reaches back to C1 and names both PRs.
+    const [e] = await events();
+    expect(e).toMatchObject({
+      failing_sha: C(3),
+      last_green_sha: C(1),
+      culprit_change_id: null,
+      candidates: [
+        { sha: C(2), prNumber: 7, kind: "pr" },
+        { sha: C(3), prNumber: 8, kind: "pr" },
+      ],
+    });
+  });
+
   it("I-GRD-17 a decoy: a later green run of the same key in another check suite does not hide the red one", async () => {
     history(2);
     mergedPull(7, C(2));

@@ -84,6 +84,7 @@ async function readCheckRuns(
 ): Promise<ObservedResult[]> {
   // key -> check suite -> the latest result of that key in that suite.
   const byKey = new Map<string, Map<number | null, ObservedResult>>();
+  let complete = false;
   for (let page = 1; page <= RUN_PAGES; page++) {
     let data: Awaited<ReturnType<GitHubClient["rest"]["checks"]["listForRef"]>>["data"];
     try {
@@ -126,9 +127,12 @@ async function readCheckRuns(
       const prev = suites.get(suite);
       if (!prev || isLater(result, prev)) suites.set(suite, result);
     }
-    if (data.check_runs.length < 100 || page * 100 >= data.total_count) break;
+    if (data.check_runs.length < 100 || page * 100 >= data.total_count) {
+      complete = true;
+      break;
+    }
   }
-  return [...byKey.values()].map((suites) => {
+  const results = [...byKey.values()].map((suites) => {
     // Step 4 review 1, finding 7: one key in several check suites (a second workflow with a job
     // of the same name) is not a re-run. Red wins there, so a later green decoy in another suite
     // cannot hide a failure; otherwise the latest result wins as in D4.
@@ -137,6 +141,16 @@ async function readCheckRuns(
     const pool = red.length > 0 ? red : all;
     return pool.reduce((best, r) => (isLater(r, best) ? r : best));
   });
+  if (complete) return results;
+  // More runs than the pages read (re-runs count with `filter: "all"`). A run left unread may be
+  // the red one that wins across suites, or a later re-run in the same suite, so no result read
+  // here can be trusted as green or as red: every key is `ignored` on this commit, which can widen
+  // a later event's candidates or miss this commit's failure, never blame the wrong PR (PR #30).
+  ctx.log.warn(
+    { sha: o.sha, read: RUN_PAGES * 100 },
+    "guard check runs truncated; the commit's results are ignored",
+  );
+  return results.map((r) => ({ ...r, class: "ignored" }));
 }
 
 /** D4: `a` replaces `b` when it completed strictly later (a run not completed never replaces). */
