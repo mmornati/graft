@@ -79,11 +79,14 @@ export function parseWriterOutput(
   };
 }
 
+export const CLAIM_VERDICTS = ["supported", "unsupported", "contradicted", "unverifiable"] as const;
+export type ClaimVerdict = (typeof CLAIM_VERDICTS)[number];
+
 const verifierSchema = z.strictObject({
   claims: z.array(
     z.strictObject({
       id: z.string(),
-      verdict: z.enum(["supported", "unsupported", "contradicted"]),
+      verdict: z.enum(CLAIM_VERDICTS),
       reason: trimmed(300),
     }),
   ),
@@ -101,7 +104,7 @@ const verifierSchema = z.strictObject({
 });
 
 export interface VerifierOutput {
-  claims: { id: string; verdict: "supported" | "unsupported" | "contradicted"; reason: string }[];
+  claims: { id: string; verdict: ClaimVerdict; reason: string }[];
   missing: string[];
   unexplained: string[];
   riskClass: RiskClass;

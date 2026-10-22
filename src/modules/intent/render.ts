@@ -127,7 +127,7 @@ function warningBlock(v: CardResult, maxBullets: number): string[] {
     const idx = new Map(v.verifier.claims.map((c) => [c.id, claimIndex(c.id)] as const));
     const bullets: string[] = [];
     for (const c of v.verifier.claims) {
-      if (c.verdict === "supported") continue;
+      if (c.verdict === "supported" || c.verdict === "unverifiable") continue;
       bullets.push(`- ${LABEL_FOR_KIND(c, idx)} is ${c.verdict}: ${escapeProse(c.reason, 300)}`);
     }
     for (const m of v.verifier.missing) {
@@ -154,6 +154,25 @@ function warningBlock(v: CardResult, maxBullets: number): string[] {
   return [];
 }
 
+/** Claims that lean on code the verifier was not shown: a note, not a disagreement. */
+function uncheckedBlock(v: CardResult, maxBullets: number): string[] {
+  if (v.verifier.status === "error") return [];
+  const unchecked = v.verifier.claims.filter((c) => c.verdict === "unverifiable");
+  if (unchecked.length === 0) return [];
+  const idx = new Map(v.verifier.claims.map((c) => [c.id, claimIndex(c.id)] as const));
+  const bullets = unchecked.map(
+    (c) => `- ${LABEL_FOR_KIND(c, idx)} could not be checked: ${escapeProse(c.reason, 300)}`,
+  );
+  const shown = bullets.slice(0, maxBullets);
+  if (bullets.length > shown.length) shown.push(`- …and ${bullets.length - shown.length} more`);
+  return [
+    "> [!NOTE]",
+    "> **Some claims depend on code the verifier was not shown.** They do not count as a disagreement; check that code if they matter.",
+    ">",
+    ...shown.map((b) => `> ${b}`),
+  ];
+}
+
 function inputsLine(v: CardResult): string {
   const i = v.inputs;
   let line = "Inputs: PR title and description";
@@ -171,13 +190,14 @@ function inputsLine(v: CardResult): string {
 function detailsBlock(v: CardResult): string[] {
   const claims = v.verifier.claims;
   const supported = claims.filter((c) => c.verdict === "supported").length;
+  const unchecked = claims.filter((c) => c.verdict === "unverifiable").length;
   let writerLine = `Writer ${codeSpan(v.models.writer ?? "unknown")}`;
   if (v.models.firstPass !== null)
     writerLine += ` (after a first pass by ${codeSpan(v.models.firstPass)})`;
   writerLine +=
     v.verifier.status === "error"
       ? "; verifier unavailable"
-      : `; verifier ${codeSpan(v.models.verifier ?? "unknown")} supported ${supported} of ${claims.length} claims`;
+      : `; verifier ${codeSpan(v.models.verifier ?? "unknown")} supported ${supported} of ${claims.length} claims${unchecked > 0 ? ` (${unchecked} could not be checked)` : ""}`;
   return [
     "<details><summary>How this card was made</summary>",
     "",
@@ -227,6 +247,8 @@ function renderOk(
   }
   const warning = warningBlock(v, o.maxBullets);
   if (warning.length > 0) lines.push(...warning, "");
+  const unchecked = uncheckedBlock(v, o.maxBullets);
+  if (unchecked.length > 0) lines.push(...unchecked, "");
   if (o.details) lines.push(...detailsBlock(v), "");
   lines.push(
     `Card ${code(v.id.slice(0, 8))} · head ${code(sha7(v.headSha))} · Rate this card with 👍 or 👎 on this comment, or with the buttons on the ${code(INTENT_CHECK_NAME)} check.`,

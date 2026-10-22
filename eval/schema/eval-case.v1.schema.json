@@ -294,6 +294,12 @@
                   "string",
                   "null"
                 ]
+              },
+              "headText": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [

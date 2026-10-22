@@ -341,4 +341,42 @@ ${tail}`;
     );
     expect(out).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
+
+  it("U-IREN-11 unverifiable claims show a note, not the warning, and are counted in the details", () => {
+    const claims = okView().verifier.claims.map((c) =>
+      c.id === "b1"
+        ? {
+            ...c,
+            verdict: "unverifiable" as const,
+            reason: "Depends on how src/queue.ts schedules retries, which was not shown.",
+          }
+        : { ...c, verdict: "supported" as const },
+    );
+    const v = okView({
+      verifier: { status: "agree", claims, missing: [], unexplained: [], failure: null },
+    });
+    const out = renderIntentSection(v, no);
+    expect(out).not.toContain("[!WARNING]");
+    expect(out).toContain(
+      [
+        "> [!NOTE]",
+        "> **Some claims depend on code the verifier was not shown.** They do not count as a disagreement; check that code if they matter.",
+        ">",
+        "> - Behavior change 1 could not be checked: Depends on how src/queue.ts schedules retries, which was not shown.",
+      ].join("\n"),
+    );
+    expect(out).toContain("supported 3 of 4 claims (1 could not be checked)");
+    // In a disagreement the unverifiable claim is a note, not one of the warning bullets.
+    const mixed = okView({
+      verifier: {
+        ...okView().verifier,
+        claims: okView().verifier.claims.map((c) =>
+          c.id === "b2" ? { ...c, verdict: "unverifiable" as const } : c,
+        ),
+      },
+    });
+    const both = renderIntentSection(mixed, no);
+    expect(both.indexOf("[!WARNING]")).toBeLessThan(both.indexOf("[!NOTE]"));
+    expect(both).not.toContain("Behavior change 2 is unverifiable");
+  });
 });

@@ -19,6 +19,7 @@ import {
 import { chooseNonce, LIMITS, neutralizeUntrusted, type OmitReason, prepareDiff } from "./diff.js";
 import type { CardInputs } from "./inputs.js";
 import {
+  type ClaimVerdict,
   parseVerifierOutput,
   parseWriterOutput,
   type VerifierOutput,
@@ -79,7 +80,7 @@ export interface GenerateOptions {
 export interface VerifierClaim {
   id: string;
   kind: "goal" | "behavior_change" | "out_of_scope";
-  verdict: "supported" | "unsupported" | "contradicted";
+  verdict: ClaimVerdict;
   reason: string;
 }
 
@@ -185,6 +186,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     : null;
   const diff = prepareDiff(inputs.tooLarge ? [] : inputs.files, o.floor);
   const diffTemplate = diff.renderDiff("{nonce}");
+  const contextTemplate = diff.renderContext("{nonce}");
 
   const { floor, reasons } = computeRiskFloor(
     {
@@ -215,6 +217,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     issue,
     diff.fileListBlock,
     diffTemplate,
+    contextTemplate,
     inputs.tooLarge,
     inputs.listingTruncated,
   ]);
@@ -225,6 +228,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     ...(issue ? [issue.title, issue.body] : []),
     diff.fileListBlock,
     diffTemplate,
+    contextTemplate,
   ]);
 
   const stats: InputStats = {
@@ -253,6 +257,8 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     filesOmitted: stats.filesOmitted,
     fileListBlock: diff.fileListBlock,
     diffBlock: diff.renderDiff(nonce),
+    contextBlock: diff.renderContext(nonce),
+    contextFiles: diff.contextFiles,
   };
   const writerUser = buildWriterUser({ ...facts, title, body, issue });
   const verifierData = buildVerifierData(facts);
@@ -543,7 +549,10 @@ export async function runCard(
       verdict: c.verdict,
       reason: c.reason,
     }));
-    const disagree = claims.some((c) => c.verdict !== "supported") || ver.out.missing.length > 0;
+    // "unverifiable" leans on code outside what was shown: a note on the card, not a disagreement.
+    const disagree =
+      claims.some((c) => c.verdict === "unsupported" || c.verdict === "contradicted") ||
+      ver.out.missing.length > 0;
     verifierResult = {
       status: disagree ? "disagree" : "agree",
       claims,

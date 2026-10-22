@@ -5,6 +5,7 @@ import { findLinkedIssue } from "../../src/modules/intent/inputs.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
 import {
+  type FakeContent,
   makeFile,
   makeIssue,
   makePull,
@@ -112,7 +113,7 @@ describe("fetchIntentInputs", () => {
     expect(out.tooLarge).toBe(false);
     expect(out.files[5]?.patch).toBeNull();
     expect(Object.keys(out.files[0] ?? {}).sort()).toEqual(
-      ["additions", "deletions", "patch", "path", "previousPath", "status"].sort(),
+      ["additions", "deletions", "headText", "patch", "path", "previousPath", "status"].sort(),
     );
   });
 
@@ -159,6 +160,67 @@ describe("fetchIntentInputs", () => {
     expect((await run("Fixes #42")).issue).toEqual({ number: 42, title: "T", body: "" });
     api.failNext("GET", /\/issues\/42$/, 502);
     const err = await run("Fixes #42").catch((e: unknown) => e);
+    expect(classifyGitHubError(err)).toBe("transient");
+  });
+
+  it("U-FETCH-7 head versions are read at the head SHA for modified source files only", async () => {
+    const { api, octokit } = await setup();
+    api.state.files.set(PR_NUMBER, [
+      makeFile({ path: "src/a.ts" }),
+      makeFile({ path: "src/new.ts", status: "added" }),
+      makeFile({ path: "src/gone.ts", status: "removed" }),
+      makeFile({ path: "pnpm-lock.yaml" }),
+      makeFile({ path: "src/missing.ts" }),
+      makeFile({ path: "src/big.ts" }),
+      makeFile({ path: "src/bin.ts" }),
+      makeFile({ path: "src/auth/session.ts" }),
+    ]);
+    const pull = makePull({ changed_files: 8 });
+    const ref = (pull as { head: { sha: string } }).head.sha;
+    api.state.contents.set(
+      ref,
+      new Map<string, FakeContent>([
+        ["src/a.ts", { kind: "file", text: "const a = 1;\n" }],
+        ["src/new.ts", { kind: "file", text: "added\n" }],
+        ["pnpm-lock.yaml", { kind: "file", text: "lock\n" }],
+        ["src/big.ts", { kind: "large", size: 2_000_000 }],
+        ["src/bin.ts", { kind: "file", text: new Uint8Array([97, 0, 98]) }],
+        ["src/auth/session.ts", { kind: "file", text: "secret\n" }],
+      ]),
+    );
+    const out = await fetchIntentInputs(octokit, {
+      owner: OWNER,
+      repo: REPO,
+      pull: pull as never,
+      taskIssueNumber: null,
+    });
+    expect(Object.fromEntries(out.files.map((f) => [f.path, f.headText]))).toEqual({
+      "src/a.ts": "const a = 1;\n",
+      "src/new.ts": null,
+      "src/gone.ts": null,
+      "pnpm-lock.yaml": null,
+      "src/missing.ts": null,
+      "src/big.ts": null,
+      "src/bin.ts": null,
+      "src/auth/session.ts": null,
+    });
+    const reads = api.find("GET", /\/contents\//);
+    expect(reads.every((r) => r.ref === ref)).toBe(true);
+    expect(
+      reads.map((r) => decodeURIComponent(r.path.split("/contents/")[1] ?? "")).sort(),
+    ).toEqual(["src/a.ts", "src/big.ts", "src/bin.ts", "src/missing.ts"].sort());
+  });
+
+  it("U-FETCH-8 a transient error reading a head version throws", async () => {
+    const { api, octokit } = await setup();
+    api.state.files.set(PR_NUMBER, [makeFile({ path: "src/a.ts" })]);
+    api.failNext("GET", /\/contents\//, 502);
+    const err = await fetchIntentInputs(octokit, {
+      owner: OWNER,
+      repo: REPO,
+      pull: makePull({ changed_files: 1 }) as never,
+      taskIssueNumber: null,
+    }).catch((e: unknown) => e);
     expect(classifyGitHubError(err)).toBe("transient");
   });
 });

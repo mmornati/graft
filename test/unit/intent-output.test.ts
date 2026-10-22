@@ -94,6 +94,14 @@ describe("model output validation", () => {
     );
   });
 
+  it("U-OUT-8 unverifiable is a verdict; anything else outside the enum is invalid", () => {
+    const claims = (verdict: string) =>
+      verifier().claims.map((c: Record<string, unknown>) => ({ ...c, verdict }));
+    const r = v(verifier({ claims: claims("unverifiable") }));
+    expect(r.ok && r.out.claims.every((c) => c.verdict === "unverifiable")).toBe(true);
+    expect(v(verifier({ claims: claims("unknown") })).ok).toBe(false);
+  });
+
   it("U-OUT-4 verifier claim ids must be exactly the expected set; order follows the card", () => {
     const base = verifier();
     expect(v(base).ok).toBe(true);
@@ -178,8 +186,8 @@ describe("prompts", () => {
       .digest("hex");
     // Changing a prompt or a schema changes this hash: bump PROMPT_VERSION and update both.
     expect([PROMPT_VERSION, hash]).toEqual([
-      "intent-v1",
-      "1fe62955ab7a276f42ecce84d38c3ca3e106e044e2f5bcdee2ff9e9f72781b40",
+      "intent-v2",
+      "9f271271b5511b9d78e43ba9dcd408d513088b9573ea6a8f10dc989a2e286233",
     ]);
     expect(promptFingerprint()).toBe(hash);
     for (const p of [WRITER_SYSTEM_PROMPT, VERIFIER_SYSTEM_PROMPT]) {

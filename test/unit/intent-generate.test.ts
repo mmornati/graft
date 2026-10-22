@@ -719,4 +719,53 @@ describe("client-side refusal fallback", () => {
     ]);
     expect(r).toMatchObject({ status: "ok", costUsd: 0.0003, models: { verifier: FAST } });
   });
+
+  it("U-GEN-36 only the verifier sees the head-file context", async () => {
+    const llm = scriptedLlm({ writer: W(), verifier: agreeingVerifier });
+    await generateCard(
+      inputs({ files: [file("src/a.ts", { headText: "const CONTEXT_CANARY = 1;\n" })] }),
+      llm,
+      OPTS,
+    );
+    const writer = llm.calls.find((c) => c.purpose === "writer")?.user ?? "";
+    const verifier = llm.calls.find((c) => c.purpose === "verifier")?.user ?? "";
+    expect(writer).not.toContain("CONTEXT_CANARY");
+    expect(verifier).toMatch(/kind="file_context">\n@@graft-context-[0-9a-f]{16} /);
+    expect(verifier).toContain("1\tconst CONTEXT_CANARY = 1;");
+    const bare = scriptedLlm({ writer: W(), verifier: agreeingVerifier });
+    await generateCard(inputs(), bare, OPTS);
+    expect(bare.calls.find((c) => c.purpose === "verifier")?.user).toContain(
+      "(no file context shown)",
+    );
+  });
+
+  it("U-GEN-37 unverifiable claims are not a disagreement and do not raise the risk", async () => {
+    const verdicts = (verdict: string) => (req: LlmRequest) => {
+      const base = verifierJson(req).json as { claims: Record<string, unknown>[] };
+      return verifierJson(req, {
+        claims: base.claims.map((c) => (c.id === "b1" ? { ...c, verdict, reason: "r" } : c)),
+      });
+    };
+    const ok = await generateCard(
+      inputs(),
+      scriptedLlm({ writer: W(), verifier: verdicts("unverifiable") }),
+      OPTS,
+    );
+    expect(ok.verifier.status).toBe("agree");
+    expect(ok.verifier.claims[1]).toMatchObject({ id: "b1", verdict: "unverifiable" });
+    expect(ok.risk).toMatchObject({ final: "trivial", raisedBy: [] });
+    const bad = await generateCard(
+      inputs(),
+      scriptedLlm({ writer: W(), verifier: verdicts("unsupported") }),
+      OPTS,
+    );
+    expect(bad.verifier.status).toBe("disagree");
+    expect(bad.risk.final).toBe("logic");
+  });
+
+  it("U-GEN-38 the head-file context is part of the input hash", () => {
+    const a = prepareCardInputs(inputs({ files: [file("src/a.ts", { headText: "x\n" })] }), OPTS);
+    const b = prepareCardInputs(inputs({ files: [file("src/a.ts", { headText: "y\n" })] }), OPTS);
+    expect(a.inputHash).not.toBe(b.inputHash);
+  });
 });
