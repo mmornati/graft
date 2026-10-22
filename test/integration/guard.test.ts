@@ -84,10 +84,11 @@ function run(
   sha: string,
   name: string,
   conclusion: string | null,
-  o: { app?: number; at?: Date } = {},
+  o: { app?: number; at?: Date; suite?: number } = {},
 ): void {
   const id = api.state.nextId++;
   api.state.checkRuns.push({
+    ...(o.suite === undefined ? {} : { check_suite: { id: o.suite } }),
     id,
     name,
     head_sha: sha,
@@ -471,7 +472,9 @@ describe("guard: detection and confirmation", () => {
     const id = await confirming();
     const [job] = await jobs("guard.confirm");
     const delay = (job?.start_after.getTime() ?? 0) - Date.now();
-    expect(delay).toBeGreaterThan(7000 * 1000);
+    // The window plus a 60-second margin (finding 4).
+    expect(delay).toBeGreaterThan(7250 * 1000);
+    expect(delay).toBeLessThanOrEqual(7260 * 1000);
     // Before the deadline it waits.
     advance(3600);
     await confirmEvent({ eventId: id }, ctx());
@@ -482,6 +485,51 @@ describe("guard: detection and confirmation", () => {
     expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
     expect(comments()).toHaveLength(1);
     expect(String(comments()[0]?.body?.body)).toContain("- Confirmed by: still red after 2 hours");
+  });
+
+  it("I-GRD-8b a confirm that runs before the deadline is sent again with its own key, and the next attempt settles", async () => {
+    const id = await confirming();
+    // The worker's clock is a second behind the deadline.
+    advance(7199);
+    await confirmEvent({ eventId: id }, ctx());
+    expect((await events())[0]?.status).toBe("confirming");
+    const queued = await jobs("guard.confirm");
+    expect(queued.map((j) => [j.data, j.singleton_key]).sort()).toEqual(
+      [
+        [{ eventId: id }, `guard:confirm:${id}`],
+        [{ eventId: id, attempt: 1 }, `guard:confirm:${id}:1`],
+      ].sort(),
+    );
+    advance(7200);
+    await confirmEvent({ eventId: id, attempt: 1 }, ctx());
+    const [e] = await events();
+    expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
+    expect(comments()).toHaveLength(1);
+    // Settled: no further attempt.
+    expect(await jobs("guard.confirm")).toHaveLength(2);
+  });
+
+  it("I-GRD-8c an event whose failing result is no longer red is examined again twice, then settles flaky", async () => {
+    const id = await confirming();
+    // A re-run that ends cancelled replaces the red result: neither red nor green.
+    advance(60);
+    run(C(2), "test", "cancelled");
+    await observe(C(2));
+    for (const attempt of [0, 1]) {
+      advance(7260);
+      await confirmEvent(attempt === 0 ? { eventId: id } : { eventId: id, attempt }, ctx());
+      expect((await events())[0]?.status).toBe("confirming");
+    }
+    expect((await jobs("guard.confirm")).map((j) => j.singleton_key).sort()).toEqual(
+      [`guard:confirm:${id}`, `guard:confirm:${id}:1`, `guard:confirm:${id}:2`].sort(),
+    );
+    advance(7200);
+    await confirmEvent({ eventId: id, attempt: 2 }, ctx());
+    const [e] = await events();
+    expect(e).toMatchObject({ status: "flaky", confirm_reason: null });
+    expect(e?.confirmed_at).toEqual(now);
+    expect(comments()).toEqual([]);
+    expect(await jobs("guard.confirm")).toHaveLength(3);
   });
 
   it("I-GRD-9 ambiguous (two merges) and no_culprit (direct push): rows, no comment, guard list shows them", async () => {
@@ -562,6 +610,56 @@ describe("guard: detection and confirmation", () => {
     expect(comments()[0]?.path).toBe(`/repos/${FULL_NAME}/issues/7/comments`);
   });
 
+  it("I-GRD-10c a late green on the parent narrows the open event to the later commits", async () => {
+    history(4);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    mergedPull(9, C(4));
+    await track(C(4), null);
+    run(C(1), "test", "success");
+    await observe(C(1));
+    // C2's CI is still running when C3 is observed red.
+    run(C(2), "test", null);
+    await observe(C(2));
+    run(C(3), "test", "failure");
+    await observe(C(3));
+    expect((await events()).map((r) => [r.failing_sha, r.last_green_sha, r.candidates])).toEqual([
+      [
+        C(3),
+        C(1),
+        [
+          { sha: C(2), prNumber: 7, kind: "pr" },
+          { sha: C(3), prNumber: 8, kind: "pr" },
+        ],
+      ],
+    ]);
+    expect((await events())[0]?.culprit_change_id).toBeNull();
+    // C2 turns green: the event narrows to C3 alone (PR 8).
+    advance(60);
+    run(C(2), "test", "success");
+    await observe(C(2));
+    let [e] = await events();
+    expect(e).toMatchObject({
+      status: "confirming",
+      failing_sha: C(3),
+      last_green_sha: C(2),
+      candidates: [{ sha: C(3), prNumber: 8, kind: "pr" }],
+    });
+    const eight = await t.db
+      .selectFrom("changes")
+      .select("id")
+      .where("pr_number", "=", 8)
+      .executeTakeFirstOrThrow();
+    expect(e?.culprit_change_id).toBe(eight.id);
+    // C4 red too: confirmed, culprit PR 8, one comment there.
+    advance(60);
+    run(C(4), "test", "failure");
+    await observe(C(4));
+    [e] = await events();
+    expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "next_commit" });
+    expect(comments().map((c) => c.path)).toEqual([`/repos/${FULL_NAME}/issues/8/comments`]);
+  });
+
   it("I-GRD-11 without statuses:read no status request is made and check runs still drive detection; with it, a status opens an event", async () => {
     history(4);
     mergedPull(7, C(2));
@@ -571,7 +669,12 @@ describe("guard: detection and confirmation", () => {
       { context: "ci/jenkins", state: "success", updated_at: now.toISOString() },
     ]);
     api.state.statuses.set(C(4), [
-      { context: "ci/jenkins", state: "failure", updated_at: now.toISOString() },
+      {
+        context: "ci/jenkins",
+        state: "failure",
+        updated_at: now.toISOString(),
+        target_url: `https://github.com/someone-else/phish/${FULL_NAME}/x`,
+      },
     ]);
     run(C(1), "test", "success");
     run(C(2), "test", "failure");
@@ -593,6 +696,25 @@ describe("guard: detection and confirmation", () => {
       [C(2), TEST_KEY],
       [C(4), "status:ci/jenkins"],
     ]);
+    // A status link outside this repository is dropped (nit 9).
+    expect(rows[1]?.ci_run_url).toBeNull();
+    api.state.statuses.set(C(5), [
+      {
+        context: "ci/jenkins",
+        state: "failure",
+        updated_at: now.toISOString(),
+        target_url: `https://github.com/${FULL_NAME}/actions/runs/5`,
+      },
+    ]);
+    history(5, 5);
+    await track(C(5), C(4));
+    await observe(C(5));
+    const kept = await t.db
+      .selectFrom("ci_results")
+      .select("html_url")
+      .where("sha", "=", C(5))
+      .executeTakeFirstOrThrow();
+    expect(kept.html_url).toBe(`https://github.com/${FULL_NAME}/actions/runs/5`);
   });
 
   it("I-GRD-12 guard.checks: [test] at the baseline: a red lint opens nothing; a red test does", async () => {
@@ -629,6 +751,56 @@ describe("guard: detection and confirmation", () => {
     expect(rows.map((r) => [r.failing_sha, r.failing_checks.map((c) => c.name)])).toEqual([
       [C(2), ["test"]],
     ]);
+  });
+
+  it("I-GRD-12c a transient error while a baseline is read between lock passes loses nothing: the retry opens the event", async () => {
+    history(3);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    await track(C(3), null);
+    run(C(1), "test", "success");
+    await observe(C(1));
+    run(C(3), "test", "failure");
+    // C3's dry run finds C1 as the baseline and reads its graft.yaml: held here.
+    const dry = api.block("GET", /\/contents\/graft\.yaml$/);
+    const first = observe(C(3));
+    await dry.reached;
+    // Meanwhile C2 is observed green: C3's baseline is now C2, which was not loaded.
+    run(C(2), "test", "success");
+    await observe(C(2));
+    // The read of C2's file between the passes fails with a 502.
+    const between = api.block("GET", /\/contents\/graft\.yaml$/);
+    dry.release();
+    await between.reached;
+    api.failNext("GET", /\/contents\/graft\.yaml$/, 502);
+    between.release();
+    await expect(first).rejects.toThrow();
+    expect(await events()).toEqual([]);
+    // The job's retry sees the transition again.
+    await observe(C(3));
+    const rows = await events();
+    expect(rows.map((r) => [r.failing_sha, r.last_green_sha, r.candidates])).toEqual([
+      [C(3), C(2), [{ sha: C(3), prNumber: 8, kind: "pr" }]],
+    ]);
+  });
+
+  it("I-GRD-17 a decoy: a later green run of the same key in another check suite does not hide the red one", async () => {
+    history(2);
+    mergedPull(7, C(2));
+    await track(C(2), null);
+    run(C(1), "test", "success", { suite: 1 });
+    await observe(C(1));
+    run(C(2), "test", "failure", { suite: 2 });
+    run(C(2), "test", "success", { suite: 3, at: new Date(now.getTime() + 4000) });
+    await observe(C(2));
+    expect((await events()).map((r) => [r.failing_sha, r.failing_checks[0]?.key])).toEqual([
+      [C(2), TEST_KEY],
+    ]);
+    // A re-run inside the same check suite is still D4's "latest wins": flaky.
+    advance(120);
+    run(C(2), "test", "success", { suite: 2 });
+    await observe(C(2));
+    expect((await events())[0]).toMatchObject({ status: "flaky", confirm_reason: "flaky_rerun" });
   });
 
   it("I-GRD-13 guard_mode enforce with the ceiling and contents:write: same event, one comment with the enforce line, no other write", async () => {

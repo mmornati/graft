@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mulberry32 } from "../../src/eval/sample.js";
 import {
+  allowedByGuardChecks,
   type ChainCommit,
   type CommitPr,
   checkRunKey,
@@ -173,13 +174,19 @@ describe("guard detection (pure)", () => {
     });
   });
 
-  it("U-DET-12 a filtered key (guard.checks) opens nothing", () => {
+  it("U-DET-12 a filtered key (guard.checks at the baseline) opens nothing", () => {
+    // Results are stored unfiltered (D17 as corrected): the transition exists, and the
+    // baseline's allow-list decides whether it counts.
     const c = chain([DIRECT, pr(2)]);
     const rs: KeyResult[] = [
       { key: KEY, sha: sha(1), class: "green" },
-      { key: KEY, sha: sha(2), class: "ignored", filtered: true },
+      { key: KEY, sha: sha(2), class: "red" },
     ];
-    expect(detectTransition(c, rs, KEY, sha(2))).toEqual({ kind: "none", why: "filtered" });
+    expect(detectTransition(c, rs, KEY, sha(2)).kind).toBe("new");
+    expect(allowedByGuardChecks(new Set(["lint"]), "test")).toBe(false);
+    expect(allowedByGuardChecks(new Set(["lint", "test"]), "test")).toBe(true);
+    expect(allowedByGuardChecks(null, "test")).toBe(true);
+    expect(allowedByGuardChecks(new Set(), "test")).toBe(false);
   });
 
   it("U-DET-13 confirmationStep", () => {

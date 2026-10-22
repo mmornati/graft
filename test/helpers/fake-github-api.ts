@@ -37,6 +37,8 @@ export interface FakeCheckRun {
   completed_at?: string | null;
   /** Phase 1 step 4: the run's page (guard comments link the first failing check). */
   html_url?: string;
+  /** Step 4 review 1, finding 7: the run's check suite (two workflows are two suites). */
+  check_suite?: { id: number };
 }
 
 /** Phase 1 step 4: a commit status (`GET /commits/{sha}/status` serves the latest per context). */

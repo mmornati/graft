@@ -11,6 +11,7 @@ import type { Database, GuardCandidate, GuardFailingCheck } from "../../db/schem
 import type { GitHubClient } from "../../github/client-factory.js";
 import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import {
+  allowedByGuardChecks,
   type ChainCommit,
   type Classification,
   checkName,
@@ -33,6 +34,7 @@ import { getRepositoryModeRow } from "../modes/index.js";
 import { githubWebBase, publishGuardComment, safeHtmlUrl } from "./comment.js";
 import {
   type ConfirmData,
+  confirmKey,
   confirmSchema,
   type ObserveData,
   observeKey,
@@ -63,6 +65,10 @@ export const OBSERVE_JOB = "guard.observe";
 export const CONFIRM_JOB = "guard.confirm";
 const RUN_PAGES = 5;
 const STATUS_PAGES = 3;
+/** `guard.confirm` runs this long after the deadline (step 4 review 1, finding 4). */
+export const CONFIRM_MARGIN_SECONDS = 60;
+/** An event still undecided at the deadline is examined again this many times, a window apart. */
+export const CONFIRM_RETRIES = 2;
 
 export type ObserveOutcome = "disabled" | "inactive" | "not_on_default_branch" | "observed";
 
@@ -76,7 +82,8 @@ async function readCheckRuns(
   o: { owner: string; repo: string; sha: string },
   webBase: string,
 ): Promise<ObservedResult[]> {
-  const byKey = new Map<string, ObservedResult>();
+  // key -> check suite -> the latest result of that key in that suite.
+  const byKey = new Map<string, Map<number | null, ObservedResult>>();
   for (let page = 1; page <= RUN_PAGES; page++) {
     let data: Awaited<ReturnType<GitHubClient["rest"]["checks"]["listForRef"]>>["data"];
     try {
@@ -109,19 +116,32 @@ async function readCheckRuns(
         htmlUrl: safeHtmlUrl(run.html_url, webBase),
         completedAt,
       };
-      // D4: two runs with one key, the latest `completed_at` wins.
-      const prev = byKey.get(key);
-      if (
-        !prev ||
-        (completedAt !== null &&
-          (prev.completedAt === null || completedAt.getTime() > prev.completedAt.getTime()))
-      ) {
-        byKey.set(key, result);
-      }
+      // D4: two runs with one key in one check suite (a re-run), the latest `completed_at` wins.
+      const suite = typeof run.check_suite?.id === "number" ? run.check_suite.id : null;
+      const suites = byKey.get(key) ?? new Map<number | null, ObservedResult>();
+      byKey.set(key, suites);
+      const prev = suites.get(suite);
+      if (!prev || isLater(result, prev)) suites.set(suite, result);
     }
     if (data.check_runs.length < 100 || page * 100 >= data.total_count) break;
   }
-  return [...byKey.values()];
+  return [...byKey.values()].map((suites) => {
+    // Step 4 review 1, finding 7: one key in several check suites (a second workflow with a job
+    // of the same name) is not a re-run. Red wins there, so a later green decoy in another suite
+    // cannot hide a failure; otherwise the latest result wins as in D4.
+    const all = [...suites.values()];
+    const red = all.filter((r) => r.class === "red");
+    const pool = red.length > 0 ? red : all;
+    return pool.reduce((best, r) => (isLater(r, best) ? r : best));
+  });
+}
+
+/** D4: `a` replaces `b` when it completed strictly later (a run not completed never replaces). */
+function isLater(a: ObservedResult, b: ObservedResult): boolean {
+  return (
+    a.completedAt !== null &&
+    (b.completedAt === null || a.completedAt.getTime() > b.completedAt.getTime())
+  );
 }
 
 async function readStatuses(
@@ -157,7 +177,9 @@ async function readStatuses(
         source: "status",
         class: classifyStatusState(s.state),
         filtered: false,
-        htmlUrl: safeHtmlUrl(s.target_url, webBase),
+        // Whoever posts a status chooses its link: only a page of this repository is kept (step 4
+        // review 1, nit 9). Check-run links come from GitHub and keep the web root rule.
+        htmlUrl: safeHtmlUrl(s.target_url, `${webBase}${o.owner}/${o.repo}/`),
         // A pending status is not a result yet; it never replaces one.
         completedAt: s.state === "pending" ? null : at,
       });
@@ -263,6 +285,8 @@ interface DetectContext {
   repositoryId: number;
   branch: string;
   now: Date;
+  /** The event whose last `guard.confirm` attempt this is: still undecided, it settles (finding 4). */
+  finalEventId?: string | undefined;
 }
 
 /** Opens an event for a new transition, or adds the key to the event it belongs to (D8). */
@@ -354,19 +378,66 @@ async function recordTransition(
       { eventId: event.id },
       {
         tx,
-        singletonKey: `guard:confirm:${event.id}`,
-        startAfterSeconds: d.ctx.config.guardConfirmSeconds,
+        singletonKey: confirmKey(event.id, 0),
+        // A margin past the deadline, so a worker whose clock is a little behind still sees the
+        // window as elapsed (step 4 review 1, finding 4).
+        startAfterSeconds: d.ctx.config.guardConfirmSeconds + CONFIRM_MARGIN_SECONDS,
       },
     );
   }
   return event.id;
 }
 
+/**
+ * Step 4 review 1, finding 2: a later green on a commit between the event's last green commit and
+ * its failing commit (the parent's CI finished after the child was observed) narrows the event to
+ * the commits after that green. Each failing key is judged again on the current line; the event
+ * narrows only when every key still has a transition at the failing commit, and to the widest of
+ * them, whose last green commit must be one of the event's candidates. Only `confirming` events
+ * are passed here.
+ */
+async function narrowEvent(d: DetectContext, e: GuardEventRow): Promise<GuardEventRow> {
+  const { tx, repositoryId, now } = d;
+  const keys = e.failing_checks.map((c) => c.key);
+  if (keys.length === 0) return e;
+  const chain = (await lineTo(tx, repositoryId, e.failing_sha)).map(toChainCommit);
+  const results = (
+    await resultsAt(
+      tx,
+      repositoryId,
+      chain.map((c) => c.sha),
+      keys,
+    )
+  ).map((r) => ({ key: r.key, sha: r.sha, class: r.class }));
+  let widest: NewTransition | null = null;
+  for (const key of keys) {
+    const t = detectTransition(chain, results, key, e.failing_sha);
+    if (t.kind !== "new") return e;
+    if (widest === null || t.candidates.length > widest.candidates.length) widest = t;
+  }
+  if (widest === null || widest.lastGreenSha === e.last_green_sha) return e;
+  const lastGreenSha = widest.lastGreenSha;
+  if (!e.candidates.some((c) => c.sha === lastGreenSha)) return e;
+  const candidates = storedCandidates(widest.candidates);
+  const classification = classifyCandidates(widest.candidates);
+  const culprit =
+    classification.status === "culprit_found"
+      ? await culpritChangeId(tx, repositoryId, widest.candidates, classification.prNumber)
+      : null;
+  await updateEvent(tx, e.id, { lastGreenSha, candidates, culpritChangeId: culprit }, now);
+  d.ctx.log.info(
+    { eventId: e.id, candidates: widest.candidates.length },
+    "guard event narrowed to a later green commit",
+  );
+  return { ...e, last_green_sha: lastGreenSha, candidates, culprit_change_id: culprit };
+}
+
 /** D9 for every open event of the repository. Returns the events that became `culprit_found`. */
 async function confirmOpenEvents(d: DetectContext): Promise<string[]> {
   const { tx, repositoryId, now } = d;
   const reached: string[] = [];
-  for (const e of await openEvents(tx, repositoryId)) {
+  for (const open of await openEvents(tx, repositoryId)) {
+    const e = await narrowEvent(d, open);
     const keys = e.failing_checks.map((c) => c.key);
     const next = await childOf(tx, repositoryId, e.failing_sha);
     const shas = next ? [e.failing_sha, next.sha] : [e.failing_sha];
@@ -383,8 +454,11 @@ async function confirmOpenEvents(d: DetectContext): Promise<string[]> {
       now,
       windowSeconds: d.ctx.config.guardConfirmSeconds,
     });
-    if (step.step === "wait") continue;
-    const status = step.step === "flaky" ? "flaky" : classifyStored(e.candidates).status;
+    if (step.step === "wait" && e.id !== d.finalEventId) continue;
+    // The last confirm attempt of an event still undecided (its failing result is no longer red
+    // and not green: a cancelled re-run, say): the failure did not persist, so it is not
+    // confirmed. It settles `flaky` with no reason rather than staying open for good.
+    const status = step.step === "confirmed" ? classifyStored(e.candidates).status : "flaky";
     await updateEvent(tx, e.id, { status, confirmedAt: now, confirmReason: step.reason }, now);
     d.ctx.log.info({ eventId: e.id, status, reason: step.reason }, "guard event settled");
     if (status === "culprit_found") reached.push(e.id);
@@ -406,10 +480,17 @@ export async function scheduleObserve(ctx: JobContext, data: ObserveData): Promi
   });
 }
 
+/** Thrown out of the lock to roll back a pass that set a transition aside (finding 5). */
+class BaselinesMissing extends Error {
+  constructor(readonly shas: ReadonlySet<string>) {
+    super("guard baselines not loaded");
+  }
+}
+
 export async function observeCommit(
   data: ObserveData,
   ctx: JobContext,
-  o: { octokit?: GitHubClient } = {},
+  o: { octokit?: GitHubClient; finalEventId?: string } = {},
 ): Promise<ObserveOutcome> {
   if (!ctx.config.guardDetection) return "disabled";
   if (!(await getActiveInstallation(ctx.db, data.installationId))) return "inactive";
@@ -493,63 +574,67 @@ export async function observeCommit(
       }
     }
   }
-  let redKeys: ObservedResult[] | null = null;
   const reached: string[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
-    const missing = new Set<string>();
-    const settled = await withRepositoryGuardLock(ctx.db, data.repositoryId, async (tx) => {
-      const changed = await upsertResults(tx, data.repositoryId, data.sha, observed, now);
-      // The red keys of the first pass; a later pass upserts nothing new.
-      if (redKeys === null) {
-        redKeys = observed.filter((r) => changed.includes(r.key) && r.class === "red");
-      }
-      const red: ObservedResult[] = redKeys;
-      const d: DetectContext = {
-        tx,
-        ctx,
-        repositoryId: data.repositoryId,
-        branch: branch ?? "unknown",
-        now,
-      };
-      if (red.length > 0) {
-        const chain = (await lineTo(tx, data.repositoryId, data.sha)).map(toChainCommit);
-        const results = (
-          await resultsAt(
-            tx,
-            data.repositoryId,
-            chain.map((c) => c.sha),
-            red.map((r) => r.key),
-          )
-        ).map((r) => ({ key: r.key, sha: r.sha, class: r.class }));
-        for (const r of red) {
-          const t = detectTransition(chain, results, r.key, data.sha);
-          if (t.kind === "none") {
-            ctx.log.debug({ why: t.why }, "no guard transition");
-            continue;
+    let settled: string[];
+    try {
+      settled = await withRepositoryGuardLock(ctx.db, data.repositoryId, async (tx) => {
+        const changed = await upsertResults(tx, data.repositoryId, data.sha, observed, now);
+        // A pass that sets a transition aside rolls back (below), so every pass upserts the same
+        // results and sees the same red keys, and so does a retry after a failure between passes
+        // (step 4 review 1, finding 5).
+        const red = observed.filter((r) => changed.includes(r.key) && r.class === "red");
+        const d: DetectContext = {
+          tx,
+          ctx,
+          repositoryId: data.repositoryId,
+          branch: branch ?? "unknown",
+          now,
+          finalEventId: o.finalEventId,
+        };
+        const missing = new Set<string>();
+        if (red.length > 0) {
+          const chain = (await lineTo(tx, data.repositoryId, data.sha)).map(toChainCommit);
+          const results = (
+            await resultsAt(
+              tx,
+              data.repositoryId,
+              chain.map((c) => c.sha),
+              red.map((r) => r.key),
+            )
+          ).map((r) => ({ key: r.key, sha: r.sha, class: r.class }));
+          for (const r of red) {
+            const t = detectTransition(chain, results, r.key, data.sha);
+            if (t.kind === "none") {
+              ctx.log.debug({ why: t.why }, "no guard transition");
+              continue;
+            }
+            // The last pass treats a baseline still unknown (a race) as "every key".
+            if (!checksAt.has(t.lastGreenSha) && attempt < 2) {
+              missing.add(t.lastGreenSha);
+              continue;
+            }
+            if (!allowedByGuardChecks(checksAt.get(t.lastGreenSha) ?? null, r.name)) {
+              ctx.log.debug({ why: "filtered" }, "no guard transition");
+              continue;
+            }
+            await recordTransition(d, t, { key: r.key, name: r.name, source: r.source }, r.htmlUrl);
           }
-          // The last pass treats a baseline still unknown (a race) as "every key".
-          if (!checksAt.has(t.lastGreenSha) && attempt < 2) {
-            missing.add(t.lastGreenSha);
-            continue;
-          }
-          const allowed = checksAt.get(t.lastGreenSha) ?? null;
-          if (allowed !== null && !allowed.has(r.name)) {
-            ctx.log.debug({ why: "filtered" }, "no guard transition");
-            continue;
-          }
-          await recordTransition(d, t, { key: r.key, name: r.name, source: r.source }, r.htmlUrl);
         }
+        // Nothing of this pass is committed: the baselines are read outside the lock and the
+        // pass runs again.
+        if (missing.size > 0) throw new BaselinesMissing(missing);
+        return confirmOpenEvents(d);
+      });
+    } catch (err) {
+      if (!(err instanceof BaselinesMissing)) throw err;
+      for (const sha of err.shas) {
+        checksAt.set(sha, await guardChecksAt(octokit, { ...data, sha }));
       }
-      if (missing.size > 0) return null;
-      return confirmOpenEvents(d);
-    });
-    if (settled !== null) {
-      reached.push(...settled);
-      break;
+      continue;
     }
-    for (const sha of missing) {
-      checksAt.set(sha, await guardChecksAt(octokit, { ...data, sha }));
-    }
+    reached.push(...settled);
+    break;
   }
 
   // After the repository lock: comments, each under its change lock (D11).
@@ -569,7 +654,11 @@ export const guardObserveJob = defineJob<ObserveData>({
   },
 });
 
-/** `guard.confirm`: at the deadline, observe the failing commit again and settle what is due. */
+/**
+ * `guard.confirm`: at the deadline, observe the failing commit again and settle what is due. An
+ * event still undecided is examined again a window later, at most `CONFIRM_RETRIES` times, each
+ * attempt with its own key; the last attempt settles it (step 4 review 1, finding 4).
+ */
 export async function confirmEvent(data: ConfirmData, ctx: JobContext): Promise<ObserveOutcome> {
   if (!ctx.config.guardDetection) return "disabled";
   const event = await getEvent(ctx.db, data.eventId);
@@ -581,7 +670,9 @@ export async function confirmEvent(data: ConfirmData, ctx: JobContext): Promise<
     .executeTakeFirst();
   if (!repo) return "inactive";
   const [owner = "", name = ""] = repo.full_name.split("/");
-  return observeCommit(
+  const attempt = data.attempt ?? 0;
+  const final = attempt >= CONFIRM_RETRIES;
+  const outcome = await observeCommit(
     {
       installationId: repo.installation_id,
       repositoryId: event.repository_id,
@@ -590,7 +681,21 @@ export async function confirmEvent(data: ConfirmData, ctx: JobContext): Promise<
       sha: event.failing_sha,
     },
     ctx,
+    final ? { finalEventId: event.id } : {},
   );
+  const still = (await getEvent(ctx.db, event.id))?.status === "confirming";
+  if (!final && outcome === "observed" && still) {
+    await ctx.queue.send(
+      guardConfirmJob,
+      { eventId: event.id, attempt: attempt + 1 },
+      {
+        singletonKey: confirmKey(event.id, attempt + 1),
+        startAfterSeconds: ctx.config.guardConfirmSeconds,
+      },
+    );
+    ctx.log.info({ eventId: event.id, attempt: attempt + 1 }, "guard confirm re-sent");
+  }
+  return outcome;
 }
 
 export const guardConfirmJob = defineJob<ConfirmData>({
