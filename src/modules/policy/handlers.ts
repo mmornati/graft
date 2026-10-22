@@ -9,6 +9,7 @@ import { defineWebhookHandler } from "../../webhooks/handler.js";
 import { parsePayload } from "../../webhooks/payload.js";
 import { findChangeByHead } from "../changes/index.js";
 import { getActiveInstallation } from "../installations/index.js";
+import { isBreakGlassLabel } from "./break-glass.js";
 import { type EvaluateData, type FanoutData, policyEvaluateJob, policyFanoutJob } from "./job.js";
 import { POLICY_CHECK_NAME } from "./render.js";
 
@@ -116,6 +117,15 @@ export const schedulePolicy = defineWebhookHandler({
       trigger: "pr",
       deliveryId: event.deliveryId,
     };
+    // Step 3 (D4): the head at labelling time, from the signed delivery. The job uses it only as
+    // an equality filter against the live head: it can refuse a break-glass, never grant one.
+    if (
+      p.action === "labeled" &&
+      p.label &&
+      isBreakGlassLabel(ctx.config.breakGlassLabel, p.label.name)
+    ) {
+      data.breakGlassHeadSha = p.pull_request.head.sha;
+    }
     await ctx.queue.send(policyEvaluateJob, data, {
       singletonKey: scheduleKey({
         repositoryId: data.repositoryId,

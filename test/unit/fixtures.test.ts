@@ -22,6 +22,8 @@ const EXPECTED = [
   "pull_request.closed",
   "pull_request.edited",
   "pull_request.labeled",
+  // Phase 1 step 3: the break-glass label (a variant of pull_request.labeled).
+  "pull_request.labeled.break-glass",
   "pull_request.opened",
   "pull_request.reopened",
   "pull_request.synchronize",
@@ -31,9 +33,9 @@ const EXPECTED = [
   "team.deleted",
 ];
 
-// Definitions are named "<event>$<action>" ("ping$event" for ping).
+// Definitions are named "<event>$<action>" ("ping$event" for ping). A third part names a variant.
 const definitionFor = (name: string): string =>
-  name === "ping" || name === "push" ? `${name}$event` : name.replace(".", "$");
+  name === "ping" || name === "push" ? `${name}$event` : name.split(".").slice(0, 2).join("$");
 
 describe("webhook fixtures", () => {
   it("has exactly the fixtures from the spec", () => {

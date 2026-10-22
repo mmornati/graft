@@ -42,6 +42,29 @@ export const MAX_TITLE_CHARS = 200;
 const MAX_LISTED_ERRORS = 20;
 const MAX_DETAIL_RULES = 50;
 
+/**
+ * What a break-glass label means for this head (Phase 1 step 3, §7); null when there is nothing to
+ * say (no label, feature off, or the label was removed). Logins are always code spans.
+ */
+export type BreakGlassView =
+  | {
+      state: "applied";
+      login: string;
+      role: string;
+      headSha: string;
+      self: boolean;
+      labelEventAt: Date | null;
+    }
+  | {
+      state: "ignored";
+      reason: "role_too_low" | "bot" | "role_unverified" | "actor_unknown";
+      login: string | null;
+      role: string | null;
+      self: boolean;
+      labelEventAt: Date | null;
+    }
+  | { state: "stale" };
+
 export interface PolicyView {
   state: "ok" | "missing" | "invalid";
   owner: string;
@@ -69,6 +92,8 @@ export interface PolicyView {
   enforced?: Enforced | null;
   /** Who counted (Phase 1 step 2); null when the policy is not valid. */
   approvers?: ApproverFacts | null;
+  /** Phase 1 step 3: the break-glass state of this head. Absent or null: nothing to say. */
+  breakGlass?: BreakGlassView | null;
 }
 
 export function viewOutcome(v: Pick<PolicyView, "state" | "verdict">): PolicyOutcome {
@@ -163,6 +188,11 @@ function enforcedText(
 ): string {
   const cap = (s: string) => (sentence ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   switch (e.reason) {
+    case "break_glass": {
+      const bg = v.breakGlass?.state === "applied" ? v.breakGlass : null;
+      const who = bg === null ? "a maintainer" : wrap(bg.login);
+      return sentence ? `Bypassed by break-glass (${who})` : `break-glass by ${who}`;
+    }
     case "approved_by_policy":
       return sentence ? "Policy satisfied: no review required" : "no review required";
     case "requirements_met":
@@ -330,6 +360,64 @@ export function wouldBeLine(v: PolicyView): string | null {
 
 const optional = (s: string | null): string[] => (s === null ? [] : [s]);
 
+const IGNORED_TEXT: Record<Extract<BreakGlassView, { state: "ignored" }>["reason"], string> = {
+  role_too_low: "",
+  bot: "a bot",
+  role_unverified: "role could not be verified",
+  actor_unknown: "who applied it could not be determined",
+};
+
+/** Step 3, §7: the break-glass line, right after the headline; null when there is none. */
+export function breakGlassLine(v: PolicyView): string | null {
+  const bg = v.breakGlass;
+  if (!bg) return null;
+  if (bg.state === "stale") {
+    return "**Break-glass not applied:** the pull request changed after the label was added. Remove and re-apply the label.";
+  }
+  if (bg.state === "ignored") {
+    const paren = bg.reason === "role_too_low" ? (bg.role ?? "none") : IGNORED_TEXT[bg.reason];
+    const by = bg.login === null ? "someone" : codeSpan(bg.login);
+    return `**Break-glass label ignored:** applied by ${by} (${paren}). Only maintain or admin can bypass the policy.`;
+  }
+  const self = bg.self ? " (on their own pull request)" : "";
+  const effect =
+    v.mode.effective === "enforce"
+      ? "this check passes for this commit only"
+      : "Graft would bypass the policy for this commit (report mode)";
+  return `**Break-glass** by ${codeSpan(bg.login)} (${bg.role}) on \`${short(bg.headSha)}\`${self}: ${effect}. A new push needs the label again.`;
+}
+
+/** Step 3, §7: the details block; the normal verdict and approvals follow it. */
+function breakGlassDetails(v: PolicyView): string[] {
+  const bg = v.breakGlass;
+  if (!bg) return [];
+  const at = (d: Date | null) => (d === null ? "unknown" : d.toISOString());
+  let lines: string[];
+  if (bg.state === "applied") {
+    lines = [
+      `- Applied by ${codeSpan(bg.login)} (${bg.role})${bg.self ? ", on their own pull request" : ""}`,
+      `- Commit ${codeSpan(short(bg.headSha))} only; a new push ends it`,
+      `- Label added at ${at(bg.labelEventAt)}`,
+      v.mode.effective === "enforce"
+        ? "- This check passes for this commit whatever the policy says below"
+        : "- Report mode: Graft would bypass the policy for this commit; the check stays neutral",
+    ];
+  } else if (bg.state === "ignored") {
+    const who = bg.login === null ? "unknown" : codeSpan(bg.login);
+    const why =
+      bg.reason === "role_too_low"
+        ? `role ${bg.role ?? "none"}, below maintain`
+        : IGNORED_TEXT[bg.reason];
+    lines = [
+      `- Label ignored: applied by ${who} (${why})${bg.self ? ", on their own pull request" : ""}`,
+      `- Label added at ${at(bg.labelEventAt)}`,
+    ];
+  } else {
+    lines = ["- Not applied: the pull request changed after the label was added"];
+  }
+  return ["**Break-glass**", "", ...lines, ""];
+}
+
 function importantBlock(text: string): string {
   return `> [!IMPORTANT]\n> ${text}`;
 }
@@ -386,6 +474,7 @@ export function renderPolicySection(v: PolicyView): string {
     const parts = [
       "### Policy",
       headlineOf(v, "No policy"),
+      ...optional(breakGlassLine(v)),
       ...optional(wouldBeLine(v)),
       `There is no \`graft.yaml\` on ${base} at \`${short(v.commitSha)}\`. Add one to report what Graft would require; see the graft.yaml reference in the Graft docs.`,
     ];
@@ -405,6 +494,7 @@ export function renderPolicySection(v: PolicyView): string {
     const parts = [
       "### Policy",
       headlineOf(v, title),
+      ...optional(breakGlassLine(v)),
       ...optional(wouldBeLine(v)),
       `\`graft.yaml\` on ${base} at \`${short(v.commitSha)}\` cannot be used, so Graft would not auto-approve anything:`,
       listedErrors(v.errors).join("\n"),
@@ -421,6 +511,7 @@ export function renderPolicySection(v: PolicyView): string {
       v,
       titleWith(v, (s) => codeSpan(s)),
     ),
+    ...optional(breakGlassLine(v)),
     ...optional(wouldBeLine(v)),
   ].join("\n\n");
   const notes: string[] = [];
@@ -568,7 +659,9 @@ function approvalsCounted(v: PolicyView): string[] {
 export function renderPolicyDetails(v: PolicyView): string {
   const details = renderDetails(v);
   const line = modeLine(v.mode.effective);
-  return details === null ? line : `${line}\n\n${details}`;
+  const bg = breakGlassDetails(v);
+  const head = bg.length === 0 ? line : `${line}\n\n${bg.join("\n").trimEnd()}`;
+  return details === null ? head : `${head}\n\n${details}`;
 }
 
 function renderDetails(v: PolicyView): string | null {
