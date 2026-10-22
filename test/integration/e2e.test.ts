@@ -10,13 +10,22 @@ let server: Awaited<ReturnType<typeof buildServer>>;
 beforeAll(async () => {
   t = await createTestApp({ supervise: true });
   server = await buildServer(t.deps);
+  // Empty the queue BEFORE the worker starts: a job another test file left due would otherwise be
+  // fetched first and make an installation call that this file's assertions then see.
+  await truncateAll(t.db);
   await startWorker(t.deps.queue, t.deps.registry, jobContext(t), { concurrency: 2 });
 });
 afterAll(async () => {
   await server.close();
   await t.close();
 });
-beforeEach(() => truncateAll(t.db));
+beforeEach(async () => {
+  await truncateAll(t.db);
+  // Counters start from this test, whatever ran before it.
+  const github = t.deps.github as unknown as { calls: number; installationCalls: number };
+  github.calls = 0;
+  github.installationCalls = 0;
+});
 
 async function waitFor<T>(
   fn: () => Promise<T | undefined | false>,

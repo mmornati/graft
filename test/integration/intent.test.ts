@@ -23,6 +23,7 @@ import {
   type GenerateData,
   generateIntent,
   intentGenerateJob,
+  MAX_CATCH_UPS,
 } from "../../src/modules/intent/job.js";
 import { PROMPT_VERSION } from "../../src/modules/intent/prompts.js";
 import {
@@ -478,6 +479,97 @@ describe("intent.generate job", () => {
     const { outcome } = await staleScenario(true);
     expect(outcome).toBe("stale");
     expect((await cards())[0]?.published_at).toBeNull();
+    expect(repoWrites()).toEqual([]);
+  });
+
+  /**
+   * Another job stores a newer snapshot of the SAME head while the model works, as happens when
+   * Graft's own comment or check run bumps the PR's `updated_at`. `edit` changes the live PR too.
+   */
+  async function sameHeadScenario(edit: { title?: string } = {}) {
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const reachedP = new Promise<void>((r) => {
+      reached = r;
+    });
+    current = scenarioLlm({
+      writer: async () => {
+        reached();
+        await gate;
+        return writerReply();
+      },
+    });
+    const job = runJob();
+    await reachedP;
+    const live = api.state.pulls.get(PR_NUMBER);
+    if (!live) throw new Error("no pull in the scenario");
+    const bumped = { ...live, updated_at: "2026-10-14T12:30:00Z", ...edit };
+    api.state.pulls.set(PR_NUMBER, bumped);
+    await upsertChangeFromPull(t.db, REPO_ID, bumped as never, new Date());
+    release();
+    return job;
+  }
+
+  it("I-INT-25 Graft's own comment bumps updated_at during the model call: the card is still published", async () => {
+    const outcome = await sameHeadScenario();
+    expect(outcome).toBe("published");
+    const all = await cards();
+    expect(all).toHaveLength(1);
+    expect(all[0]?.published_at).not.toBeNull();
+    expect(api.state.checkRuns.filter((r) => r.name === "graft/intent")).toHaveLength(1);
+    // It caught up by re-reading the PR once, and stored that newer snapshot.
+    expect(api.find("GET", /\/pulls\/2$/)).toHaveLength(2);
+    expect((await change()).pr_updated_at).toEqual(new Date("2026-10-14T12:30:00Z"));
+    expect(logged).toContain("caught up with a newer snapshot");
+  });
+
+  it("I-INT-26 a real edit of the title during the model call is still stale: the edit's own job publishes", async () => {
+    const outcome = await sameHeadScenario({ title: "Something else entirely" });
+    expect(outcome).toBe("stale");
+    expect((await cards())[0]?.published_at).toBeNull();
+    expect(repoWrites()).toEqual([]);
+  });
+
+  it("I-INT-27 a newer snapshot of the same head stored before the job starts does not stop the card", async () => {
+    const live = api.state.pulls.get(PR_NUMBER);
+    if (!live) throw new Error("no pull in the scenario");
+    // The job reads the PR at 12:00 (scenario), but another job already stored 12:30 for the
+    // same head and inputs; GitHub now answers 12:30 too.
+    const first = { ...live };
+    let reads = 0;
+    const later = { ...live, updated_at: "2026-10-14T12:30:00Z" };
+    await upsertChangeFromPull(t.db, REPO_ID, later as never, new Date());
+    api.state.pulls.set(PR_NUMBER, first);
+    const original = api.state.pulls.get.bind(api.state.pulls);
+    api.state.pulls.get = (n: number) => {
+      reads++;
+      return reads === 1 ? original(n) : later;
+    };
+    expect(await runJob()).toBe("published");
+    expect((await cards())[0]?.published_at).not.toBeNull();
+  });
+
+  it("I-INT-28 the catch-up is bounded: a stored snapshot GitHub never reaches ends stale", async () => {
+    const live = api.state.pulls.get(PR_NUMBER);
+    if (!live) throw new Error("no pull in the scenario");
+    current = scenarioLlm({
+      writer: async () => {
+        // Same head and inputs, but stored "later" than anything GitHub will answer: each
+        // re-read is older than the stored row, so no catch-up can ever apply.
+        await upsertChangeFromPull(
+          t.db,
+          REPO_ID,
+          { ...live, updated_at: "2030-01-01T00:00:00Z" } as never,
+          new Date(),
+        );
+        return writerReply();
+      },
+    });
+    expect(await runJob()).toBe("stale");
+    expect(api.find("GET", /\/pulls\/2$/)).toHaveLength(1 + MAX_CATCH_UPS);
     expect(repoWrites()).toEqual([]);
   });
 
