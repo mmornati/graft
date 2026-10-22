@@ -102,7 +102,8 @@ async function addSecondRepository(): Promise<void> {
 describe("modes: schema", () => {
   it("I-MODE-1 migration 0008 down removes exactly what it added, then up restores it", async () => {
     await truncateAll(t.db);
-    // Step 2's and step 3's migrations sit on top of 0008.
+    // Step 2's, step 3's and step 4's migrations sit on top of 0008.
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
     expect(await migrateDownOne(t.db)).toEqual(["0009_enforce"]);
     expect(await migrateDownOne(t.db)).toEqual(["0008_modes"]);
@@ -116,7 +117,12 @@ describe("modes: schema", () => {
       );
       expect(cols.rows).toEqual([]);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0008_modes", "0009_enforce", "0010_audit_log"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0008_modes",
+        "0009_enforce",
+        "0010_audit_log",
+        "0011_guard",
+      ]);
     }
     await seedWorld(t.db);
     const r = await repoRow();
@@ -332,6 +338,8 @@ describe("modes: the operator CLI", () => {
     "  guard      requested report   effective report",
     "  mcp_write  requested off      effective off",
     "  permissions  checks:write contents:read issues:read metadata:read pull_requests:write  (read 2026-10-20T03:30:00Z)",
+    // Phase 1 step 4: no statuses:read.
+    "  note: guard reads check runs only (no statuses:read)",
     "  pending    1 change not yet applied by the worker",
     "",
   ].join("\n");

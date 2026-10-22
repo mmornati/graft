@@ -94,10 +94,14 @@ describe("pilot doctor", () => {
       login: PILOT_A.login,
       repos: [{ id: PILOT_A.repo, name: "api" }],
     });
-    // Permissions were read an hour ago (Phase 1 step 1), so the permissions check is OK.
+    // Permissions were read an hour ago (Phase 1 step 1), so the permissions check is OK; with
+    // statuses:read the guard check is OK too (Phase 1 step 4).
     await t.db
       .updateTable("installations")
-      .set({ permissions: JSON.stringify({ checks: "write" }), permissions_read_at: ago(HOUR) })
+      .set({
+        permissions: JSON.stringify({ checks: "write", statuses: "read" }),
+        permissions_read_at: ago(HOUR),
+      })
       .where("id", "=", PILOT_A.id)
       .execute();
     const head = SHA(1);
@@ -146,10 +150,14 @@ describe("pilot doctor", () => {
     });
     await queue.start();
     try {
-      // The modes crons are covered by the modes tests; this queue registers only two jobs.
+      // The modes and guard crons are covered elsewhere; this queue registers only two jobs.
       await applyCronSchedules(
         queue,
-        testConfig({ GRAFT_MODE_APPLY_CRON: "off", GRAFT_PERMISSIONS_REFRESH_CRON: "off" }),
+        testConfig({
+          GRAFT_MODE_APPLY_CRON: "off",
+          GRAFT_PERMISSIONS_REFRESH_CRON: "off",
+          GRAFT_GUARD_PRUNE_CRON: "off",
+        }),
       );
       return await fn();
     } finally {
@@ -180,6 +188,8 @@ describe("pilot doctor", () => {
       ["OK", "modes"],
       ["OK", "teams"],
       ["OK", "break_glass"],
+      ["OK", "guard_statuses"],
+      ["OK", "guard_confirming"],
     ]);
     expect(res.out).toContain("graft-sandbox/api");
     const json = JSON.parse(
@@ -189,7 +199,7 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(14);
+    expect(json.checks).toHaveLength(16);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
   });
 
@@ -281,12 +291,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(14);
+    expect(checks).toHaveLength(16);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(14);
+    expect(JSON.parse(missing.out).checks).toHaveLength(16);
     expect(missing.err).toBe("");
   });
 
@@ -397,6 +407,11 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
   await sql`insert into guard_events (repository_id, branch, failing_sha, status) values (${o.repo}, 'main', ${head}, 'detected')`.execute(
     t.db,
   );
+  // Phase 1 step 4: the guard's history and CI results.
+  await sql`insert into main_commits (repository_id, sha, parent_sha, seq, pr_source, tracked_at)
+    values (${o.repo}, ${head}, null, 1, 'direct', now())`.execute(t.db);
+  await sql`insert into ci_results (repository_id, sha, key, name, source, class, observed_at)
+    values (${o.repo}, ${head}, 'run:1:test', 'test', 'check_run', 'red', now())`.execute(t.db);
   await addDelivery(t.db, {
     id: `dl-inst-${o.seq}`,
     installationId: o.id,
@@ -506,6 +521,10 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
       sql`select count(*) as n from mode_changes where repository_id = ${repo}`,
     ),
     audit_log: await n(sql`select count(*) as n from audit_log where repository_id = ${repo}`),
+    main_commits: await n(
+      sql`select count(*) as n from main_commits where repository_id = ${repo}`,
+    ),
+    ci_results: await n(sql`select count(*) as n from ci_results where repository_id = ${repo}`),
     pgboss_jobs: await n(
       sql`select count(*) as n from pgboss.job where data->>'installationId' = ${String(id)} or data->'payload'->'installation'->>'id' = ${String(id)}`,
     ),
@@ -924,13 +943,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0010_audit_log"]);
+    expect(down).toEqual(["0011_guard"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0010_audit_log"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0011_guard"]);
     }
   });
 });

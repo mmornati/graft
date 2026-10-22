@@ -43,10 +43,10 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, all twenty-three tables exist", async () => {
+  it("I-DB-1 after migration, all twenty-five tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(23);
+    expect(TABLE_NAMES).toHaveLength(25);
     expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
   });
@@ -67,6 +67,7 @@ describe("database", () => {
       expect(rolled).toContain("0008_modes");
       expect(rolled).toContain("0009_enforce");
       expect(rolled).toContain("0010_audit_log");
+      expect(rolled).toContain("0011_guard");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -86,6 +87,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -386,6 +388,35 @@ describe("database", () => {
         created_at: now,
       })
       .execute();
+    await db
+      .insertInto("main_commits")
+      .values({
+        repository_id: 2,
+        sha: SHA,
+        parent_sha: null,
+        seq: 1,
+        chain_break: true,
+        pr_source: "change",
+        change_id: change.id,
+        pr_number: 5,
+        committed_at: now,
+        tracked_at: now,
+      })
+      .execute();
+    await db
+      .insertInto("ci_results")
+      .values({
+        repository_id: 2,
+        sha: SHA,
+        key: "run:15368:test",
+        name: "test",
+        source: "check_run",
+        class: "red",
+        html_url: null,
+        completed_at: now,
+        observed_at: now,
+      })
+      .execute();
 
     for (const t of TABLE_NAMES) {
       const rows = await db.selectFrom(t).selectAll().execute();
@@ -538,6 +569,7 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -579,6 +611,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -590,6 +623,7 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -631,6 +665,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
@@ -681,6 +716,7 @@ describe("database", () => {
       );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -749,6 +785,7 @@ describe("database", () => {
 
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -789,6 +826,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
     }
     expect(await policyColumns()).toEqual(upColumns);
@@ -816,6 +854,7 @@ describe("database", () => {
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -840,6 +879,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
     }
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
@@ -877,6 +917,7 @@ describe("database", () => {
       .executeTakeFirstOrThrow();
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0011_guard");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
@@ -896,6 +937,7 @@ describe("database", () => {
         "0008_modes",
         "0009_enforce",
         "0010_audit_log",
+        "0011_guard",
       ]);
     }
     const rows = await sql<{ user_id: number; verified: boolean }>`

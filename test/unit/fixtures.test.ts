@@ -7,8 +7,11 @@ const require = createRequire(import.meta.url);
 const schema = require("@octokit/webhooks-schemas") as Record<string, unknown>;
 
 const EXPECTED = [
+  // Phase 1 step 4: guard triggers.
+  "check_run.completed",
   "check_run.requested_action",
   "check_run.rerequested",
+  "check_suite.completed",
   "installation.created",
   "installation.deleted",
   "installation.new_permissions_accepted",
@@ -30,12 +33,18 @@ const EXPECTED = [
   "pull_request_review.dismissed",
   "pull_request_review.submitted",
   "push",
+  "push.default",
+  "status",
   "team.deleted",
 ];
 
 // Definitions are named "<event>$<action>" ("ping$event" for ping). A third part names a variant.
 const definitionFor = (name: string): string =>
-  name === "ping" || name === "push" ? `${name}$event` : name.split(".").slice(0, 2).join("$");
+  name === "ping" || name === "push" || name === "status"
+    ? `${name}$event`
+    : name === "push.default"
+      ? "push$event"
+      : name.split(".").slice(0, 2).join("$");
 
 describe("webhook fixtures", () => {
   it("has exactly the fixtures from the spec", () => {
