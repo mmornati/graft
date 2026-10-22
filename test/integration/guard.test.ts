@@ -359,6 +359,26 @@ describe("guard: triggers", () => {
     status.branches = [{ name: "feature" }];
     await guardStatus.handle(event("status", status), ctx());
     expect(await jobs("guard.observe")).toHaveLength(3);
+    // `branches` lists at most 10 branches that contain the SHA: a full list without the default
+    // branch may have cut it, so the job decides (finding 3).
+    advance(30);
+    status.branches = Array.from({ length: 10 }, (_, i) => ({ name: `feature-${i}` }));
+    await guardStatus.handle(event("status", status), ctx());
+    expect(await jobs("guard.observe")).toHaveLength(4);
+    advance(30);
+    status.branches = status.branches.slice(0, 9);
+    await guardStatus.handle(event("status", status), ctx());
+    expect(await jobs("guard.observe")).toHaveLength(4);
+
+    // The job keeps only SHAs on the default branch: a SHA the inline track does not reach
+    // stops there, and nothing is stored for it (X9).
+    history(2);
+    api.state.branches.set("main", C(2));
+    api.state.history.set(C(9), { parents: [C(1)] });
+    run(C(9), "test", "failure");
+    expect(await observe(C(9))).toBe("not_on_default_branch");
+    expect(await t.db.selectFrom("ci_results").selectAll().execute()).toEqual([]);
+    expect(api.find("GET", new RegExp(`/commits/${C(9)}/check-runs$`))).toEqual([]);
   });
 
   it("I-GRD-5 results come from the API, not the payload: the payload says failure, the API success", async () => {
@@ -912,7 +932,8 @@ describe("guard: retention, purge and the CLI", () => {
   }
 
   it("I-GRD-15 guard.prune deletes old rows and keeps the commits of confirming events; pilot purge removes the new tables", async () => {
-    await oldRows([C(1), C(2), C(3), C(4)]);
+    // C5 is the repository's newest commit: kept whatever its age (finding 6).
+    await oldRows([C(1), C(2), C(3), C(4), C(5)]);
     await t.db
       .insertInto("guard_events")
       .values({
@@ -927,9 +948,9 @@ describe("guard: retention, purge and the CLI", () => {
       .execute();
     await guardPruneJob.handle({}, ctx());
     const kept = await t.db.selectFrom("main_commits").select("sha").orderBy("seq").execute();
-    expect(kept.map((r) => r.sha)).toEqual([C(1), C(2), C(3)]);
+    expect(kept.map((r) => r.sha)).toEqual([C(1), C(2), C(3), C(5)]);
     const results = await t.db.selectFrom("ci_results").select("sha").execute();
-    expect(results.map((r) => r.sha).sort()).toEqual([C(1), C(2), C(3)].sort());
+    expect(results.map((r) => r.sha).sort()).toEqual([C(1), C(2), C(3), C(5)].sort());
 
     const res = await purgeInstallation(t.db, {
       installationId: INSTALLATION_ID,
@@ -938,9 +959,39 @@ describe("guard: retention, purge and the CLI", () => {
       dryRun: false,
       evenIfActive: true,
     });
-    expect(res.counts).toMatchObject({ main_commits: 3, ci_results: 3, guard_events: 1 });
+    expect(res.counts).toMatchObject({ main_commits: 4, ci_results: 4, guard_events: 1 });
     expect(await t.db.selectFrom("main_commits").selectAll().execute()).toEqual([]);
     expect(await t.db.selectFrom("ci_results").selectAll().execute()).toEqual([]);
+  });
+
+  it("I-GRD-15b a quiet month: the prune keeps the green tip, and the next red merge on top of it opens an event", async () => {
+    history(2);
+    mergedPull(7, C(2));
+    await track(C(2), null);
+    run(C(1), "test", "success");
+    run(C(2), "test", "success");
+    await observe(C(1));
+    await observe(C(2));
+    advance(31 * 86_400);
+    await guardPruneJob.handle({}, ctx());
+    const kept = await t.db.selectFrom("main_commits").select("sha").execute();
+    expect(kept.map((r) => r.sha)).toEqual([C(2)]);
+    history(3, 3);
+    mergedPull(8, C(3));
+    await track(C(3), C(2));
+    expect(
+      await t.db
+        .selectFrom("main_commits")
+        .select("chain_break")
+        .where("sha", "=", C(3))
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ chain_break: false });
+    run(C(3), "test", "failure");
+    await observe(C(3));
+    const rows = await events();
+    expect(rows.map((r) => [r.failing_sha, r.last_green_sha, r.candidates])).toEqual([
+      [C(3), C(2), [{ sha: C(3), prNumber: 8, kind: "pr" }]],
+    ]);
   });
 
   it("I-GRD-16 guard list text and --json; mode show notes; doctor warnings, never failures", async () => {

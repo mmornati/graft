@@ -442,7 +442,9 @@ export async function listEvents(
 
 /**
  * Deletes commits and results older than `cutoff`, except the commits an open (`confirming`)
- * event refers to (its failing commit, last green commit and candidates) and their results.
+ * event refers to (its failing commit, last green commit and candidates), the newest commit of
+ * each repository (step 4 review 1, finding 6: a quiet repository keeps its tip, so the next merge
+ * has a parent and a baseline), and their results.
  */
 export async function pruneOlderThan(
   db: Db,
@@ -457,6 +459,9 @@ export async function pruneOlderThan(
       union
       select e.repository_id, c->>'sha' from guard_events e, jsonb_array_elements(e.candidates) c
         where e.status = 'confirming'
+      union
+      (select distinct on (m.repository_id) m.repository_id, m.sha from main_commits m
+        order by m.repository_id, m.seq desc)
     )`;
     const results = await sql`
       delete from ci_results r where r.observed_at < ${cutoff}
