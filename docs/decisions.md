@@ -407,3 +407,70 @@ Finding → fix (review: `docs/phase-1/reviews/step-2-review-1.md`, CHANGES REQU
 7. **The gate trusts the process's own ceiling (rolling restart)** → **deferred** to step 7 (security review and rollout runbook). Making the gate read the lower of the environment ceiling and the one stored in `service_state` changes step 1's ceiling model (`publishModeCeiling`, `service_state`), which is beyond step 2. Documented instead: `docs/features/modes.md` and HUMAN-TODO say that lowering `GRAFT_MODE_CEILING` requires stopping every worker before the new one starts (no rolling restart).
 8. **(nit) A non-neutral PATCH could rename another run** → **accepted**, commented in the guard: only the policy job holds a `policy` client, and it PATCHes only a run id it found as `graft/policy` (its stored id, or `listForRef` with `check_name`).
 9. **(nit) A role answer with no `user` passed** → `collaboratorRole` returns `none` when the response has no user (U-COL-3).
+
+## Phase 1 step 3: break-glass
+
+Spec: [phase-1/step-3-break-glass.md](phase-1/step-3-break-glass.md). Decisions D1 to D12 are in the spec; what follows is the API check (T1), what the spec left open, and where the build differs from it.
+
+**Migration number.** This step uses `0010_audit_log`. Step 4 (guard detection) is built at the same time and takes `0011`. **Whichever of the two merges second must check the order** (the migrator refuses migrations out of order) and renumber, together with the migration step-down tests (`db.test.ts`, I-MODE-1, I-ENF-1, the pilot-ops "one migration behind" test, I-BG-1).
+
+**T1: API verification** (offline: GitHub's REST documentation as known at build time and Octokit's `issues.listEvents` types; nothing could be exercised against real GitHub, see HUMAN-TODO).
+
+- **Endpoint and shape.** `GET /repos/{owner}/{repo}/issues/{issue_number}/events` (`octokit.rest.issues.listEvents`) works for pull request numbers, because every pull request is an issue. Each item has `id`, `node_id`, `url`, `actor` (a simple user: `login`, `id`, `type` `User` or `Bot`; `null` for a deleted account), `event` (`labeled`, `unlabeled`, …), `commit_id`, `commit_url`, `created_at`, `performed_via_github_app` and, for label events, `label: { name, color }`. The `actor` of a `labeled` event is the account that added the label; a label added by an App appears as its `<slug>[bot]` user with `type: "Bot"`.
+- **Ordering.** Events are listed oldest first. The endpoint takes only `per_page` (at most 100) and `page`: there is no `sort`, `direction` or `since`. So newest-first is not available as a parameter, and Graft reads every page up to the D2 cap (10 pages of 100) and takes the newest matching event. Jumping to the `Link: rel="last"` page and reading backwards was considered and not used (the simplest option). When the tenth page is full, a later event may sit on an unread page, so the result is "not found" (`actor_unknown`, fail closed).
+- **Permissions.** The endpoint is readable with `issues: read`, or with `pull_requests: read` for a pull request number. Both manifests already grant `issues: read` and `pull_requests: write`, so no manifest change. The role is read with `collaboratorRole` (step 2 D16; 404 for a non-collaborator).
+- **Fakes.** `test/helpers/fake-github-api.ts` serves `state.issueEvents` (oldest first, paginated like the other lists, 404 for an unknown issue or PR), and the fake world records a `labeled` event with the acting user whenever it labels a PR.
+
+**Choices where the spec is silent**
+
+- **Label setting.** `GRAFT_BREAK_GLASS_LABEL` accepts 1 to 50 characters with no control characters and no leading or trailing space; any other character is allowed, because GitHub label names may contain spaces, colons and emoji. `off` is matched case-insensitively (`OFF` disables too), so a typo in case never turns the feature on under a strange name. Empty means the default.
+- **Only `labeled` carries the head.** The handler handles both `labeled` and `unlabeled`, but sets `breakGlassHeadSha` only for `labeled`: an unlabel delivery's head is not a labelling-time snapshot, and D9 needs no filter. A late unlabel delivery can therefore never bind a break-glass.
+- **Between label events.** When the label is on the PR, no `applied` row matches the head and the run is not the label's own trigger, Graft verifies nothing (§6.2) and shows what the log says for that head: the newest row, if it is `ignored` or `stale`, is shown again (no API call); otherwise nothing.
+- **Removal on any trigger.** A `removed` row is written by any evaluation that finds the label gone while an `applied` row matches the head, not only by the `unlabeled` trigger, so a lost webhook is still caught. Its actor is whoever the newest `unlabeled` event names, bots included; the role is not checked (`actor_role` NULL).
+- **Stale needs no read.** A D4 mismatch is refused before any issue-events or role request; the `stale` row has no actor.
+- **Ties.** "Later" between two rows of the same (change, head) compares `created_at`; a `removed` row with the same time as an `applied` one counts as later, so an ambiguous order never keeps a bypass alive.
+- **Dedup in the store, under the lock.** `insertAuditRow` checks before inserting: no second `applied` while one is active, `removed` only while one is active, one `ignored` per (change, head, actor) and one `stale` per (change, head). The partial unique indexes back it (`ON CONFLICT DO NOTHING`), but `audit_log_ignored_once` treats a NULL `actor_id` as distinct, so the store also deduplicates `actor_unknown` rows itself.
+- **A verification that lost the race.** If the run that verified a break-glass finds that a later evaluation already published (the step 2 ordering check), it still writes its audit row in the same locked transaction and enqueues one `policy.evaluate` (trigger `pr`, singleton `policy:breakglass:<change>:<head>:<factsReadAt>`). Without this, the later run (not the label's own trigger) would not verify, and the label would silently not apply.
+- **`EnforceInput.breakGlass` is optional** (absent means none), so every U-ENF call is unchanged. Under break-glass the constraints are still computed, so the details show what was bypassed.
+- **Rendering.** The break-glass line is its own paragraph right after the headline, before the would-be line, in all three section variants (a missing or invalid policy is bypassed too). Self-use reads `` on `abc1234` (on their own pull request): ``. In report mode the effect clause becomes "Graft would bypass the policy for this commit (report mode)" and the rest of the line is kept. An unknown actor reads "applied by someone (who applied it could not be determined)". `role_too_low` shows the role GitHub reported (`none` for a recycled login). The details block comes right after the mode line, before the matched rules, for `applied`, `ignored` and `stale`.
+- **`graft audit list`.** `--since` takes a date (midnight UTC) or an ISO timestamp with a zone. `--repo` is matched case-insensitively and includes removed repositories (the trail outlives a removal until `pilot purge`); rows of several matching repository ids are merged. An unknown name is `unknown repository`, exit 1. `[self]` prints as `self`, a null reason is left out, an unknown actor prints `unknown`. The argument parsing lives in `graft-ops.ts` like the `mode` group; `src/modules/audit/cli.ts` has the query and formatting helpers.
+- **Doctor.** A fourteenth check, `break_glass` (OK or WARN), counts `applied` rows of the last 7 days per active repository of the installation, whether or not they were removed later. The doctor tests now expect fourteen checks.
+- **Feature off.** With `GRAFT_BREAK_GLASS_LABEL=off` the job does not resolve anything, so an `applied` row written before the switch no longer applies.
+- **The audit module is not in the registry**: it has no handler and no job (its `index.ts` exports empty lists, like `changes`).
+- **Fixture.** `pull_request.labeled.break-glass.json` is a variant of `pull_request.labeled`; the fixture test maps a third dotted part of the name to the same schema definition.
+
+**Deviations from the spec**
+
+- **D12 and D9.** Evaluations of PRs without the label make no new API call, except one: when the label was removed while a break-glass was applied, the job reads the issue events once to record who removed it (D9 requires the actor).
+- **Mutation "`breakGlass` removed from `factsHash`".** For an applied break-glass the term is redundant: the enforced reason and the rendered text change too, so a label trigger republishes without it. As for I-ENF-9 in step 2, I-BG-2 also checks the hash function directly (two inputs that differ only in the break-glass term hash differently), and U-BG-4b does the same for every state.
+- **I-BG-3 also labels as a `write` user.** A triage user alone cannot catch the mutation "`write` accepted as enough".
+- **N-11.** Under the `max` profile the normal conclusion of the scenario's PR is itself non-neutral (`failure`), so "the only non-neutral conclusion is `success` on the labelled head" is checked as: every `success` written during the scenario is on the labelled head, every non-neutral write went through the `policy` client with an allowed gate answer, and the next head's conclusion is the normal one (not `success`, not `break_glass`).
+- **I-BG-14's doctor case** is in `pilot-ops.test.ts` (it needs that file's healthy-installation helper), under the same ID.
+- **Earlier tests changed:** the migration step-down tests (one more migration), I-DB-1 (twenty-three tables) and I-DB-3 (an audit row), the fixture list, I-DOC-1 and I-DOC-3 (fourteen checks), I-PURGE-1 (seeds and counts an audit row), and I-ENF-9 (its hash input gains the term).
+
+**Known limits**
+
+- A PR with more than 1,000 issue events cannot be break-glassed (fail closed, T1).
+- The label stays on the PR after a push; it only counts for the commit it was verified on (D6).
+- The issue-events shape and ordering are from the documentation, not from real GitHub (HUMAN-TODO).
+
+**Mutation checks (§12), run by the developer.**
+
+Each mutation was applied alone, the named tests run, then every touched file restored byte for byte from a saved copy (`git status` clean afterwards). All ten were caught:
+
+| Mutation (as applied) | Failing tests |
+| --- | --- |
+| Actor taken from the payload `sender` (the handler copies `sender` into the job, the job's schema keeps it, and `resolveBreakGlass` uses it instead of the issue event) | I-BG-4 |
+| `write` accepted as enough (`atLeast(role, "write")`) | I-BG-3 |
+| Bots accepted (the `type: Bot` check removed) | I-BG-9 |
+| D4 equality check removed | I-BG-5 |
+| Break-glass kept after a push (`activeBreakGlass` ignores the head SHA) | I-BG-6, N-11 |
+| Break-glass evaluated after `blocked` instead of before | U-BG-1, I-BG-2 (and I-BG-8, whose name matched the filter) |
+| Conclusion published in report mode (`publishedCheck` lets `break_glass` through) | I-BG-8, N-10 |
+| `ignored` dedup removed (the store's check and its `ON CONFLICT DO NOTHING`) | I-BG-3 (the insert hits `audit_log_ignored_once` and the job fails) |
+| `breakGlass` removed from `factsHash` | I-BG-2 (the direct hash check; see the deviation above) |
+| `removed` row not written on unlabel | I-BG-7, I-BG-13 |
+
+Removing only the store's `ignored` check, and keeping `ON CONFLICT DO NOTHING`, is not caught, by design: the unique index `audit_log_ignored_once` still keeps one row per (change, head, actor), so I-BG-3 passes. The store's own check matters only for the unknown actor (NULL `actor_id`), which the index does not deduplicate.
+
+**Not run:** the manual smoke test (it needs a real or tunnelled App; HUMAN-TODO). `pnpm db:up` was not run: the shared `scionhub` Postgres container on port 55432 was reused, the tests ran against `graft_test_s3` and the migrate, rollback and migrate sequence against `graft_s3_dod`, both created for this step and dropped afterwards.
