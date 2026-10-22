@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "runId": "20261014T234902Z-8ceb",
-  "createdAt": "2026-10-14T23:49:02.600Z",
+  "runId": "20261022T110549Z-9bd0",
+  "createdAt": "2026-10-22T11:05:49.455Z",
   "set": {
     "setId": "synthetic",
     "kind": "synthetic",
@@ -12,8 +12,8 @@
     "needsAdjudication": 0
   },
   "prompt": {
-    "promptVersion": "intent-v1",
-    "promptFingerprint": "1fe62955ab7a276f42ecce84d38c3ca3e106e044e2f5bcdee2ff9e9f72781b40"
+    "promptVersion": "intent-v2",
+    "promptFingerprint": "9f271271b5511b9d78e43ba9dcd408d513088b9573ea6a8f10dc989a2e286233"
   },
   "models": {
     "fast": "claude-haiku-5-5",
@@ -21,14 +21,14 @@
   },
   "llm": "fake",
   "git": {
-    "commit": "e9a8fb674c82deb30127ec2d39368595c5763558",
+    "commit": "20dd02fd19d0b0074ddc81388c04146c07ed5e7c",
     "dirty": true
   },
   "run": {
     "complete": true,
     "skippedBudget": 0,
     "cachedResults": 0,
-    "durationMs": 24
+    "durationMs": 21
   },
   "metrics": {
     "scored": 30,

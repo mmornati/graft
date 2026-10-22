@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseNonce,
+  fileContext,
+  hunkRanges,
   LIMITS,
   neutralizeUntrusted,
   prepareDiff,
@@ -178,5 +180,68 @@ describe("prepareDiff", () => {
     expect(a.fileListBlock).toBe(b.fileListBlock);
     expect(a.renderDiff("n")).toBe(b.renderDiff("n"));
     void defaultGenerateOptions;
+  });
+
+  it("U-DIFF-13 a small head file is shown whole with line numbers", () => {
+    const c = fileContext("a\nb\nc\n", "@@ -2,1 +2,1 @@\n-x\n+b", 10_000);
+    expect(c).toEqual({ view: "whole", lines: 3, body: "1\ta\n2\tb\n3\tc" });
+    expect(fileContext("", "", 10_000)).toBeNull();
+    expect(hunkRanges("@@ -1 +1 @@\n+a\n@@ -10,3 +12,0 @@\n-b")).toEqual([
+      [1, 1],
+      [12, 12],
+    ]);
+  });
+
+  it("U-DIFF-14 a large file shows the hunk window and the far lines that set a changed name", () => {
+    const filler = (n: number) =>
+      Array.from({ length: n }, (_, i) => `  filler(${i}); // ${"x".repeat(60)}`);
+    const head = [
+      "const state = {",
+      "  replaying: false,",
+      "};",
+      ...filler(400),
+      "function scrollDown() {",
+      "  if (state.replaying) return;",
+      "  thread.scrollTo(0);",
+      "}",
+      ...filler(400),
+      "function renderHistory(events) {",
+      "  state.replaying = true;",
+      "  for (const e of events) apply(e);",
+      "  state.replaying = false;",
+      "}",
+    ].join("\n");
+    const patch =
+      "@@ -404,3 +404,4 @@ function scrollDown() {\n function scrollDown() {\n+  if (state.replaying) return;\n   thread.scrollTo(0);\n }";
+    const c = fileContext(head, patch, 16_000);
+    expect(c?.view).toBe("excerpts");
+    const body = c?.body ?? "";
+    expect(body).toContain("405\t  if (state.replaying) return;");
+    expect(body).toContain("2\t  replaying: false,");
+    expect(body).toContain("809\t  state.replaying = true;");
+    expect(body).toContain("811\t  state.replaying = false;");
+    expect(body).toContain("\n…\n");
+    expect(body).not.toContain("200\t");
+    expect(body.length).toBeLessThanOrEqual(LIMITS.contextPerFileChars);
+  });
+
+  it("U-DIFF-15 context is rendered only for shown files with a head text, within the budget", () => {
+    const d = prepareDiff(
+      [
+        file("src/a.ts", { headText: "const a = 1;\n" }),
+        file("src/b.ts"),
+        file("pnpm-lock.yaml", { headText: "lock\n" }),
+      ],
+      none,
+    );
+    expect(d.contextFiles).toBe(1);
+    expect(d.renderContext("N")).toBe(
+      `@@graft-context-N ${JSON.stringify({ path: "src/a.ts", lines: 1, view: "whole" })}\n1\tconst a = 1;`,
+    );
+    expect(prepareDiff([file("src/b.ts")], none).renderContext("N")).toBe("");
+    // A whole file over the per-file cap with no hunk near it is cut, never longer than the cap.
+    const long = Array.from({ length: 5_000 }, (_, i) => `line ${i} ${"y".repeat(20)}`).join("\n");
+    const big = prepareDiff([file("src/c.ts", { headText: long })], none).renderContext("N");
+    expect(big.length).toBeLessThan(LIMITS.contextPerFileChars + 200);
   });
 });

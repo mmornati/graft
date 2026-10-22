@@ -421,6 +421,7 @@ export function redactInputs(
     files: inputs.files.map((f) => ({
       ...f,
       patch: f.patch === null ? null : redactText(f.patch, true),
+      ...(f.headText == null ? {} : { headText: redactText(f.headText, false) }),
     })),
   };
   return { inputs: out, redactions: counter.list() };

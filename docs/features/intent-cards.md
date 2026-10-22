@@ -9,7 +9,7 @@ flowchart LR
     IN["PR title, description,<br/>linked issue, file list, diff"] --> FLOOR["Rule-based risk floor"]
     IN --> WR["Writer model<br/>(fast if floor is trivial,<br/>else strong)"]
     WR --> CARD["Card: goal, behavior changes,<br/>out-of-scope edits, risk"]
-    CARD --> VER["Verifier model (strong)<br/>sees diff, file list and card only"]
+    CARD --> VER["Verifier model (strong)<br/>sees diff, file list, file context<br/>and card only"]
     FLOOR --> RISK["Final risk = max of floor,<br/>writer, first pass, verifier"]
     CARD --> RISK
     VER --> RISK
@@ -23,7 +23,7 @@ For every open PR, Graft writes an **intent card** into the `intent` section of 
 - **Out-of-scope edits**: files the goal does not explain (from the writer, plus any the verifier flags).
 - **Risk**: `trivial`, `logic` or `sensitive`, shown with where it came from (`rules`, `writer`, `verifier`).
 
-**How it is made.** A writer model reads the PR title and description, the linked issue (`Fixes #N`, the `Graft-Task` issue, or the first `#N`), the file list and the diff. A second call, the verifier, sees the diff, the file list and the card, but **not** the title, description or issue, and checks every claim. The PR description comes from the agent being judged, so it is untrusted input: it is wrapped in nonce-tagged data blocks, the prompts say it is data, and injection markers raise the floor.
+**How it is made.** A writer model reads the PR title and description, the linked issue (`Fixes #N`, the `Graft-Task` issue, or the first `#N`), the file list and the diff. A second call, the verifier, sees the diff, the file list, the changed files as they are at the head (the file context, below) and the card, but **not** the title, description or issue, and checks every claim. The PR description comes from the agent being judged, so it is untrusted input: it is wrapped in nonce-tagged data blocks, the prompts say it is data, and injection markers raise the floor.
 
 **Risk classes and the floor.** The final class is `max(floor, writer, first pass, verifier, logic if the verifier disagrees or fails, logic if injection is suspected)`. **The model can only raise the class, never lower it.** The floor comes from fixed rules over each file's path (and previous path, so renames count both ways), case-insensitively:
 
@@ -35,7 +35,11 @@ For every open PR, Graft writes an **intent card** into the `intent` section of 
 
 Without a checked card (no API key, model down, budget used up) the risk is at least `logic`, and the card says why.
 
-**"The verifier disagrees"** means that at least one claim on the card was not supported by the diff (unsupported or contradicted), or that the verifier found observable behavior changes the card does not mention. The comment then shows a warning listing them, and the risk is at least `logic`. "Not verified" means the verifier call failed.
+**File context (since `intent-v2`).** A patch shows only the changed lines and three lines around them, so a claim such as "scrolling stops during a replay" could not be checked when the line that sets the replay flag was further away. Graft therefore reads up to 20 modified, renamed or copied source files at the head commit (not added files, whose patch is the whole file, nor lockfiles, binaries or generated files; at most 200 KB each) and gives the verifier, never the writer, either the whole file with line numbers (up to 16,000 characters) or excerpts: 20 lines around each hunk plus 2 lines around other uses of the names the changed lines use (a name used more than 12 times is too common to help). The context of all files is capped at 60,000 characters. The verifier is told the context is unchanged code, for reference only: it never counts as a behavior change.
+
+**Verdicts.** Each claim is `supported`, `unsupported` (the diff does not show it), `contradicted` (the diff shows something else), or `unverifiable`: the changed lines do what the claim says, but whether it holds depends on unchanged code the verifier was not shown, such as a function in an untouched file. An unverifiable claim is listed in a note under the card and does not count as a disagreement. The hidden part of a truncated or omitted file is part of the change, so a claim that depends on it stays `unsupported`.
+
+**"The verifier disagrees"** means that at least one claim on the card is unsupported or contradicted, or that the verifier found observable behavior changes the card does not mention. The comment then shows a warning listing them, and the risk is at least `logic`. "Not verified" means the verifier call failed.
 
 **Rating a card.** Click 👍 or 👎 on the Graft comment, or press "Card is accurate" / "Card is wrong" on the `graft/intent` check. Reactions are picked up within 15 minutes. One vote counts per user and card, and the latest wins. The data feeds the 90% accuracy gate.
 

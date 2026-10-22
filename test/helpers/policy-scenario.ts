@@ -101,9 +101,12 @@ export function loadPolicyScenario(api: FakeGitHubApi, o: PolicyScenarioOptions 
   putContent(api, `refs/pull/${PR_NUMBER}/head`, permissive);
 }
 
-/** Every `repos.getContent` request, as the `ref` it asked for. */
+/**
+ * Every `repos.getContent` request for `graft.yaml`, as the `ref` it asked for. The intent job's
+ * reads of changed files at the head (verifier context) are other paths and are not counted.
+ */
 export const contentRefs = (api: FakeGitHubApi): (string | undefined)[] =>
-  api.requests.filter((r) => /\/contents\//.test(r.path)).map((r) => r.ref);
+  api.requests.filter((r) => /\/contents\/graft\.yaml$/.test(r.path)).map((r) => r.ref);
 
 /** Writes to the repository (check runs and comments), not the access-token call. */
 export const repoWrites = (api: FakeGitHubApi) =>

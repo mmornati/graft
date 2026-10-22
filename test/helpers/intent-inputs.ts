@@ -19,6 +19,7 @@ export function file(path: string, o: Partial<Omit<ChangedFile, "path">> = {}): 
       o.patch === undefined
         ? `@@ -1,${deletions} +1,${additions} @@\n${"-old\n".repeat(deletions)}${"+new\n".repeat(additions)}`.trimEnd()
         : o.patch,
+    ...(o.headText !== undefined ? { headText: o.headText } : {}),
   };
 }
 

@@ -8,6 +8,11 @@ export interface ChangedFile {
   deletions: number;
   /** In memory only: never persisted, logged or put in job data. */
   patch: string | null;
+  /**
+   * The file as it is at the head commit, for the verifier's context; null when not fetched.
+   * In memory only, like `patch`. Absent in eval cases exported before intent-v2.
+   */
+  headText?: string | null;
 }
 
 export interface CardInputs {
@@ -37,6 +42,7 @@ export const changedFileSchema = z.strictObject({
   additions: count,
   deletions: count,
   patch: z.string().nullable(),
+  headText: z.string().nullable().optional(),
 });
 
 /** Step 4 loads labeled fixtures with this. */
