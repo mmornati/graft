@@ -1,16 +1,20 @@
 # Graft on Coolify (Docker Compose build pack). See docs/deploy/coolify.md.
 #
-# SERVICE_FQDN_SERVER_3000, SERVICE_USER_POSTGRES and SERVICE_PASSWORD_POSTGRES are Coolify magic
-# variables: Coolify generates them (a domain routed to the server's port 3000, a database user and
-# a random password). Everything else marked `:?` must be set in the resource's Environment
-# Variables page. Nothing secret belongs in this file.
+# This stack holds only the Graft code: `migrate`, `server` and `worker`, rebuilt and replaced on
+# every deploy. Postgres is a separate Coolify Database resource in the same project, so deploying
+# Graft never restarts it. DATABASE_URL is that database's internal URL; for the hostname to
+# resolve, this resource must have Advanced → Docker compose → "Connect to predefined network" on.
+#
+# SERVICE_FQDN_SERVER_3000 is a Coolify magic variable (a domain routed to the server's port 3000).
+# Everything marked `:?` must be set in the resource's Environment Variables page. Nothing secret
+# belongs in this file.
 
 x-graft-env: &graft-env
   NODE_ENV: production
   HOST: 0.0.0.0
   PORT: "3000"
   LOG_LEVEL: ${LOG_LEVEL:-info}
-  DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/graft
+  DATABASE_URL: ${DATABASE_URL:?}
   GITHUB_APP_ID: ${GITHUB_APP_ID:?}
   GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
   GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:?}
@@ -25,29 +29,11 @@ x-graft-build: &graft-build
   dockerfile: Dockerfile
 
 services:
-  postgres:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_USER: ${SERVICE_USER_POSTGRES}
-      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
-      POSTGRES_DB: graft
-    volumes:
-      - graft-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d graft"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    # No ports: only the other services of this stack reach the database.
-
   migrate:
     build: *graft-build
     command: ["node", "dist/bin/migrate.js", "up"]
     environment:
-      DATABASE_URL: postgres://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/graft
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DATABASE_URL: ${DATABASE_URL:?}
     restart: "no"
     # Coolify: a one-shot container must not count toward the stack's health.
     exclude_from_hc: true
@@ -81,6 +67,3 @@ services:
     # The worker serves no HTTP: the image's healthcheck does not apply to it.
     healthcheck:
       disable: true
-
-volumes:
-  graft-pgdata:

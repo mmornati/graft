@@ -38,7 +38,7 @@ What you should see:
 
 | Step | Result |
 | --- | --- |
-| `pnpm db:up` | A `postgres:17-alpine` container, published on **127.0.0.1:55432 only** (loopback; the dev credentials `graft`/`graft` are not reachable from the network). `--wait` returns once the health check passes. |
+| `pnpm db:up` | A `postgres:18-alpine` container, published on **127.0.0.1:55432 only** (loopback; the dev credentials `graft`/`graft` are not reachable from the network). `--wait` returns once the health check passes. |
 | `pnpm db:migrate` | Applies the migrations in `src/db/migrations/` (`0001_initial` to `0007_vote_eligibility`). |
 | first `webhook:send` | `202 {"status":"enqueued"}`: the fixture `test/fixtures/webhooks/installation.created.json` was signed with `GITHUB_WEBHOOK_SECRET` from `.env`, verified, stored in `webhook_deliveries` and queued as a `github.webhook` job. |
 | second `webhook:send` | `200 {"status":"duplicate"}`: the same `X-GitHub-Delivery` is never processed twice. |

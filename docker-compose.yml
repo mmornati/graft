@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: graft
       POSTGRES_PASSWORD: graft
@@ -14,7 +14,9 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - graft-pgdata:/var/lib/postgresql/data
+      # Postgres 18 images keep data in /var/lib/postgresql/18/docker: mount the parent. The volume
+      # name carries the major version so an old graft-pgdata (Postgres 17) volume is never reused.
+      - graft-pgdata-18:/var/lib/postgresql
 
 volumes:
-  graft-pgdata:
+  graft-pgdata-18:
