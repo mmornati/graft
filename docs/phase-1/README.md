@@ -93,6 +93,8 @@ Detailed spec: [step-4-guard-detection.md](step-4-guard-detection.md). User-faci
 
 ### Step 5 — Revert PRs and optional auto-merge (week 10)
 
+Detailed spec: [step-5-revert-prs.md](step-5-revert-prs.md). It adds rules the bullets below leave open: a revert needs a confirmed culprit (never `flaky`, never with confirmation off), a change to `.github/workflows/` is `needs_human` because Graft does not request the `workflows` permission, open revert PRs are capped per repository, and auto-merge also stays off for a missing card or a revert of the policy file (its D3, D8, D13, D14).
+
 - Enforce only, and only with `contents: write`. Graft builds the revert **without reading code**: for a squash or merge commit whose changed files were not touched by any later commit on `main`, the revert tree takes `main`'s tree and points each changed path back at its blob SHA from before the culprit (deleted files restored, added files removed). Blob SHAs pass through the Git Data API; no content is fetched or stored. If any changed file was touched later, Graft does not attempt a merge: it marks the event `needs_human` and comments with the conflict list.
 - The revert PR has a fixed title and body, the `graft:revert` label, `Graft-Agent: graft-guard` trailers, and pings the culprit's author (or the agent's task link from provenance).
 - **Auto-merge** of reverts, opt-in in `graft.yaml` (`guard: { auto_merge_reverts: [trivial, logic] }`, risk taken from the culprit's card): Graft enables GitHub auto-merge on the revert PR, so branch protection and required checks still decide. Never for `sensitive`; never when the culprit was merged under break-glass.
