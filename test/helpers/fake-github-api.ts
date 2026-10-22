@@ -117,6 +117,11 @@ export function createFakeGitHubApi(
      * issue with no entry serves an empty list when it exists, else 404.
      */
     issueEvents: new Map<number, Record<string, unknown>[]>(),
+    /**
+     * Step 3 review 1 (nit 6): the issue events API lags behind GitHub's label state. The newest
+     * this many events of every issue are not listed yet (0: nothing hidden).
+     */
+    issueEventsLag: 0,
     /** `pulls.listRequestedReviewers` (step 6). */
     requestedReviewers: new Map<
       number,
@@ -174,6 +179,7 @@ export function createFakeGitHubApi(
   };
   const requests: RecordedApiRequest[] = [];
   const failures: Failure[] = [];
+  const afterHooks: { method: string; pathRegex: RegExp; fn: () => Promise<void> }[] = [];
   const blocks: {
     method: string;
     pathRegex: RegExp;
@@ -371,7 +377,8 @@ export function createFakeGitHubApi(
       if (!all && !state.pulls.has(n) && !state.issues.has(n)) {
         return json(404, { message: "Not Found" });
       }
-      return paged(all ?? [], url, path);
+      const listed = (all ?? []).slice(0, Math.max(0, (all ?? []).length - state.issueEventsLag));
+      return paged(listed, url, path);
     }
     m = is("GET", /^\/pulls\/(\d+)\/reviews$/);
     if (m) return paged(state.reviews.get(Number(m[1])) ?? [], url, path);
@@ -612,7 +619,14 @@ export function createFakeGitHubApi(
       failures.splice(fIdx, 1);
       return withRateLimit(json(failure.status, failure.body, failure.headers));
     }
-    return withRateLimit(await route(method, url, body));
+    const res = withRateLimit(await route(method, url, body));
+    const hIdx = afterHooks.findIndex((h) => h.method === method && h.pathRegex.test(url.pathname));
+    const hook = hIdx >= 0 ? afterHooks[hIdx] : undefined;
+    if (hook) {
+      afterHooks.splice(hIdx, 1);
+      await hook.fn();
+    }
+    return res;
   };
 
   /** Real responses carry their url; Octokit's paginate reads it. */
@@ -639,6 +653,13 @@ export function createFakeGitHubApi(
       body: unknown = { message: "fake failure" },
     ) {
       failures.push({ method: method.toUpperCase(), pathRegex, status, headers, body });
+    },
+    /**
+     * Once, after the next matching request has been answered and before the caller sees the
+     * answer, run `fn` (it may change the state or run another job; the answer is already fixed).
+     */
+    afterNext(method: string, pathRegex: RegExp, fn: () => Promise<void>) {
+      afterHooks.push({ method: method.toUpperCase(), pathRegex, fn });
     },
     /** The next matching request is held until `release()`. */
     block(method: string, pathRegex: RegExp): Blocker {

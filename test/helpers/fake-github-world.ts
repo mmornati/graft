@@ -248,6 +248,21 @@ export function createFakeGitHubWorld(opts: WorldOptions) {
     html_url: `https://github.com/${r.owner}/${r.name}`,
     default_branch: "main",
   });
+  /** Who a label change is recorded for: the App's bot for an installation token (nit 6). */
+  const labelActor = (w: Who): WorldUser =>
+    w === "bot" || w === "app" ? BOT : w && w !== "invalid" ? w : opts.users.actor;
+  /** The issue events API's record of a label change (Phase 1 step 3, D2), oldest first. */
+  const labelEvent = (n: number, event: "labeled" | "unlabeled", u: WorldUser, name: string) => {
+    const log = state.issueEvents.get(n) ?? [];
+    log.push({
+      id: state.nextId++,
+      event,
+      actor: { id: u.id, login: u.login, type: u.login === opts.botLogin ? "Bot" : "User" },
+      label: { name, color: "ededed" },
+      created_at: iso(),
+    });
+    state.issueEvents.set(n, log);
+  };
   const userPayload = (u: WorldUser) => ({
     login: u.login,
     id: u.id,
@@ -728,6 +743,7 @@ export function createFakeGitHubWorld(opts: WorldOptions) {
     const isSandbox = key === sandboxKey;
     const is = (meth: string, re: RegExp): RegExpExecArray | null =>
       method === meth ? re.exec(rest) : null;
+    const who0 = who;
 
     if (rest === "" && method === "GET") {
       const parent = repoRec.parent ? repoOf(repoRec.parent) : undefined;
@@ -967,18 +983,8 @@ export function createFakeGitHubWorld(opts: WorldOptions) {
       const added = ((body?.labels ?? []) as string[]).filter((l) => !rec.labels.includes(l));
       rec.labels.push(...added);
       // The issue events API records who labelled (Phase 1 step 3, D2), oldest first.
-      const who = actor ?? opts.users.actor;
-      const log = state.issueEvents.get(n) ?? [];
-      for (const l of added) {
-        log.push({
-          id: state.nextId++,
-          event: "labeled",
-          actor: { id: who.id, login: who.login, type: "User" },
-          label: { name: l, color: "ededed" },
-          created_at: iso(),
-        });
-      }
-      state.issueEvents.set(n, log);
+      const who = labelActor(who0);
+      for (const l of added) labelEvent(n, "labeled", who, l);
       const pr = prs.get(n);
       if (pr) {
         pr.labels = rec.labels.slice();
@@ -987,9 +993,35 @@ export function createFakeGitHubWorld(opts: WorldOptions) {
             "labeled",
             pr,
             { label: { name: l, color: "ededed", id: 1, node_id: "L_1", default: false } },
-            actor ?? opts.users.actor,
+            who,
           );
         }
+      }
+      return json(
+        200,
+        rec.labels.map((l) => ({ name: l })),
+      );
+    }
+    // Step 3 review 1 (nit 6): removing a label records an `unlabeled` event and emits the webhook.
+    m = is("DELETE", /^\/issues\/(\d+)\/labels\/([^/]+)$/);
+    if (m) {
+      const n = Number(m[1]);
+      const name = decodeURIComponent(m[2] as string);
+      const rec = issueRegistry.get(n);
+      if (!rec) return notFound();
+      if (!rec.labels.includes(name)) return json(404, { message: "Label does not exist" });
+      rec.labels = rec.labels.filter((l) => l !== name);
+      const who = labelActor(who0);
+      labelEvent(n, "unlabeled", who, name);
+      const pr = prs.get(n);
+      if (pr) {
+        pr.labels = rec.labels.slice();
+        await emitPr(
+          "unlabeled",
+          pr,
+          { label: { name, color: "ededed", id: 1, node_id: "L_1", default: false } },
+          who,
+        );
       }
       return json(
         200,

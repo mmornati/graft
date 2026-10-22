@@ -254,4 +254,62 @@ describe("fake GitHub world", () => {
       deletions: 1,
     });
   });
+  it("U-LIVE-WORLD-2 label events (step 3 review 1, nit 6): an unlabel route, the actor's real type, and a lag switch", async () => {
+    const delivered: { event: string; body: Record<string, unknown> }[] = [];
+    const world = createFakeGitHubWorld({
+      owner: "mmornati",
+      repo: "graft-sandbox",
+      appId: 12345,
+      botLogin: "graft-dev[bot]",
+      installationId: 777,
+      private: true,
+      users: { actor: ACTOR },
+      deliver: async (event, body) => {
+        delivered.push({ event, body: body as Record<string, unknown> });
+        return 202;
+      },
+    });
+    const octokit = forToken(ACTOR.token, { fetch: world.fetch });
+    const app = forToken("ghs_installation0123456789abcdefghijk", { fetch: world.fetch });
+    const [owner, repo] = ["mmornati", "graft-sandbox"];
+    const main = (await octokit.rest.git.getRef({ owner, repo, ref: "heads/main" })).data.object
+      .sha;
+    await octokit.rest.git.createRef({ owner, repo, ref: "refs/heads/feature", sha: main });
+    const pr = (
+      await octokit.rest.pulls.create({ owner, repo, head: "feature", base: "main", title: "T" })
+    ).data;
+    const label = "graft:break-glass";
+    await octokit.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [label] });
+    await octokit.rest.issues.removeLabel({ owner, repo, issue_number: pr.number, name: label });
+    await app.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [label] });
+    await expect(
+      octokit.rest.issues.removeLabel({ owner, repo, issue_number: pr.number, name: "nope" }),
+    ).rejects.toMatchObject({ status: 404 });
+
+    const events = async () =>
+      (await app.rest.issues.listEvents({ owner, repo, issue_number: pr.number })).data.map((e) => [
+        e.event,
+        e.actor?.login,
+        e.actor?.type,
+      ]);
+    expect(await events()).toEqual([
+      ["labeled", ACTOR.login, "User"],
+      ["unlabeled", ACTOR.login, "User"],
+      ["labeled", "graft-dev[bot]", "Bot"],
+    ]);
+    const labelHooks = delivered
+      .filter((d) => d.event === "pull_request" && /labeled$/.test(String(d.body.action)))
+      .map((d) => [d.body.action, (d.body.sender as { login: string }).login]);
+    expect(labelHooks).toEqual([
+      ["labeled", ACTOR.login],
+      ["unlabeled", ACTOR.login],
+      ["labeled", "graft-dev[bot]"],
+    ]);
+    expect((await app.rest.pulls.get({ owner, repo, pull_number: pr.number })).data.labels).toEqual(
+      [expect.objectContaining({ name: label })],
+    );
+    // The lag switch: the newest events are not listed yet.
+    world.state.issueEventsLag = 2;
+    expect(await events()).toEqual([["labeled", ACTOR.login, "User"]]);
+  });
 });
