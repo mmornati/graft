@@ -177,6 +177,8 @@ const event = (name: string, payload: unknown) =>
 
 describe("guard: schema", () => {
   it("I-GRD-1 migration 0011 up, down, up; down restores the old status check and fails on a new status", async () => {
+    // Step 3 review 1's migration sits on top of 0011.
+    expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     try {
       const tables = await sql<{ n: string }>`
@@ -194,15 +196,21 @@ describe("guard: schema", () => {
           values (${REPO_ID}, 'main', ${C(1)}, 'confirming')`.execute(t.db),
       ).rejects.toThrow(/check constraint/);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0011_guard"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
     }
     // A row with a new status blocks the rollback.
     await sql`insert into guard_events (repository_id, branch, failing_sha, status)
       values (${REPO_ID}, 'main', ${C(1)}, 'flaky')`.execute(t.db);
-    await expect(migrateDownOne(t.db)).rejects.toThrow();
+    expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
+    try {
+      await expect(migrateDownOne(t.db)).rejects.toThrow();
+    } finally {
+      expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event"]);
+    }
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
-    expect(await migrateToLatest(t.db)).toEqual(["0011_guard"]);
+    expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
     const def = await sql<{ def: string }>`
       select pg_get_constraintdef(oid) as def from pg_constraint
       where conname = 'guard_events_status_check'`.execute(t.db);

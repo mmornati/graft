@@ -234,7 +234,8 @@ describe("break-glass and audit log (integration)", () => {
     label(MAYA);
     expect(await runLabeled()).toBe("published");
     expect((await lastVerdict())?.enforced_reason).toBe("break_glass");
-    expect(await migrateDownOne(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     try {
       await expect(migrateDownOne(t.db)).rejects.toThrow();
       expect(await auditRows()).toHaveLength(1);

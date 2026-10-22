@@ -949,7 +949,7 @@ describe("operations CLI", () => {
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event"]);
     }
   });
 });
