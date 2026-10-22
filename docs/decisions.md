@@ -678,6 +678,32 @@ Spec: [phase-1/step-5-revert-prs.md](phase-1/step-5-revert-prs.md). Decisions D1
 
 **Other test changes**: the migration step-down tests (I-DB-2, I-DB-7 to I-DB-12, I-MODE-1, I-ENF-1, I-BG-1, I-BG-24, the pilot-ops "one migration behind" test, I-GRD-1) step through `0013_guard_revert`; I-DOC-1 and I-DOC-3 count eighteen doctor checks; U-GCM-1 checks that a revert section changes only the paragraph and the mode line; U-PGD-2 no longer expects `auto_merge_reverts` to be an unknown key; U-MG-5, U-MG-6 and U-MG-8 create a `graft-revert/<uuid>` ref; the fixtures test lists `pull_request.closed.revert`; U-MAN-1 expects `contents: write`. The fake GitHub API gains `GET`/`POST …/git/trees`, the tree and parents of `GET …/git/commits/{sha}`, `POST …/git/commits`, `POST …/git/refs`, `DELETE …/git/refs/heads/…`, `POST …/pulls`, `GET …/pulls?head=`, `POST …/issues/{n}/labels`, `POST /graphql` (`enablePullRequestAutoMerge`), the merge settings of `GET /repos/{o}/{r}`, and records each request's `accept` header.
 
+**Mutation checks (§18), run by the developer.** Each mutation was applied alone after a commit, the named test files run against a scratch database, then the file restored. All were caught:
+
+| Mutation (as applied) | Failing tests |
+| --- | --- |
+| Revert opened for `flaky` with a null `confirm_reason` (status and reason gates removed) | I-REV-7 |
+| `confirmation_off` ignored | I-REV-8 |
+| D7 skipped (no conflict from the tip) | U-RVP-6, I-REV-6 |
+| Added file restored instead of deleted (the `after` SHA in place of `sha: null`) | U-RVP-2, U-RVP-11, I-REV-5 (and ten more) |
+| Old mode not restored (the `after` mode) | U-RVP-2, U-RVP-11 |
+| Workflow files reverted (the D8 rule removed) | U-RVP-8 |
+| Report mode goes on to the guard client and its writes | I-REV-2, I-REV-4, N-1g, N-2, N-3, N-8 |
+| GraphQL body rule removed (any query with a valid id) | U-MG-19 |
+| Ref body rule removed | U-MG-20 |
+| No lookup by head (`findPr` never finds) | I-REV-10 |
+| One-per-culprit check removed (the index still refuses the store) | I-REV-11 |
+| Cap ignored | I-REV-12 |
+| Break-glass not checked for auto-merge | I-REV-14 |
+| `auto_merge_reverts` read at the failing commit instead of the baseline | I-REV-13, I-REV-14, I-REV-15, I-REV-17 |
+| Narrowed baseline's `guard.checks` not applied | I-REV-15 |
+| Revert-of-revert check removed (the database test; the job never reads a branch name or trailer, so "by branch name" has no code to mutate) | I-REV-9 |
+| `reverted` taken from the payload (the API's open state and `merged` ignored) | I-REV-12, I-REV-18 |
+
+**Verification.** `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm graft policy schema --check` and `pnpm eval:ci` (exit 0, `matchBaseline: 1`) pass; `pnpm test` passes (101 files, 1,178 tests); `pnpm graft e2e run --only-offline` passes 12 of 12 scenarios. The DoD greps of §18 find nothing (the only `feature: "guard"` is in `src/modules/guard/revert.ts`), and 70 test lines carry the §16 IDs.
+
+**Not run:** the manual smoke test of §18 (a dev server, a worker and `pnpm webhook:send`); it is listed in [HUMAN-TODO](phase-1/HUMAN-TODO.md#step-5-revert-prs). `pnpm db:up` was not run: the shared `scionhub-postgres-1` container on port 55432 was reused, the tests ran against `TEST_DATABASE_URL=…/graft_test_s5` (mutation checks against `graft_test_s5m`), and the migrate, status, rollback, status and migrate sequence against a scratch database `graft_s5_dod` (applied `0001`..`0013`, rolled back only `0013_guard_revert`, re-applied it), dropped afterwards.
+
 ## Verifier file context and the unverifiable verdict (intent-v2)
 
 The verifier saw only GitHub's patches, which carry three lines of context per hunk. A card that said "scrolling does nothing during a journal replay" was marked unsupported because the diff added `if (state.replaying) return;` but not the unchanged lines that set the flag, so the card showed "the verifier disagrees" and the risk was raised to `logic` for a correct card.
