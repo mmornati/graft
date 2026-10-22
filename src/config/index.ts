@@ -134,6 +134,10 @@ const cronOrOff = z
   )
   .transform((v) => (v === "off" ? null : v.trim().split(/\s+/).join(" ")));
 
+const onOff = z
+  .enum(["on", "off"], { error: 'must be "on" or "off"' })
+  .transform((v) => v === "on");
+
 const EnvSchema = z.object({
   NODE_ENV: withDefault(z.enum(["development", "test", "production"]), "development"),
   HOST: withDefault(z.string().min(1), "0.0.0.0"),
@@ -184,6 +188,12 @@ const EnvSchema = z.object({
   GRAFT_PERMISSIONS_REFRESH_CRON: withDefault(cronOrOff, "30 3 * * *"),
   GRAFT_POLICY_CARD_WAIT_SECONDS: withDefault(intString(0, 3600), "600"),
   GRAFT_BREAK_GLASS_LABEL: withDefault(breakGlassLabel, "graft:break-glass"),
+  GRAFT_GUARD_DETECTION: withDefault(onOff, "on"),
+  GRAFT_GUARD_CONFIRM: withDefault(onOff, "on"),
+  GRAFT_GUARD_CONFIRM_SECONDS: withDefault(intString(300, 86_400), "7200"),
+  GRAFT_GUARD_OBSERVE_DELAY_SECONDS: withDefault(intString(0, 600), "30"),
+  GRAFT_GUARD_RETENTION_DAYS: withDefault(intString(7, 365), "30"),
+  GRAFT_GUARD_PRUNE_CRON: withDefault(cronOrOff, "45 3 * * *"),
 });
 
 export interface Config {
@@ -253,6 +263,18 @@ export interface Config {
    * when `GRAFT_BREAK_GLASS_LABEL=off` (the label is then an ordinary label).
    */
   readonly breakGlassLabel: string | null;
+  /** Phase 1 step 4 (D14): the guard's kill switch. Off: handlers drop everything, crons idle. */
+  readonly guardDetection: boolean;
+  /** Phase 1 step 4 (D9): wait for the failure to persist before naming a culprit. */
+  readonly guardConfirm: boolean;
+  /** Phase 1 step 4 (D9): the confirmation window, in seconds. */
+  readonly guardConfirmSeconds: number;
+  /** Phase 1 step 4 (D12): how long `guard.observe` waits after a trigger, in seconds. */
+  readonly guardObserveDelaySeconds: number;
+  /** Phase 1 step 4 (D15): `main_commits` and `ci_results` rows older than this are pruned. */
+  readonly guardRetentionDays: number;
+  /** Cron for `guard.prune`, or null when switched off. */
+  readonly guardPruneCron: string | null;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -364,5 +386,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     permissionsRefreshCron: d.GRAFT_PERMISSIONS_REFRESH_CRON,
     policyCardWaitSeconds: d.GRAFT_POLICY_CARD_WAIT_SECONDS,
     breakGlassLabel: d.GRAFT_BREAK_GLASS_LABEL,
+    guardDetection: d.GRAFT_GUARD_DETECTION,
+    guardConfirm: d.GRAFT_GUARD_CONFIRM,
+    guardConfirmSeconds: d.GRAFT_GUARD_CONFIRM_SECONDS,
+    guardObserveDelaySeconds: d.GRAFT_GUARD_OBSERVE_DELAY_SECONDS,
+    guardRetentionDays: d.GRAFT_GUARD_RETENTION_DAYS,
+    guardPruneCron: d.GRAFT_GUARD_PRUNE_CRON,
   });
 }

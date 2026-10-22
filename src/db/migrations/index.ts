@@ -9,6 +9,7 @@ import * as m0007 from "./0007_vote_eligibility.js";
 import * as m0008 from "./0008_modes.js";
 import * as m0009 from "./0009_enforce.js";
 import * as m0010 from "./0010_audit_log.js";
+import * as m0011 from "./0011_guard.js";
 
 export const migrations: Record<string, Migration> = {
   "0001_initial": m0001,
@@ -21,4 +22,5 @@ export const migrations: Record<string, Migration> = {
   "0008_modes": m0008,
   "0009_enforce": m0009,
   "0010_audit_log": m0010,
+  "0011_guard": m0011,
 };

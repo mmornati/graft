@@ -59,6 +59,10 @@ export const OWNED_ROWS: Record<PurgedTable, (installationId: number) => RawBuil
     sql`select count(*) as n from mode_changes where repository_id in ${repos(i)}`,
   // Phase 1 step 3: break-glass rows hold actor logins; they cascade from `repositories`.
   audit_log: (i) => sql`select count(*) as n from audit_log where repository_id in ${repos(i)}`,
+  // Phase 1 step 4: the guard's history and CI results, through `repositories`.
+  main_commits: (i) =>
+    sql`select count(*) as n from main_commits where repository_id in ${repos(i)}`,
+  ci_results: (i) => sql`select count(*) as n from ci_results where repository_id in ${repos(i)}`,
 };
 
 export class PurgeRefused extends Error {
