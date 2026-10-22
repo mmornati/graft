@@ -92,7 +92,10 @@ async function readCheckRuns(
           owner: o.owner,
           repo: o.repo,
           ref: o.sha,
-          filter: "latest",
+          // Every run, not `latest` (the most recent run per name and app): a later green run
+          // of the same name in another check suite would otherwise hide the red one before the
+          // reduction below sees it (step 4 review 2, finding B).
+          filter: "all",
           per_page: 100,
           page,
         })
