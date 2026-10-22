@@ -57,7 +57,10 @@ It sits on existing GitHub repositories with nothing to migrate.
 
 - **Phase 0, shadow mode.** Graft reports and never enforces: every check concludes `neutral`, a "would approve" is not
   an approval, team membership is not checked. Branch protection stays as it is.
-- Phase 1 (enforcement, post-merge guard, MCP server) is planned and not implemented.
+- **Phase 1, steps 1 to 4 built, report mode by default.** Modes and safety rails, approvals Graft can enforce,
+  break-glass with an audit log, and post-merge guard detection are merged. Nothing enforces until an operator
+  raises `GRAFT_MODE_CEILING` (default `report`) and sets a repository to enforce; see `docs/features/modes.md` and
+  `docs/features/guard.md`. Not built: revert PRs, the MCP server, and the security review, pilots and gate.
 - Privacy: no file contents, diffs, PR titles or bodies are stored or logged; rows hold ids, numbers, SHAs, paths and
   the model's own prose. Diffs, PR text and linked issue text *are* sent to Anthropic to write and verify cards.
 - No license has been chosen yet; all rights reserved. The repository is currently private *(per the owner's brief)*.

@@ -8,7 +8,7 @@
 ![Node 24](https://img.shields.io/badge/node-24-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![pnpm 11](https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white)
-![Phase 0: shadow mode](https://img.shields.io/badge/status-Phase%200%20%C2%B7%20shadow%20mode-orange)
+![Phase 1: steps 1 to 4 built, report mode by default](https://img.shields.io/badge/status-Phase%201%20%C2%B7%20steps%201%E2%80%934%20built%20%C2%B7%20report%20mode-orange)
 
 [Website](https://mmornati.github.io/graft/) · [Video](https://mmornati.github.io/graft/videos/graft-explained/) · [Reviewer tour](https://mmornati.github.io/graft/videos/reviewer-tour/) · [Quickstart](#quickstart-offline-under-5-minutes) · [Features](#features) · [How it works](#how-it-works) · [Docs](docs/README.md) · [Status](#status-and-roadmap)
 
@@ -24,7 +24,7 @@ Coding agents open pull requests faster than people can review them, and a PR de
 4. **What the policy says**: the repository's `graft.yaml` decides whether the change would be auto-approved, need humans or a team, or be blocked.
 
 > [!NOTE]
-> Graft is in **Phase 0 (shadow mode)**. It reports and never enforces: every Graft check concludes `neutral`, a "would approve" is not an approval, and team membership is not checked. Keep your branch protection as it is.
+> Graft defaults to **report mode** (Phase 0, shadow mode). Out of the box it reports and never enforces: every Graft check concludes `neutral`, a "would approve" is not an approval, and team membership is not checked. Phase 1 steps 1 to 4 (modes, enforceable approvals, break-glass, guard detection) are built but stay off until an operator raises `GRAFT_MODE_CEILING` and sets a repository to enforce; see [Modes](docs/features/modes.md). Keep your branch protection as it is.
 
 ## Features
 
@@ -162,7 +162,7 @@ The full index is [docs/README.md](docs/README.md).
 
 ## Status and roadmap
 
-Graft follows the [development plan](docs/plan/development-plan.md): **Phase 0, shadow mode** (weeks 1 to 6) puts intent cards and provenance on every pilot PR with a report-only policy check, gated on card accuracy of 90% or more; **Phase 1, enforce** (weeks 7 to 12) makes the policy count. Each Phase 0 step is specified, built and reviewed until approved ([how](docs/phase-0/README.md)).
+Graft follows the [development plan](docs/plan/development-plan.md): **Phase 0, shadow mode** (weeks 1 to 6) puts intent cards and provenance on every pilot PR with a report-only policy check, gated on card accuracy of 90% or more; **Phase 1, enforce** (weeks 7 to 12) makes the policy count. Each step is specified, built and reviewed until approved ([Phase 0](docs/phase-0/README.md), [Phase 1](docs/phase-1/README.md)).
 
 | Step | What it adds | State |
 | --- | --- | --- |
@@ -176,7 +176,21 @@ Graft follows the [development plan](docs/plan/development-plan.md): **Phase 0, 
 
 Still open in Phase 0: the steps only a person can do, such as registering the production App, confirming GitHub behavior that only fakes have tested, recruiting the two pilot teams and collecting the votes for the gate ([HUMAN-TODO](docs/phase-0/HUMAN-TODO.md)).
 
-Phase 1 (planned; none of it is implemented yet): `graft/policy` becomes required, with approvals from reviews and team membership, re-runs on push and review, stale approvals and a break-glass label with an audit log (weeks 7 to 8); a post-merge guard that finds the culprit from existing CI results and opens a revert PR (weeks 9 to 10); a minimal MCP server (`open_change`, `report_provenance`, `get_status`, `get_policy`) with per-repository tokens (week 11); a security review, 5 pilots and a gate (week 12).
+### Phase 1
+
+Steps 1 to 4 are built and merged; steps 5 to 7 are not. **Everything defaults to report mode**: the server ceiling `GRAFT_MODE_CEILING` defaults to `report`, so no repository can enforce anything until an operator raises it and then runs `pnpm graft mode set` for that repository ([Modes](docs/features/modes.md)). With defaults, every Graft check still concludes `neutral`, as in Phase 0.
+
+| Step | What it adds | State |
+| --- | --- | --- |
+| 1 Modes and safety rails | Per-repository `policy_mode`, `guard_mode` and `mcp_write`, the server ceiling, a write allow-list that refuses any GitHub write a mode does not permit, `pnpm graft mode`. See [Modes](docs/features/modes.md). | Built, report by default |
+| 2 Approvals Graft can enforce | In enforce mode `graft/policy` concludes `success` or `failure` from reviews and team membership, re-runs on push, review and membership changes, and drops stale approvals. | Built, off until a repository is set to enforce |
+| 3 Break-glass and audit log | A maintainer or admin adds the break-glass label to bypass the policy for one commit; every bypass is written to an audit log (`pnpm graft audit list`), and mode changes are recorded too (`pnpm graft mode history`). | Built |
+| 4 Post-merge guard detection | Watches default-branch commits, reads existing CI results, and names the culprit commit in a comment and `pnpm graft guard list`. Detection only. See [Guard](docs/features/guard.md). | Built, report by default |
+| 5 Revert PRs | The guard opens a revert PR for a confirmed culprit. | Not built |
+| 6 MCP server | `open_change`, `report_provenance`, `get_status`, `get_policy` with per-repository tokens. | Not built |
+| 7 Security review, pilots and gate | A security review, 5 pilots and the Phase 1 gate. | Not built |
+
+The Phase 1 reviews are in [docs/phase-1/reviews](docs/phase-1/reviews). Real GitHub behavior of the new steps is untested outside fakes.
 
 ## Repository layout
 
