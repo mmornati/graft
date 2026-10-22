@@ -64,6 +64,7 @@ When a repository's effective `policy_mode` is `enforce` (the operator sets it, 
 
 **What it concludes**, the first rule that applies:
 
+0. A [break-glass](#break-glass) verified for this head commit: `success`, whatever follows.
 1. No `graft.yaml` on the base branch, or an invalid one: `failure`. A repository that enforces must have a valid policy; the check says how to fix it.
 2. A matching `block` rule: `failure`, whatever the approvals.
 3. The intent card for the head is still being written: the check stays `in_progress` for at most `GRAFT_POLICY_CARD_WAIT_SECONDS` (default 600) after the head was first evaluated, then it is evaluated with the conservative rules that already apply to a pending card. A card that failed (`card_unavailable`) never waits.
@@ -81,6 +82,28 @@ When a repository's effective `policy_mode` is `enforce` (the operator sets it, 
 **Re-evaluation** happens on every PR event that already triggered it (push, edit, labels, reviews, re-run, card and provenance publication, a base branch change to `graft.yaml`, mode changes), at the end of the card wait, and on `membership` and `team` events: those re-evaluate the installation's open PRs whose latest verdict has a team constraint, at most once per five-minute window, after the window closes (so 1 to 6 minutes after the event, and never before a later event of the same window). A collaborator permission change is picked up at the next trigger.
 
 Before enforcing on a repository: accept `members: read` and the `membership` and `team` events (see [GitHub App](../github-app.md)), make `graft/policy` a required status check **with the Graft App as its source**, and do not enforce on a repository that uses a merge queue (`merge_group` is not handled).
+
+## Break-glass
+
+In an emergency a maintainer can let one commit through a policy that would block it.
+
+**Who.** Adding the `graft:break-glass` label to a pull request asks Graft to bypass the policy for the PR's current head commit. It counts only when the person who added it has `maintain` or `admin` on the repository. Graft reads who added the label from GitHub's issue events, never from the webhook, and checks their role when it evaluates. A label added by anyone else (`write`, `triage`, `read`), by a bot, by someone whose role GitHub does not report, or by someone Graft cannot identify is ignored, and the comment says so. The PR author may break-glass their own PR; the comment and the audit log say it was self-use.
+
+**What it bypasses.** Everything: a `block` rule, missing approvals, change requests, an invalid or missing `graft.yaml`, the card wait. In enforce mode `graft/policy` concludes `success` with the title `Bypassed by break-glass (alice)`. In report mode the check stays `neutral` and the section says Graft *would* bypass the policy (the would-be line reads `` `success` (break-glass by `alice`) ``). It does not approve the PR, dismiss reviews or change branch protection: Graft makes no new write to GitHub for it, and does not remove the label.
+
+**One commit.** The bypass binds to the head commit the PR had when the label was added (the commit in GitHub's signed `labeled` webhook). If the PR moved before Graft evaluated it, nothing is applied and the comment asks to remove and re-apply the label. A new push ends the bypass: the next commit gets the normal conclusion, even though the label is still there. To use it again, remove the label and add it again.
+
+**How to end it early.** Remove the label. The check goes back to the normal conclusion for that commit, and the audit log records who removed it.
+
+**The audit log.** Every request is one row of `audit_log`: `applied`, `ignored` (role too low, a bot, role not verified, actor unknown), `stale` (the PR moved after the label was added) and `removed`. Repeated labelling does not flood it: one `ignored` row per person and commit, one `stale` row per commit. The managed comment and the check details say who did it, on which commit and with what role. Operators read the log with:
+
+```sh
+pnpm graft audit list --repo acme/payments [--since 2026-10-01] [--kind applied|ignored|stale|removed] [--limit 50] [--json]
+```
+
+One line per row, newest first: time, kind, PR, commit, who (role), `self` for self-use, the mode and the reason. `pnpm graft pilot doctor` warns (`break_glass`) when a break-glass was applied in the last 7 days, and `pnpm graft pilot purge` deletes the rows with the rest of an installation's data. The post-merge guard will never auto-merge a revert of a PR merged under break-glass.
+
+The label name is set by the operator (`GRAFT_BREAK_GLASS_LABEL`, see [Configuration](../configuration.md)); `off` turns the feature off. It cannot be set in `graft.yaml`.
 
 ## Starter policies
 
