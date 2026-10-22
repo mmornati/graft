@@ -102,6 +102,8 @@ Detailed spec: [step-5-revert-prs.md](step-5-revert-prs.md). It adds rules the b
 
 ### Step 6 — Minimal MCP server (week 11)
 
+Detailed spec: [step-6-mcp-server.md](step-6-mcp-server.md). It uses the MCP TypeScript SDK v2 (`@modelcontextprotocol/server` with `@modelcontextprotocol/node`, stateless streamable HTTP) and adds two rules the bullets below leave open: a `report_provenance` that disagrees with the trailers makes the author fact `unknown` (the strictest value the policy engine has), once per head; and the commit authors of a PR opened by `open_change` cannot approve it (its D13, D14, D19).
+
 - Official TypeScript MCP SDK, streamable HTTP transport, mounted in the existing server under `/mcp`.
 - **Per-repository tokens:** `pnpm graft mcp-token create|list|revoke --repo owner/name`; stored as a hash, shown once, scoped to one repository, rate-limited, logged without the token.
 - Tools: `get_status` (card, provenance, policy verdict and would-be conclusion, guard events for a PR), `get_policy` (the parsed effective policy and modes for the repository), `report_provenance` (agent, model, task, session link for a PR head; stored as untrusted, exactly like trailers — it can tighten a verdict, never loosen it), `open_change` (open a PR from a branch the agent already pushed, with provenance attached).
