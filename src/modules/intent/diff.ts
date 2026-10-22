@@ -73,7 +73,10 @@ export interface PreparedDiff {
   renderContext(nonce: string): string;
   contextFiles: number;
   partialPaths: string[];
-  /** The added lines (`+…`) of the patches shown, for the injection rule. */
+  /**
+   * The added lines (`+…`) of the patches shown, for the injection rule; the whole patch for a
+   * file that has file context.
+   */
   addedLines: string[];
   stats: {
     filesFull: number;
@@ -103,6 +106,7 @@ export function prepareDiff(files: readonly ChangedFile[], config: FloorConfig):
   const ordered = files
     .map((file) => ({ file, g: group(file, config, globBudget), cls: classifyFile(file) }))
     .sort((a, b) => a.g - b.g || compareCodePoints(a.file.path, b.file.path));
+  const ruleMatched = new Set(ordered.filter((o) => o.g === 0).map((o) => o.file));
 
   let budget: number = LIMITS.totalChars;
   const views: FileView[] = [];
@@ -197,12 +201,17 @@ export function prepareDiff(files: readonly ChangedFile[], config: FloorConfig):
     .map((v) => v.file.path);
 
   const contexts: { header: Record<string, unknown>; body: string }[] = [];
+  const withContext = new Set<ChangedFile>();
   let contextBudget: number = LIMITS.contextTotalChars;
   for (const v of views) {
+    // No context for files the path rules call sensitive (secrets, CI, infra, ...): their
+    // unchanged lines are not sent to the model.
     if (v.shown === null || v.file.headText == null || contextBudget <= 0) continue;
+    if (ruleMatched.has(v.file)) continue;
     const c = fileContext(v.file.headText, v.file.patch ?? "", contextBudget);
     if (c === null) continue;
     contextBudget -= c.body.length;
+    withContext.add(v.file);
     contexts.push({
       header: {
         path: neutralizeUntrusted(v.file.path, LIMITS.pathChars),
@@ -216,7 +225,12 @@ export function prepareDiff(files: readonly ChangedFile[], config: FloorConfig):
   const addedLines: string[] = [];
   for (const v of views) {
     if (v.shown === null) continue;
-    for (const line of v.shown.split("\n")) if (line.startsWith("+")) addedLines.push(line);
+    // A truncated patch's hidden added lines still reach the verifier through the file context,
+    // so the injection rule reads the whole patch of every file that has context.
+    const text = withContext.has(v.file)
+      ? neutralizeUntrusted(v.file.patch ?? "", Number.MAX_SAFE_INTEGER)
+      : v.shown;
+    for (const line of text.split("\n")) if (line.startsWith("+")) addedLines.push(line);
   }
 
   return {

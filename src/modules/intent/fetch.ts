@@ -2,7 +2,7 @@ import type { GitHubClient } from "../../github/client-factory.js";
 import { classifyGitHubError } from "../../github/errors.js";
 import type { LivePull } from "../changes/index.js";
 import { type CardInputs, type ChangedFile, findLinkedIssue } from "./inputs.js";
-import { classifyFile } from "./risk-floor.js";
+import { classifyFile, matchesPathRule } from "./risk-floor.js";
 
 const MAX_FILE_PAGES = 30;
 const MAX_ADDITIONS_PLUS_DELETIONS = 20_000;
@@ -102,7 +102,8 @@ export async function fetchIntentInputs(
 /**
  * Reads the head version of up to 20 changed files so the verifier can see code the patch's
  * three lines of context leave out (where a flag is set, what a called function does). Added
- * files are skipped: their patch is the whole file. A file that is missing, not a regular file,
+ * files are skipped (their patch is the whole file), and so are files the path rules call
+ * sensitive (secrets, CI, infra, migrations), whose unchanged lines are not sent to the model. A file that is missing, not a regular file,
  * too large or not text keeps `headText: null`; any other error is thrown like the listing's.
  */
 async function attachHeadText(
@@ -111,7 +112,13 @@ async function attachHeadText(
   files: ChangedFile[],
 ): Promise<void> {
   const wanted = files
-    .filter((f) => CONTEXT_STATUSES.has(f.status) && classifyFile(f) === "candidate")
+    .filter(
+      (f) =>
+        CONTEXT_STATUSES.has(f.status) &&
+        classifyFile(f) === "candidate" &&
+        // Built-in rules only; prepareDiff also drops context for the configured globs.
+        !matchesPathRule(f, { extraSensitiveGlobs: [] }),
+    )
     .slice(0, MAX_CONTEXT_FILES);
   for (let i = 0; i < wanted.length; i += CONTEXT_CONCURRENCY) {
     await Promise.all(

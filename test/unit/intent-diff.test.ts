@@ -244,4 +244,24 @@ describe("prepareDiff", () => {
     const big = prepareDiff([file("src/c.ts", { headText: long })], none).renderContext("N");
     expect(big.length).toBeLessThan(LIMITS.contextPerFileChars + 200);
   });
+
+  it("U-DIFF-16 no context for rule-matched files; a file with context is scanned on its whole patch", () => {
+    const sensitive = prepareDiff(
+      [
+        file("src/auth/token.ts", { headText: "const key = 1;\n" }),
+        file("services/billing/a.ts", { headText: "x\n" }),
+        file("src/a.ts", { headText: "y\n" }),
+      ],
+      { extraSensitiveGlobs: ["services/billing/**"] },
+    );
+    expect(sensitive.contextFiles).toBe(1);
+    expect(sensitive.renderContext("N")).toContain('"path":"src/a.ts"');
+    // A patch cut by the per-file cap: the hidden added line is scanned only with context.
+    const patch = `@@ -1,1 +1,2 @@\n${"+".padEnd(LIMITS.perFileChars + 10, "a")}\n+HIDDEN_ADDED`;
+    const without = prepareDiff([file("src/b.ts", { patch })], none);
+    const withCtx = prepareDiff([file("src/b.ts", { patch, headText: "a\nHIDDEN_ADDED\n" })], none);
+    expect(without.views[0]?.view).toBe("truncated");
+    expect(without.addedLines).not.toContain("+HIDDEN_ADDED");
+    expect(withCtx.addedLines).toContain("+HIDDEN_ADDED");
+  });
 });

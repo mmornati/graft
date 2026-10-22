@@ -173,8 +173,9 @@ describe("fetchIntentInputs", () => {
       makeFile({ path: "src/missing.ts" }),
       makeFile({ path: "src/big.ts" }),
       makeFile({ path: "src/bin.ts" }),
+      makeFile({ path: "src/auth/session.ts" }),
     ]);
-    const pull = makePull({ changed_files: 7 });
+    const pull = makePull({ changed_files: 8 });
     const ref = (pull as { head: { sha: string } }).head.sha;
     api.state.contents.set(
       ref,
@@ -184,6 +185,7 @@ describe("fetchIntentInputs", () => {
         ["pnpm-lock.yaml", { kind: "file", text: "lock\n" }],
         ["src/big.ts", { kind: "large", size: 2_000_000 }],
         ["src/bin.ts", { kind: "file", text: new Uint8Array([97, 0, 98]) }],
+        ["src/auth/session.ts", { kind: "file", text: "secret\n" }],
       ]),
     );
     const out = await fetchIntentInputs(octokit, {
@@ -200,6 +202,7 @@ describe("fetchIntentInputs", () => {
       "src/missing.ts": null,
       "src/big.ts": null,
       "src/bin.ts": null,
+      "src/auth/session.ts": null,
     });
     const reads = api.find("GET", /\/contents\//);
     expect(reads.every((r) => r.ref === ref)).toBe(true);
