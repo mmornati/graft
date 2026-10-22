@@ -17,6 +17,7 @@ import {
   evaluatePolicyJobRun,
   type FanoutData,
   fanoutPolicy,
+  MAX_CATCH_UPS,
   policyEvaluateJob,
 } from "../../src/modules/policy/job.js";
 import { refreshProvenance } from "../../src/modules/provenance/job.js";
@@ -517,6 +518,84 @@ describe("policy engine (integration)", () => {
 
   it("I-POL-11 only the in-lock head check can stop the publish when the snapshot time is cleared", async () => {
     expect(await movingHead(true)).toBe("stale");
+    expect(repoWrites(api)).toEqual([]);
+    expect(await verdicts()).toEqual([]);
+  });
+
+  const pullReads = () => api.find("GET", new RegExp(`/pulls/${PR_NUMBER}$`));
+
+  /**
+   * Another job stores a newer snapshot of the SAME head while this one reads facts, as happens
+   * when Graft's own comment or check run bumps the PR's `updated_at`. `edit` changes the live PR too.
+   */
+  async function sameHeadBump(edit: Record<string, unknown> = {}) {
+    const blocker = api.block("GET", /\/pulls\/\d+\/reviews$/);
+    const job = run();
+    await blocker.reached;
+    const bumped = makePull({
+      ...api.state.pulls.get(PR_NUMBER),
+      updated_at: "2026-10-14T12:30:00Z",
+      ...edit,
+    });
+    api.state.pulls.set(PR_NUMBER, bumped);
+    await upsertChangeFromPull(t.db, REPO_ID, bumped as never, new Date());
+    blocker.release();
+    return job;
+  }
+
+  it("I-POL-23 Graft's own comment bumps updated_at during the fact read: the verdict is still published", async () => {
+    expect(await sameHeadBump()).toBe("published");
+    expect(policyChecks()).toHaveLength(1);
+    expect(lastCheck()?.conclusion).toBe("neutral");
+    expect(await verdicts()).toHaveLength(1);
+    // It caught up by re-reading the PR once, and stored that newer snapshot.
+    expect(pullReads()).toHaveLength(2);
+    const row = await t.db.selectFrom("changes").selectAll().executeTakeFirstOrThrow();
+    expect(row.pr_updated_at).toEqual(new Date("2026-10-14T12:30:00Z"));
+    expect(logged).toContain("caught up with a newer snapshot");
+  });
+
+  it("I-POL-24 a label added during the fact read is still stale: the label's own job publishes", async () => {
+    expect(await sameHeadBump({ labels: [{ name: "hotfix" }] })).toBe("stale");
+    // It looked once, saw the labels differ, and gave up without publishing.
+    expect(pullReads()).toHaveLength(2);
+    expect(repoWrites(api)).toEqual([]);
+    expect(await verdicts()).toEqual([]);
+  });
+
+  it("I-POL-25 a newer snapshot of the same head stored before the job starts does not stop the verdict", async () => {
+    // The job reads the PR at the scenario's time, but another job already stored 12:30 for the
+    // same head and inputs; GitHub now answers 12:30 too.
+    const first = makePull({ ...api.state.pulls.get(PR_NUMBER) });
+    const later = makePull({ ...first, updated_at: "2026-10-14T12:30:00Z" });
+    await upsertChangeFromPull(t.db, REPO_ID, later as never, new Date());
+    api.state.pulls.set(PR_NUMBER, first);
+    const original = api.state.pulls.get.bind(api.state.pulls);
+    let reads = 0;
+    api.state.pulls.get = (n: number) => {
+      reads++;
+      return reads === 1 ? original(n) : later;
+    };
+    expect(await run()).toBe("published");
+    expect(policyChecks()).toHaveLength(1);
+    expect(await verdicts()).toHaveLength(1);
+  });
+
+  it("I-POL-26 the catch-up is bounded: a stored snapshot GitHub never reaches ends stale", async () => {
+    const blocker = api.block("GET", /\/pulls\/\d+\/reviews$/);
+    const job = run();
+    await blocker.reached;
+    // Same head and inputs, but stored "later" than anything GitHub will answer: each re-read is
+    // older than the stored row, so no catch-up can ever apply.
+    await upsertChangeFromPull(
+      t.db,
+      REPO_ID,
+      makePull({ ...api.state.pulls.get(PR_NUMBER), updated_at: "2030-01-01T00:00:00Z" }) as never,
+      new Date(),
+    );
+    blocker.release();
+    expect(await job).toBe("stale");
+    expect(pullReads()).toHaveLength(1 + MAX_CATCH_UPS);
     expect(repoWrites(api)).toEqual([]);
     expect(await verdicts()).toEqual([]);
   });
