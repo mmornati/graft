@@ -102,7 +102,8 @@ async function addSecondRepository(): Promise<void> {
 describe("modes: schema", () => {
   it("I-MODE-1 migration 0008 down removes exactly what it added, then up restores it", async () => {
     await truncateAll(t.db);
-    // Step 2's migration sits on top of 0008.
+    // Step 2's and step 3's migrations sit on top of 0008.
+    expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
     expect(await migrateDownOne(t.db)).toEqual(["0009_enforce"]);
     expect(await migrateDownOne(t.db)).toEqual(["0008_modes"]);
     try {
@@ -115,7 +116,7 @@ describe("modes: schema", () => {
       );
       expect(cols.rows).toEqual([]);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0008_modes", "0009_enforce"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0008_modes", "0009_enforce", "0010_audit_log"]);
     }
     await seedWorld(t.db);
     const r = await repoRow();

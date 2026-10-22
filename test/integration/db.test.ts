@@ -43,10 +43,10 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, all twenty-two tables exist", async () => {
+  it("I-DB-1 after migration, all twenty-three tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(22);
+    expect(TABLE_NAMES).toHaveLength(23);
     expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
   });
@@ -66,6 +66,7 @@ describe("database", () => {
       expect(rolled).toContain("0007_vote_eligibility");
       expect(rolled).toContain("0008_modes");
       expect(rolled).toContain("0009_enforce");
+      expect(rolled).toContain("0010_audit_log");
       const after = await tableNames(db);
       for (const t of TABLE_NAMES) expect(after).not.toContain(t);
 
@@ -84,6 +85,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -366,6 +368,24 @@ describe("database", () => {
       .insertInto("service_state")
       .values({ key: "mode_ceiling", value: "report", updated_at: now })
       .execute();
+    // Phase 1 step 3.
+    await db
+      .insertInto("audit_log")
+      .values({
+        repository_id: 2,
+        change_id: change.id,
+        pr_number: 5,
+        head_sha: "a".repeat(40),
+        kind: "applied",
+        reason: null,
+        actor_id: 77,
+        actor_login: "maya",
+        actor_role: "maintain",
+        policy_mode: "report",
+        label_event_at: now,
+        created_at: now,
+      })
+      .execute();
 
     for (const t of TABLE_NAMES) {
       const rows = await db.selectFrom(t).selectAll().execute();
@@ -518,6 +538,7 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -557,6 +578,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -568,6 +590,7 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -607,6 +630,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
@@ -657,6 +681,7 @@ describe("database", () => {
       );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       // up: 'pending' is accepted, anything else is not
@@ -724,6 +749,7 @@ describe("database", () => {
 
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -762,6 +788,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
     }
     expect(await policyColumns()).toEqual(upColumns);
@@ -789,6 +816,7 @@ describe("database", () => {
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -811,6 +839,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
     }
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
@@ -848,6 +877,7 @@ describe("database", () => {
       .executeTakeFirstOrThrow();
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0010_audit_log");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0009_enforce");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0008_modes");
       const down = await migrator.migrateDown();
@@ -865,6 +895,7 @@ describe("database", () => {
         "0007_vote_eligibility",
         "0008_modes",
         "0009_enforce",
+        "0010_audit_log",
       ]);
     }
     const rows = await sql<{ user_id: number; verified: boolean }>`

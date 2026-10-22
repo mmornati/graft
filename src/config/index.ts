@@ -105,6 +105,20 @@ const incidentLabel = z
   .regex(/^(off|[A-Za-z0-9 ._:/-]{1,50})$/, 'must be "off" or 1-50 characters of [A-Za-z0-9 ._:/-]')
   .transform((v) => (v === "off" ? null : v));
 
+/**
+ * Phase 1 step 3 (D1): the break-glass label name, 1-50 characters, or `off` (any case) to switch
+ * the feature off. No character class: label names are matched case-insensitively, never parsed.
+ */
+const breakGlassLabel = z
+  .string()
+  .refine((v) => v.trim() === v && Array.from(v).length >= 1 && Array.from(v).length <= 50, {
+    message: 'must be "off" or a label name of 1-50 characters without surrounding spaces',
+  })
+  .refine((v) => Array.from(v).every((c) => c.charCodeAt(0) >= 0x20 && c !== "\u007f"), {
+    message: "must not contain control characters",
+  })
+  .transform((v) => (v.toLowerCase() === "off" ? null : v));
+
 const CRON_FIELD = /^[0-9*/,-]+$/;
 const cronOrOff = z
   .string()
@@ -169,6 +183,7 @@ const EnvSchema = z.object({
   GRAFT_MODE_APPLY_CRON: withDefault(cronOrOff, "* * * * *"),
   GRAFT_PERMISSIONS_REFRESH_CRON: withDefault(cronOrOff, "30 3 * * *"),
   GRAFT_POLICY_CARD_WAIT_SECONDS: withDefault(intString(0, 3600), "600"),
+  GRAFT_BREAK_GLASS_LABEL: withDefault(breakGlassLabel, "graft:break-glass"),
 });
 
 export interface Config {
@@ -233,6 +248,11 @@ export interface Config {
   readonly permissionsRefreshCron: string | null;
   /** Phase 1 step 2 (D9): how long enforce mode waits for the intent card; 0 = never. */
   readonly policyCardWaitSeconds: number;
+  /**
+   * Phase 1 step 3 (D1): the label that requests a break-glass, matched case-insensitively; null
+   * when `GRAFT_BREAK_GLASS_LABEL=off` (the label is then an ordinary label).
+   */
+  readonly breakGlassLabel: string | null;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -343,5 +363,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     modeApplyCron: d.GRAFT_MODE_APPLY_CRON,
     permissionsRefreshCron: d.GRAFT_PERMISSIONS_REFRESH_CRON,
     policyCardWaitSeconds: d.GRAFT_POLICY_CARD_WAIT_SECONDS,
+    breakGlassLabel: d.GRAFT_BREAK_GLASS_LABEL,
   });
 }
