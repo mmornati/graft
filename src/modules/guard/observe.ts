@@ -167,7 +167,10 @@ async function readStatuses(
   return [...byKey.values()];
 }
 
-/** D17: `guard.checks` of `graft.yaml` at the commit; null means every key. */
+/**
+ * D17: `guard.checks` of `graft.yaml` at a commit (the baseline of a transition); null means every
+ * key, which is also the answer for a missing or invalid file (fail toward detecting).
+ */
 async function guardChecksAt(
   octokit: GitHubClient,
   o: { repositoryId: number; owner: string; repo: string; sha: string },
@@ -455,51 +458,99 @@ export async function observeCommit(
   if (hasStatusesRead(modeRow?.permissions)) {
     observed.push(...(await readStatuses(octokit, data, webBase)));
   }
-  const allowed = await guardChecksAt(octokit, data);
-  if (allowed !== null) {
-    for (const r of observed) {
-      if (!allowed.has(r.name)) {
-        r.class = "ignored";
-        r.filtered = true;
-      }
-    }
-  }
   for (const r of observed) {
     ctx.log.debug({ key: r.key, class: r.class }, "guard result");
   }
 
+  // D17, as corrected by the security review: results are stored unfiltered, and `guard.checks`
+  // is read from the BASELINE (the last green commit before the candidates), never from the
+  // failing commit, so a candidate cannot filter its own failure. The file is read through the
+  // API, which never happens inside the lock: a transition whose baseline file is not loaded yet
+  // is set aside, the file is loaded after the lock, and the lock phase runs again (bounded).
   const now = ctx.clock.now();
-  const reached = await withRepositoryGuardLock(ctx.db, data.repositoryId, async (tx) => {
-    const changed = await upsertResults(tx, data.repositoryId, data.sha, observed, now);
-    const d: DetectContext = {
-      tx,
-      ctx,
-      repositoryId: data.repositoryId,
-      branch: branch ?? "unknown",
-      now,
-    };
-    const red = observed.filter((r) => changed.includes(r.key) && r.class === "red");
-    if (red.length > 0) {
-      const chain = (await lineTo(tx, data.repositoryId, data.sha)).map(toChainCommit);
-      const results = (
-        await resultsAt(
-          tx,
-          data.repositoryId,
-          chain.map((c) => c.sha),
-          red.map((r) => r.key),
-        )
-      ).map((r) => ({ key: r.key, sha: r.sha, class: r.class, filtered: r.filtered }));
-      for (const r of red) {
-        const t = detectTransition(chain, results, r.key, data.sha);
-        if (t.kind === "none") {
-          ctx.log.debug({ why: t.why }, "no guard transition");
-          continue;
-        }
-        await recordTransition(d, t, { key: r.key, name: r.name, source: r.source }, r.htmlUrl);
+  const checksAt = new Map<string, Set<string> | null>();
+  // The baselines are usually known before the lock: load their files up front (read-only
+  // queries, then API reads, all outside the lock). The lock phase re-checks everything.
+  const red0 = observed.filter((r) => r.class === "red");
+  if (red0.length > 0) {
+    const chain = (await lineTo(ctx.db, data.repositoryId, data.sha)).map(toChainCommit);
+    const stored = (
+      await resultsAt(
+        ctx.db,
+        data.repositoryId,
+        chain.filter((c) => c.sha !== data.sha).map((c) => c.sha),
+        red0.map((r) => r.key),
+      )
+    ).map((r) => ({ key: r.key, sha: r.sha, class: r.class }));
+    const here = red0.map((r) => ({ key: r.key, sha: data.sha, class: r.class }));
+    for (const r of red0) {
+      const t = detectTransition(chain, [...stored, ...here], r.key, data.sha);
+      if (t.kind === "new" && !checksAt.has(t.lastGreenSha)) {
+        checksAt.set(
+          t.lastGreenSha,
+          await guardChecksAt(octokit, { ...data, sha: t.lastGreenSha }),
+        );
       }
     }
-    return confirmOpenEvents(d);
-  });
+  }
+  let redKeys: ObservedResult[] | null = null;
+  const reached: string[] = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const missing = new Set<string>();
+    const settled = await withRepositoryGuardLock(ctx.db, data.repositoryId, async (tx) => {
+      const changed = await upsertResults(tx, data.repositoryId, data.sha, observed, now);
+      // The red keys of the first pass; a later pass upserts nothing new.
+      if (redKeys === null) {
+        redKeys = observed.filter((r) => changed.includes(r.key) && r.class === "red");
+      }
+      const red: ObservedResult[] = redKeys;
+      const d: DetectContext = {
+        tx,
+        ctx,
+        repositoryId: data.repositoryId,
+        branch: branch ?? "unknown",
+        now,
+      };
+      if (red.length > 0) {
+        const chain = (await lineTo(tx, data.repositoryId, data.sha)).map(toChainCommit);
+        const results = (
+          await resultsAt(
+            tx,
+            data.repositoryId,
+            chain.map((c) => c.sha),
+            red.map((r) => r.key),
+          )
+        ).map((r) => ({ key: r.key, sha: r.sha, class: r.class }));
+        for (const r of red) {
+          const t = detectTransition(chain, results, r.key, data.sha);
+          if (t.kind === "none") {
+            ctx.log.debug({ why: t.why }, "no guard transition");
+            continue;
+          }
+          // The last pass treats a baseline still unknown (a race) as "every key".
+          if (!checksAt.has(t.lastGreenSha) && attempt < 2) {
+            missing.add(t.lastGreenSha);
+            continue;
+          }
+          const allowed = checksAt.get(t.lastGreenSha) ?? null;
+          if (allowed !== null && !allowed.has(r.name)) {
+            ctx.log.debug({ why: "filtered" }, "no guard transition");
+            continue;
+          }
+          await recordTransition(d, t, { key: r.key, name: r.name, source: r.source }, r.htmlUrl);
+        }
+      }
+      if (missing.size > 0) return null;
+      return confirmOpenEvents(d);
+    });
+    if (settled !== null) {
+      reached.push(...settled);
+      break;
+    }
+    for (const sha of missing) {
+      checksAt.set(sha, await guardChecksAt(octokit, { ...data, sha }));
+    }
+  }
 
   // After the repository lock: comments, each under its change lock (D11).
   const pending = new Set(reached);
