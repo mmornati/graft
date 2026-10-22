@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mulberry32 } from "../../src/eval/sample.js";
 import {
   type ChainCommit,
   type CommitPr,
@@ -234,11 +235,9 @@ describe("guard detection (pure)", () => {
   });
 
   it("U-DET-14 property: a culprit is never returned when the candidates map to more than one PR or include a non-PR commit", () => {
-    let seed = 0x5eed;
-    const rand = (n: number) => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed % n;
-    };
+    const next = mulberry32(0x5eed);
+    const rand = (n: number) => Math.floor(next() * n);
+    const seen = { multiPr: 0, culprit: 0 };
     const kinds = (): CommitPr => {
       const k = rand(6);
       if (k === 0) return DIRECT;
@@ -251,6 +250,8 @@ describe("guard detection (pure)", () => {
       const got = classifyCandidates(list);
       const prs = new Set(list.flatMap((c) => (c.pr.kind === "pr" ? [c.pr.number] : [])));
       const nonPr = list.some((c) => c.pr.kind !== "pr");
+      if (prs.size > 1 && !nonPr) seen.multiPr++;
+      if (prs.size === 1 && !nonPr) seen.culprit++;
       if (prs.size !== 1 || nonPr) {
         expect(got.status, JSON.stringify(list.map((c) => c.pr))).not.toBe("culprit_found");
       } else {
@@ -270,5 +271,8 @@ describe("guard detection (pure)", () => {
         }
       }
     }
+    // The generator does reach both interesting shapes.
+    expect(seen.multiPr).toBeGreaterThan(50);
+    expect(seen.culprit).toBeGreaterThan(50);
   });
 });
