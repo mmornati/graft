@@ -87,13 +87,13 @@ Before enforcing on a repository: accept `members: read` and the `membership` an
 
 In an emergency a maintainer can let one commit through a policy that would block it.
 
-**Who.** Adding the `graft:break-glass` label to a pull request asks Graft to bypass the policy for the PR's current head commit. It counts only when the person who added it has `maintain` or `admin` on the repository. Graft reads who added the label from GitHub's issue events, never from the webhook, and checks their role when it evaluates. A label added by anyone else (`write`, `triage`, `read`), by a bot, by someone whose role GitHub does not report, or by someone Graft cannot identify is ignored, and the comment says so. The PR author may break-glass their own PR; the comment and the audit log say it was self-use.
+**Who.** Adding the `graft:break-glass` label to a pull request asks Graft to bypass the policy for the PR's current head commit. It counts only when the person who added it has `maintain` or `admin` on the repository. Graft reads who added the label from GitHub's issue events, never from the webhook, and checks their role when it evaluates. The newest label event GitHub lists must be that `labeled` action, by the same user as the webhook's sender (the sender only filters: it can stop a bypass, never grant one). If GitHub does not list it yet, Graft waits and retries for a few minutes, then ignores the label as "who applied it could not be determined"; add it again. A label added by anyone else (`write`, `triage`, `read`), by a bot, by someone whose role GitHub does not report, or by someone Graft cannot identify is ignored, and the comment says so. The PR author may break-glass their own PR; the comment and the audit log say it was self-use.
 
 **What it bypasses.** Everything: a `block` rule, missing approvals, change requests, an invalid or missing `graft.yaml`, the card wait. In enforce mode `graft/policy` concludes `success` with the title `Bypassed by break-glass (alice)`. In report mode the check stays `neutral` and the section says Graft *would* bypass the policy (the would-be line reads `` `success` (break-glass by `alice`) ``). It does not approve the PR, dismiss reviews or change branch protection: Graft makes no new write to GitHub for it, and does not remove the label.
 
-**One commit.** The bypass binds to the head commit the PR had when the label was added (the commit in GitHub's signed `labeled` webhook). If the PR moved before Graft evaluated it, nothing is applied and the comment asks to remove and re-apply the label. A new push ends the bypass: the next commit gets the normal conclusion, even though the label is still there. To use it again, remove the label and add it again.
+**One commit.** The bypass binds to the head commit the PR had when the label was added (the commit in GitHub's signed `labeled` webhook). If the PR moved before Graft evaluated it, nothing is applied and the comment asks to remove and re-apply the label. A new push ends the bypass for good: the next commit gets the normal conclusion, even though the label is still there, and pushing the bypassed commit again does not bring the bypass back. To use it again, remove the label and add it again.
 
-**How to end it early.** Remove the label. The check goes back to the normal conclusion for that commit, and the audit log records who removed it.
+**How to end it early.** Remove the label. The check goes back to the normal conclusion, and the audit log records who removed it. A removal ends the bypass even when someone adds the label back before Graft sees the removal: the bypass belongs to the label action that created it, so a re-added label is judged again, as the person who re-added it.
 
 **The audit log.** Every request is one row of `audit_log`: `applied`, `ignored` (role too low, a bot, role not verified, actor unknown), `stale` (the PR moved after the label was added) and `removed`. Repeated labelling does not flood it: one `ignored` row per person and commit, one `stale` row per commit. The managed comment and the check details say who did it, on which commit and with what role. Operators read the log with:
 
@@ -104,6 +104,11 @@ pnpm graft audit list --repo acme/payments [--since 2026-10-01] [--kind applied|
 One line per row, newest first: time, kind, PR, commit, who (role), `self` for self-use, the mode and the reason. `pnpm graft pilot doctor` warns (`break_glass`) when a break-glass was applied in the last 7 days, and `pnpm graft pilot purge` deletes the rows with the rest of an installation's data. The post-merge guard will never auto-merge a revert of a PR merged under break-glass.
 
 The label name is set by the operator (`GRAFT_BREAK_GLASS_LABEL`, see [Configuration](../configuration.md)); `off` turns the feature off. It cannot be set in `graft.yaml`.
+
+**Known limits.**
+- Graft reads at most 1,000 issue events per pull request. On a PR with more, break-glass is ignored as "who applied it could not be determined" (fail closed). Anyone who can label can add events, so on a busy or hostile PR a maintainer may be unable to break-glass it; merge through branch protection instead.
+- A custom repository role based on `maintain` is reported by GitHub as `write`, so it does not count. Only the built-in `maintain` and `admin` roles do.
+- If the PR moves to a new commit and back again before Graft evaluates the new commit, Graft never sees the push and the bypass of the first commit stays.
 
 ## Starter policies
 

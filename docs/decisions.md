@@ -475,6 +475,54 @@ Removing only the store's `ignored` check, and keeping `ON CONFLICT DO NOTHING`,
 
 **Not run:** the manual smoke test (it needs a real or tunnelled App; HUMAN-TODO). `pnpm db:up` was not run: the shared `scionhub` Postgres container on port 55432 was reused, the tests ran against `graft_test_s3` and the migrate, rollback and migrate sequence against `graft_s3_dod`, both created for this step and dropped afterwards.
 
+### Review 1 fixes
+
+Finding → fix (review: `docs/phase-1/reviews/step-3-review-1.md`, CHANGES REQUESTED, 2 majors, 3 minors, 3 nits). Findings 1 and 2 are defects in the spec (D2, D6, D8, D9), not coding slips; the spec file is not edited, and the decisions below should be read as amended.
+
+**Migration number.** The schema change is a new migration, `0012_audit_label_event` (`0010_audit_log` is released and unchanged). Step 4 (PR mmornati/graft#26, not merged yet) adds `0011_guard`. **Whichever of #26 and this branch merges second must check the order**: the migrator refuses a migration that sorts before one already applied, so a database that ran `0012` before `0011` existed needs `0011` renumbered (or this one), together with the migration step-down tests (`db.test.ts`, I-MODE-1, I-ENF-1, the pilot-ops "one migration behind" test, I-BG-1, I-BG-24). With this branch the top migration is `0012`.
+
+1. **(major) The actor was not bound to the label action that queued the run** → **D2 amended.** The `labeled` handler adds the delivery's `sender.id` to the job (`breakGlassActorId`, a positive integer; the handler's schema reads `sender.id` only, and no login enters the job). `readLabelEvents` returns the newest event of either kind for the label, by list position. A verification needs the newest listed event to be a `labeled` event whose actor id equals `breakGlassActorId`. An `unlabeled` newest event, another user's event, no event, or a missing id means the API does not show that action (yet): while the job's retry policy allows (`ctx.attempt`, now passed by the worker: `retryCount < retryLimit`, 5 retries with backoff from 30 s), the job throws a retryable `LabelEventsBehind` before anything is published; on the last attempt it records `ignored actor_unknown` and ends any active bypass (fail closed). The id is a refuse-only filter: the actor, login and role still come from the API, and a matching id never skips the bot or role checks. The cap (1,000 events) is not retried. A delivery without a sender id never applies. Tests: **I-BG-16** (R3-A1; and the same user's older `labeled` event is not used when an unlabel is newest), **I-BG-17** (R3-A2, no role read), **I-BG-21** (retries while allowed, then fails closed and ends maya's bypass), **I-BG-4** (the delivery names maya, the events tom → `actor_unknown` with no role read; both say tom → `role_too_low`, read for tom), **I-Q-4** (the handler sees its attempt). I-BG-2 and the other label tests now pass the labeller's id.
+2. **(major) Revocation drifted** → **D6, D8 and D9 amended.**
+   - `audit_log.label_event_id` (0012, `bigint`, `> 0`) holds the issue event id an `applied` row was verified from.
+   - Every label trigger reads the events once (D12), even with an active row. The bypass stays only when its event is still the newest `labeled` one and no `unlabeled` event is newer, and the newest event is the delivery's user's `labeled` action (finding 1). Otherwise the job writes `removed` (actor: the newest `unlabeled` event after the bound one, else none), then judges the current labeller from scratch in the same run. The new `applied` row is stamped 1 ms after that `removed` row, so the tie rule does not end it. A row written before 0012 has no event id and counts as unbound: its next label trigger re-verifies it.
+   - An `unlabeled` delivery of the label sets `breakGlassUnlabeled` (a refuse-only flag): the job ends an active bypass whatever `pulls.get` shows now, with one events read for the remover. A late unlabel delivery can therefore end a newer bypass; that fails closed, and the maintainer re-labels.
+   - A `removed` row ends every `applied` row of the **change** at or before it, whatever head (`activeBreakGlass`, `activeBreakGlassForChange`, `mergedUnderBreakGlass`). `insertAuditRow` refuses an `applied` row while any row of the change is active, and a `removed` row unless one is active for its head (the head of the bypass it ends).
+   - Other triggers still make no read (I-BG-11 unchanged for them; the label trigger again costs one events read and no role read).
+   - Tests: **I-BG-18** (R3-B1: `failure`, `removed` for maya, `ignored` for tom, `mergedUnderBreakGlass` false), **I-BG-18b** (the unlabel job runs after the re-label: `removed` from the flag; the handler sets the flag), **I-BG-19** (R3-B2: `failure` on A after the force push, `mergedUnderBreakGlass(A)` false), **I-BG-13** (a `removed` row at another head ends the bypass), **I-BG-25** (another maintainer re-labels while a bypass is active: `removed`, then `applied` 1 ms later, which holds on later triggers), **I-BG-11** (a redelivery keeps the bypass with one events read).
+3. **(minor) A push did not end the bypass for good** → fixed by the change-scoped rule, not by changing the wording: when an evaluation finds an active row for another head than the current one, it writes `removed` for that head with no actor, no read and no role check, inside the lock. A force push back to the labelled commit then gets the normal conclusion. **I-BG-20** (R3-B3), I-BG-6 (now expects the `removed` row), I-BG-14 (the CLI shows it), N-10 and N-11 (one more row, for the labelled head). **Residual:** if the PR moves and moves back before any evaluation reads the new head, Graft never sees the push and the bypass of the first commit stays (documented in `docs/features/policy.md`).
+4. **(minor) A label-triggered verification could be dropped silently** → a run that carries `breakGlassHeadSha` and ends `stale` before its audit rows are committed (the early "newer snapshot stored" exit, a lock-time staleness on the same head, or a mode rollback) is sent again with its data unchanged (filters kept), singleton `policy:breakglass:<change>:<head>:<deliveryId>`, when the stored head is still its head. The filters only refuse, so the re-run grants nothing the first run could not; the singleton deduplicates for 7 days, so a re-run that is dropped again is not re-sent a second time (bounded). **I-BG-23** (a hook adds another label and publishes right after the run's first `pulls.get`; the run ends `stale`, the re-run is queued with its filters and applies).
+5. **(minor) The lost-race path had no test** → **I-BG-22**: a review run with a later clock publishes first; the label's run ends `stale`, keeps its `applied` row and queues one `policy:breakglass:…` job, which publishes `success`. Mutation X5 (no row in that branch) fails it.
+6. **(nit) The fakes could not express findings 1 and 2** → the fake world has `DELETE /issues/{n}/labels/{name}` (an `unlabeled` event and the webhook), label events carry the actor's real type (the App's bot for an installation token), and the fake API has `issueEventsLag` (the newest N events are not listed) and `afterNext` (a one-shot hook after a response). **U-LIVE-WORLD-2**; I-BG-16, 17 and 21 use the lag switch, I-BG-23 the hook. N-10 and N-11 still write events by hand: the neutral suite drives the plain fake API, not the world.
+7. **(nit) The unknown-actor dedup and the tie rule** → 0012 recreates `audit_log_ignored_once` with `NULLS NOT DISTINCT` (Postgres 15+), so `ON CONFLICT DO NOTHING` covers `actor_unknown` too; its `up` fails if duplicates exist, which the store has always prevented. `down` restores the 0010 index and drops the column. **I-BG-24** (0012 down and up, the index definition, a second unknown-actor row refused, the stored event id, and a `removed` row at the same instant ends a bypass: kills X4). I-BG-1 now steps down through 0012.
+8. **(nit) The 1,000-event cap is a cost and a lever** → **deferred to step 7** (security review and rollout runbook), documented in `docs/features/policy.md` "Known limits". Reading the `Link: rel="last"` page first and walking backwards depends on how the events endpoint paginates on real GitHub, which T1 could not check offline (HUMAN-TODO now asks for it, with the lag of finding 1). Meanwhile the cap still fails closed.
+
+**Also noted:** a custom role based on `maintain` reports `permission: write` and does not count (fail closed); documented in `docs/features/policy.md`.
+
+**Mutation checks for the fixes**, run by the developer: each applied alone with a script, the named tests run, the file restored byte for byte (`git status` clean after each).
+
+| Mutation | Failing tests |
+| --- | --- |
+| The newest-kind check removed (the newest `labeled` event is used even when an unlabel is newer) | I-BG-16 |
+| The delivery's actor filter removed | I-BG-17 |
+| The handler drops the sender id | I-BG-4 |
+| No retry while the events lag | I-BG-21 |
+| The binding check disabled (an active row is kept on a label trigger) | I-BG-18 |
+| The unlabel delivery flag ignored | I-BG-18b |
+| `removed` scoped to its own head again | I-BG-13 |
+| A push does not end the bypass | I-BG-20 |
+| The new `applied` row not stamped after the `removed` one | I-BG-25 |
+| X5: the lost-race branch writes no row | I-BG-22 |
+| No resend of a dropped label run | I-BG-23 |
+| X4: the tie rule `>=` becomes `>` | I-BG-24 |
+| The index without `NULLS NOT DISTINCT` | I-BG-24 |
+| `label_event_id` not stored | I-BG-11, I-BG-24 |
+| The worker passes no attempt | I-Q-4 |
+| The world's unlabel records no event | U-LIVE-WORLD-2 |
+
+The review's spec mutations M1 to M10 keep their tests; M1 (the actor from the payload `sender`) is now also refused by the actor filter, and I-BG-4's first case expects `actor_unknown` with no role read for the payload's user.
+
+**Verification.** `pnpm lint`, `pnpm typecheck`, `pnpm build` and `pnpm eval:ci` (exit 0, `matchBaseline: 1`) pass; `pnpm test` passes (95 files, 1,056 tests) against `TEST_DATABASE_URL=…/graft_test_fix3`; migrate, rollback and migrate on `graft_fix3_dod` applied 0001..0012, rolled back only `0012_audit_label_event`, then re-applied it. N-1 to N-3, N-6, N-10 and N-11 pass, the mutation guard has no diff and `break-glass.ts` has no `sender`. **Not run:** the manual smoke test (HUMAN-TODO). `pnpm db:up` was not run: the shared Postgres on port 55432 was reused, and both scratch databases were dropped afterwards.
+
 ## Phase 1 step 4: guard detection
 
 Spec: [phase-1/step-4-guard-detection.md](phase-1/step-4-guard-detection.md). Decisions D1 to D17 are in the spec; what follows is the API check (T1), what the spec left open, and where the build differs from it. User page: [features/guard.md](features/guard.md).
