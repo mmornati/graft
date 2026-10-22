@@ -232,6 +232,21 @@
           }
         ]
       }
+    },
+    "guard": {
+      "type": "object",
+      "properties": {
+        "checks": {
+          "minItems": 1,
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\p{Cc}]{1,200}$"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [

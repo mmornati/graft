@@ -15,6 +15,8 @@ export const LIMITS = {
   agents: 20,
   labels: 20,
   teams: 10,
+  /** Phase 1 step 4: `guard.checks`. */
+  guardChecks: 50,
   globChars: 200,
   /** Characters other than `*` in one glob segment, and in the whole glob (cost cap, review 2). */
   globSegmentChars: 48,
