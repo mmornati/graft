@@ -274,6 +274,17 @@ describe("guard: history", () => {
     mergedPull(10, C(6));
     mergedPull(11);
     api.state.commitPulls.set(C(6), [10, 11]);
+    // D6: a PR merged into another branch (C5 was also merged into `release`) is not a culprit.
+    const release = makePull({ number: 12, node_id: "PR_fake12" });
+    api.state.pulls.set(12, {
+      ...release,
+      state: "closed",
+      merged: true,
+      merged_at: "2026-10-14T11:00:00Z",
+      closed_at: "2026-10-14T11:00:00Z",
+      base: { ...release.base, ref: "release" },
+    });
+    api.state.commitPulls.set(C(5), [12]);
     await track(C(6), null);
     const rows = await t.db.selectFrom("main_commits").selectAll().orderBy("seq").execute();
     expect(rows.map((r) => [r.sha, r.pr_source, r.pr_number])).toEqual([
@@ -403,6 +414,19 @@ describe("guard: triggers", () => {
     const stored = await t.db.selectFrom("ci_results").selectAll().where("sha", "=", M).execute();
     expect(stored.map((r) => [r.key, r.class])).toEqual([[TEST_KEY, "green"]]);
     expect(await events()).toEqual([]);
+
+    // §6.3, out of order: a later read answers an OLDER result (a lagging replica, a late page).
+    // It never overwrites the newer one (X4).
+    const latest = api.state.checkRuns.filter((r) => r.head_sha === M);
+    for (const r of latest) {
+      r.conclusion = "failure";
+      r.completed_at = new Date(now.getTime() - 60_000).toISOString();
+    }
+    advance(60);
+    await observeCommit(job?.data as never, ctx());
+    const after = await t.db.selectFrom("ci_results").selectAll().where("sha", "=", M).execute();
+    expect(after.map((r) => [r.key, r.class])).toEqual([[TEST_KEY, "green"]]);
+    expect(await events()).toEqual([]);
   });
 });
 
@@ -432,6 +456,15 @@ describe("guard: detection and confirmation", () => {
     ]);
     expect(comments()).toEqual([]);
 
+    // D8: a second key red on the same commit joins the open event (X5).
+    run(C(1), "lint", "success");
+    await observe(C(1));
+    run(C(2), "lint", "failure");
+    await observe(C(2));
+    expect((await events()).map((r) => [r.id, r.failing_checks.map((c) => c.name)])).toEqual([
+      [id, ["test", "lint"]],
+    ]);
+
     advance(60);
     run(C(3), "test", "failure");
     await observe(C(3));
@@ -449,6 +482,7 @@ describe("guard: detection and confirmation", () => {
     expect(body.split("\n")[0]).toBe(`<!-- graft:guard-event ${id} -->`);
     expect(body).toContain(`went red on \`main\` at \`${C(2).slice(0, 7)}\``);
     expect(body).toContain(`the next commit \`${C(3).slice(0, 7)}\` is also red`);
+    expect(body).toContain("- Failing: `test`, `lint`");
     expect(body.split("\n").at(-1)).toBe(REPORT_LINE);
     expect(e?.comment_id).toBe(api.state.comments[0]?.id);
 
@@ -698,9 +732,16 @@ describe("guard: detection and confirmation", () => {
     ]);
     run(C(1), "test", "success");
     run(C(2), "test", "failure");
+    // Graft's own check runs never count (D1, X3): a graft/policy failure on C3 after a success
+    // on C1 opens nothing and is not stored.
+    run(C(1), "graft/policy", "success", { app: 12345 });
+    run(C(3), "graft/policy", "failure", { app: 12345 });
     for (const k of [1, 2, 3, 4]) await observe(C(k));
     expect(api.find("GET", /\/status$/)).toEqual([]);
     expect((await events()).map((r) => r.failing_sha)).toEqual([C(2)]);
+    expect(
+      await t.db.selectFrom("ci_results").selectAll().where("key", "like", "run:12345:%").execute(),
+    ).toEqual([]);
 
     await t.db
       .updateTable("installations")
