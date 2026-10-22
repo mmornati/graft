@@ -966,6 +966,19 @@ export function createFakeGitHubWorld(opts: WorldOptions) {
       if (!rec) return notFound();
       const added = ((body?.labels ?? []) as string[]).filter((l) => !rec.labels.includes(l));
       rec.labels.push(...added);
+      // The issue events API records who labelled (Phase 1 step 3, D2), oldest first.
+      const who = actor ?? opts.users.actor;
+      const log = state.issueEvents.get(n) ?? [];
+      for (const l of added) {
+        log.push({
+          id: state.nextId++,
+          event: "labeled",
+          actor: { id: who.id, login: who.login, type: "User" },
+          label: { name: l, color: "ededed" },
+          created_at: iso(),
+        });
+      }
+      state.issueEvents.set(n, log);
       const pr = prs.get(n);
       if (pr) {
         pr.labels = rec.labels.slice();

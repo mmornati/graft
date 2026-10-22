@@ -18,3 +18,11 @@ Things only a person can do. The developer agent never ticks these. Each item na
 - [ ] **To lower `GRAFT_MODE_CEILING`, stop every worker before starting the new one.** A rolling restart lets an old worker with `enforce` publish after the rollback (step 2 review 1, finding 7, deferred to step 7). Who: operator.
 - [ ] **Think twice before enforcing on a public repository.** Approval role checks now go to owners, members and collaborators first, but 21 or more change requests from outsiders still block the check (fail closed, step 2 review 1, finding 4). Decide in the step 7 runbook. Who: operator.
 - [ ] **Run the step 2 manual smoke test** (spec §15: report-mode would-be line, enforce with the ceiling, rollback) against a real or tunnelled App and record it in the PR description; the developer agent ran only the offline suite. Who: operator.
+
+## Step 3: break-glass
+
+- [ ] **Create the `graft:break-glass` label** in each pilot repository, with a description saying it bypasses the Graft policy for one commit and is audited. Who: repo admin.
+- [ ] **Tell the team who can use it** (maintain or admin) and that every use appears in the PR comment and in `pnpm graft audit list`. Who: product owner.
+- [ ] **On a sandbox PR in enforce mode:** label as a maintainer → `success`; push → back to the normal conclusion; label as a triage user → ignored. Then run `pnpm graft audit list --repo …` and check all three rows. Who: repo owner.
+- [ ] **Check the issue events API on a real PR** (T1 could not, offline): the `labeled` event's `actor` is the person who added the label, events are listed oldest first, and the installation token can read them with `issues: read` / `pull_requests: read`. Who: operator.
+- [ ] **Run the step 3 manual smoke test** against a real or tunnelled App (not run by the developer agent). Who: operator.

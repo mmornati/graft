@@ -94,6 +94,12 @@ export function createFakeGitHubApi(
     reviews: new Map<number, FakeReview[]>(),
     /** `issues.listEventsForTimeline`, oldest first, in the API's shape (step 6). */
     timelines: new Map<number, Record<string, unknown>[]>(),
+    /**
+     * `issues.listEvents` (`GET /issues/{n}/events`, Phase 1 step 3, T1): oldest first, in the
+     * API's shape (`event`, `actor`, `label`, `created_at`), paginated like the real API. A PR or
+     * issue with no entry serves an empty list when it exists, else 404.
+     */
+    issueEvents: new Map<number, Record<string, unknown>[]>(),
     /** `pulls.listRequestedReviewers` (step 6). */
     requestedReviewers: new Map<
       number,
@@ -330,6 +336,15 @@ export function createFakeGitHubApi(
     if (m) {
       const all = state.timelines.get(Number(m[1]));
       return all ? paged(all, url, path) : json(404, { message: "Not Found" });
+    }
+    m = is("GET", /^\/issues\/(\d+)\/events$/);
+    if (m) {
+      const n = Number(m[1]);
+      const all = state.issueEvents.get(n);
+      if (!all && !state.pulls.has(n) && !state.issues.has(n)) {
+        return json(404, { message: "Not Found" });
+      }
+      return paged(all ?? [], url, path);
     }
     m = is("GET", /^\/pulls\/(\d+)\/reviews$/);
     if (m) return paged(state.reviews.get(Number(m[1])) ?? [], url, path);

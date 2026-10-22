@@ -274,7 +274,9 @@ export type EnforcedReasonColumn =
   | "reviews_truncated"
   | "changes_requested"
   | "approvals_missing"
-  | "card_pending";
+  | "card_pending"
+  /** Phase 1 step 3 (0010). */
+  | "break_glass";
 
 export interface PolicyVerdictsTable {
   id: Generated<string>;
@@ -320,6 +322,29 @@ export interface PolicyVerdictsTable {
   evaluated_at: Date;
   created_at: CreatedAt;
   updated_at: Timestamp;
+}
+
+/**
+ * Phase 1 step 3 (spec §5): one row per break-glass request Graft acted on. Append-only: rows are
+ * never updated, and deleted only by `pilot purge`. Logins are stored because an audit trail must
+ * say who; the label name is configuration and is not stored.
+ */
+export interface AuditLogTable {
+  id: Generated<string>;
+  repository_id: number;
+  change_id: string;
+  pr_number: number;
+  head_sha: string;
+  kind: "applied" | "ignored" | "stale" | "removed";
+  /** Set iff `kind` is `ignored` or `stale`. */
+  reason: "role_too_low" | "bot" | "role_unverified" | "actor_unknown" | "head_moved" | null;
+  actor_id: number | null;
+  actor_login: string | null;
+  actor_role: "admin" | "maintain" | "write" | "triage" | "read" | "none" | null;
+  self: Generated<boolean>;
+  policy_mode: "report" | "enforce";
+  label_event_at: Date | null;
+  created_at: Date;
 }
 
 export interface GuardEventsTable {
@@ -450,6 +475,7 @@ export interface Database {
   pilot_purges: PilotPurgesTable;
   mode_changes: ModeChangesTable;
   service_state: ServiceStateTable;
+  audit_log: AuditLogTable;
 }
 
 export const TABLE_NAMES = [
@@ -475,4 +501,5 @@ export const TABLE_NAMES = [
   "pilot_purges",
   "mode_changes",
   "service_state",
+  "audit_log",
 ] as const satisfies readonly (keyof Database)[];

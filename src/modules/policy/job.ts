@@ -30,6 +30,7 @@ import { type LoadedPolicy, loadBasePolicy, resolveBaseCommit } from "../../poli
 import { canonicalHash } from "../../policy/parse.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
+import { insertAuditRow, type NewAuditRow } from "../audit/index.js";
 import { type Change, getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import {
   ensureRepository,
@@ -40,8 +41,10 @@ import { latestPublishedCard } from "../intent/index.js";
 import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
 import { resolveApprovers } from "./approvals.js";
+import { type BreakGlassFacts, resolveBreakGlass } from "./break-glass.js";
 import { buildFacts, listChangedPaths, listReviews } from "./facts.js";
 import {
+  type BreakGlassView,
   POLICY_CHECK_NAME,
   type PolicyView,
   policyTitle,
@@ -87,6 +90,14 @@ export const evaluateSchema = z.object({
   prNumber: z.number().int().positive(),
   trigger: z.enum(POLICY_TRIGGERS),
   deliveryId: z.string().max(100).optional(),
+  /**
+   * Step 3 (D4): the head SHA of the `labeled` delivery, set only when the label is the
+   * break-glass label. A filter: the job applies a break-glass only when the live head equals it.
+   */
+  breakGlassHeadSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
 });
 export type EvaluateData = z.infer<typeof evaluateSchema>;
 
@@ -354,6 +365,27 @@ export async function evaluatePolicyJobRun(
     throw toJobError(err, "read pull request facts");
   }
 
+  // 4b. Break-glass (step 3, §6): only when the feature is on. Outside the lock; it writes nothing.
+  let breakGlass: BreakGlassFacts = { state: "none" };
+  if (config.breakGlassLabel !== null) {
+    try {
+      breakGlass = await resolveBreakGlass(octokit, ctx.db, {
+        owner: data.owner,
+        repo: data.repo,
+        prNumber: data.prNumber,
+        changeId: change.id,
+        headSha,
+        label: config.breakGlassLabel,
+        labels: (pull.labels ?? []).map((l) => l.name),
+        authorId: pull.user?.id ?? null,
+        breakGlassHeadSha: data.breakGlassHeadSha,
+      });
+    } catch (err) {
+      throw toJobError(err, "break-glass");
+    }
+  }
+  view.breakGlass = breakGlassView(breakGlass);
+
   // 5. The enforce conclusion (step 2, §7), computed in every mode; published only in enforce.
   const waitMs = config.policyCardWaitSeconds * 1000;
   let cardWaitUntil: Date | null = null;
@@ -367,6 +399,8 @@ export async function evaluatePolicyJobRun(
     verdict: view.verdict,
     approvers: view.approvers ?? null,
     cardWait: cardWaitUntil !== null,
+    // D5: only a break-glass verified for THIS head; it wins over every other rule.
+    breakGlass: breakGlass.state === "applied" ? { applied: true } : null,
   });
   view.enforced = enforced;
   const published = publishedCheck(modes.policy.effective, enforced);
@@ -389,8 +423,29 @@ export async function evaluatePolicyJobRun(
     policyMode: modes.policy.effective,
     enforced,
     published,
+    breakGlass: breakGlassHashTerm(breakGlass, headSha),
     rendered: { title, summary, details },
   });
+
+  /**
+   * The audit row this evaluation calls for (§6 step 4, D7, D9), in the caller's transaction. The
+   * store applies the dedup rules; replayed states (`record: false`) write nothing.
+   */
+  const recordAudit = async (tx: Transaction<Database>): Promise<boolean> => {
+    const row = auditRowFor(breakGlass);
+    if (row === null) return false;
+    return insertAuditRow(tx, {
+      ...row,
+      repositoryId: data.repositoryId,
+      changeId: change.id,
+      prNumber: data.prNumber,
+      headSha,
+      policyMode: modes.policy.effective,
+      createdAt: ctx.clock.now(),
+    });
+  };
+  // A newly verified break-glass whose run lost the race to a later evaluation (below).
+  let auditWrittenWhileStale = false;
 
   const identity = { changeId: change.id, headSha, policyFileSha: view.fileSha };
   const fresh = (current: Change | undefined): boolean =>
@@ -427,6 +482,9 @@ export async function evaluatePolicyJobRun(
     const latest = await maxFactsReadAt(tx, change.id);
     if (latest !== null && latest > factsReadAt) {
       ctx.log.info({ changeId: change.id }, "stale: a later evaluation already published");
+      // The later run may not have been the label's own trigger, so it did not verify the
+      // break-glass. Keep what this run verified for the same head, and re-evaluate (below).
+      if (await recordAudit(tx)) auditWrittenWhileStale = true;
       return "stale" as const;
     }
     const existing = await findVerdict(tx, identity);
@@ -465,6 +523,7 @@ export async function evaluatePolicyJobRun(
     ) {
       // Nothing to say that GitHub does not already show: no request, but the row keeps the
       // latest read time so an older job cannot overtake it.
+      await recordAudit(tx);
       await upsertVerdict(tx, values(existing.check_run_id, existing.published_at));
       return "unchanged" as const;
     }
@@ -520,6 +579,9 @@ export async function evaluatePolicyJobRun(
         .set({ graft_comment_id: comment.commentId })
         .where("id", "=", change.id)
         .execute();
+      // Step 3: the audit row commits with the verdict; a rollback drops both, and the retry
+      // writes them again (the D7 dedup makes that safe).
+      await recordAudit(tx);
       await upsertVerdict(tx, values(checkRunId, ctx.clock.now()));
     } catch (err) {
       // D12: a rollback committed between the mode read and this write. Not an error: the
@@ -543,6 +605,22 @@ export async function evaluatePolicyJobRun(
       "mode changed during evaluation",
     );
     result = "stale";
+  }
+
+  // Step 3: a break-glass row written by a run that lost the race is shown by a new evaluation.
+  if (auditWrittenWhileStale) {
+    await ctx.queue.send(
+      policyEvaluateJob,
+      {
+        installationId: data.installationId,
+        repositoryId: data.repositoryId,
+        owner: data.owner,
+        repo: data.repo,
+        prNumber: data.prNumber,
+        trigger: "pr",
+      },
+      { singletonKey: `policy:breakglass:${change.id}:${headSha}:${factsReadAt.getTime()}` },
+    );
   }
 
   // D9: re-evaluate at the end of the card wait, in every mode (the singleton key makes it once).
@@ -613,6 +691,8 @@ export interface FactsHashInput {
   enforced: Enforced;
   /** Step 2: the status and conclusion actually sent. */
   published: PublishedCheck;
+  /** Step 3 (D10): a break-glass changes the conclusion, so it must republish on its own. */
+  breakGlass: BreakGlassHashTerm;
   /** What reviewers read depends on more than the verdict (author name, labels, size ...). */
   rendered: { title: string; summary: string; details: string };
 }
@@ -642,8 +722,109 @@ export function policyFactsHash(i: FactsHashInput): string {
       })),
     },
     published: { status: i.published.status, conclusion: i.published.conclusion },
+    breakGlass: i.breakGlass,
     rendered: i.rendered,
   });
+}
+
+/** D10: `applied` / `none` / `stale` / `ignored`, the actor id and the head SHA. */
+export interface BreakGlassHashTerm {
+  state: "applied" | "none" | "stale" | "ignored";
+  actorId: number | null;
+  headSha: string;
+}
+
+export function breakGlassHashTerm(b: BreakGlassFacts, headSha: string): BreakGlassHashTerm {
+  switch (b.state) {
+    case "applied":
+    case "ignored":
+      return { state: b.state, actorId: b.actor?.id ?? null, headSha };
+    case "stale":
+      return { state: "stale", actorId: null, headSha };
+    default:
+      // `removed` returns the check to normal: the same term as no break-glass at all.
+      return { state: "none", actorId: null, headSha };
+  }
+}
+
+/** What the rendering shows (§7); `removed` and `none` show nothing. */
+function breakGlassView(b: BreakGlassFacts): BreakGlassView | null {
+  switch (b.state) {
+    case "applied":
+      return {
+        state: "applied",
+        login: b.actor.login,
+        role: b.role,
+        headSha: b.headSha,
+        self: b.self,
+        labelEventAt: b.labelEventAt,
+      };
+    case "ignored":
+      return {
+        state: "ignored",
+        reason: b.reason,
+        login: b.actor?.login ?? null,
+        role: b.role,
+        self: b.self,
+        labelEventAt: b.labelEventAt,
+      };
+    case "stale":
+      return { state: "stale" };
+    default:
+      return null;
+  }
+}
+
+/** The audit row fields a state calls for, or null (D7, D9). */
+function auditRowFor(
+  b: BreakGlassFacts,
+): Pick<NewAuditRow, "kind" | "reason" | "actor" | "role" | "self" | "labelEventAt"> | null {
+  switch (b.state) {
+    case "applied":
+      return b.record
+        ? {
+            kind: "applied",
+            reason: null,
+            actor: b.actor,
+            role: b.role,
+            self: b.self,
+            labelEventAt: b.labelEventAt,
+          }
+        : null;
+    case "ignored":
+      return b.record
+        ? {
+            kind: "ignored",
+            reason: b.reason,
+            actor: b.actor,
+            role: b.role,
+            self: b.self,
+            labelEventAt: b.labelEventAt,
+          }
+        : null;
+    case "stale":
+      return b.record
+        ? {
+            kind: "stale",
+            reason: "head_moved",
+            actor: null,
+            role: null,
+            self: false,
+            labelEventAt: null,
+          }
+        : null;
+    case "removed":
+      return {
+        kind: "removed",
+        reason: null,
+        actor: b.actor,
+        role: null,
+        self: false,
+        labelEventAt: b.labelEventAt,
+      };
+    default:
+      return null;
+  }
 }
 
 /**

@@ -602,4 +602,167 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       expect(sentFailures()).toHaveLength(before + 1);
     }
   });
+
+  /**
+   * Phase 1 step 3 (T8): the break-glass label, through the real server and worker. A triage user
+   * labels (ignored) and takes it off, a maintainer labels (applied), the PR is pushed, and the
+   * label is removed. Under `default` nothing changes on GitHub; under `max` the only `success`
+   * is on the labelled head, and the next head goes back to the normal conclusion.
+   */
+  const breakGlass = {
+    from: 0,
+    gateFrom: 0,
+    refusedFrom: 0,
+    labelledHead: "",
+    nextHead: fakeSha(0xbe33),
+  };
+  const breakGlassScenario = async () => {
+    await restoreModes();
+    breakGlass.from = api.requests.length;
+    breakGlass.gateFrom = gateCalls.length;
+    // N-5 and N-7 provoke refusals on purpose; only this scenario's count.
+    breakGlass.refusedFrom = refused.length;
+    const pull = api.state.pulls.get(PR_NUMBER);
+    if (!pull) throw new Error("no pull");
+    breakGlass.labelledHead = pull.head.sha;
+    api.state.permissions.set("maya", { id: 701, role: "maintain" });
+    api.state.permissions.set("tom", { id: 702, role: "triage" });
+    let minute = 40;
+    let eventId = 9000;
+    const labelAction = async (action: "labeled" | "unlabeled", login: string, id: number) => {
+      const events = api.state.issueEvents.get(PR_NUMBER) ?? [];
+      const at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+      events.push({
+        id: eventId++,
+        event: action,
+        actor: { id, login, type: "User" },
+        label: { name: "graft:break-glass", color: "b60205" },
+        created_at: at,
+      });
+      api.state.issueEvents.set(PR_NUMBER, events);
+      const others = (pull.labels ?? []).filter((l) => l.name !== "graft:break-glass");
+      pull.labels = action === "labeled" ? [...others, { name: "graft:break-glass" }] : others;
+      pull.updated_at = at;
+      await post("pull_request.labeled.break-glass", `n-bg-${eventId}`, (p) => {
+        p.action = action;
+        const pr = p.pull_request as { head: { sha: string }; updated_at: string };
+        pr.head.sha = pull.head.sha;
+        pr.updated_at = at;
+      });
+    };
+    await labelAction("labeled", "tom", 702);
+    await labelAction("unlabeled", "tom", 702);
+    await labelAction("labeled", "maya", 701);
+    // A push after labelling: the bypass ends with it.
+    pull.head.sha = breakGlass.nextHead;
+    pull.updated_at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+    api.state.commits.set(PR_NUMBER, [
+      makeCommit(
+        breakGlass.nextHead,
+        commitMessage("Retry again", undefined, [["Graft-Agent", "claude-code"]]),
+      ),
+    ]);
+    await post("pull_request.synchronize", "n-bg-sync", (p) => {
+      (p.pull_request as { head: { sha: string } }).head.sha = breakGlass.nextHead;
+      p.after = breakGlass.nextHead;
+    });
+    await labelAction("unlabeled", "maya", 701);
+  };
+  const scenarioWrites = () =>
+    api.requests.slice(breakGlass.from).filter((r) => r.method !== "GET" && r.method !== "HEAD");
+  // The app's clock is fixed, so the rows share a time: ordered by kind (applied, ignored).
+  const scenarioAudit = () =>
+    t.db.selectFrom("audit_log").selectAll().orderBy("created_at").orderBy("kind").execute();
+
+  if (profile.name === "default") {
+    it("N-10 [default] break-glass: the check stays neutral throughout and the only writes are Phase 0 routes", async () => {
+      await breakGlassScenario();
+      const writes = scenarioWrites();
+      expect(writes.length).toBeGreaterThan(3);
+      for (const r of writes) {
+        expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(
+          classifyWrite(r.method, r.path).kind,
+        );
+        if (/\/check-runs(\/\d+)?$/.test(r.path)) {
+          expect(nonNeutral(r), JSON.stringify(r.body)).toBe(false);
+        }
+      }
+      for (const run of api.state.checkRuns.filter((c) => c.name === "graft/policy")) {
+        expect(run, `${run.head_sha}`).toMatchObject({
+          status: "completed",
+          conclusion: "neutral",
+        });
+      }
+      expect(gateCalls.slice(breakGlass.gateFrom)).toEqual([]);
+      expect(refused.slice(breakGlass.refusedFrom).map((e) => e.message)).toEqual([]);
+      // Recorded in report mode: the triage label ignored, the maintainer's applied, in report.
+      const rows = await scenarioAudit();
+      expect(rows.map((r) => [r.kind, r.reason, r.actor_login, r.policy_mode])).toEqual([
+        ["applied", null, "maya", "report"],
+        ["ignored", "role_too_low", "tom", "report"],
+      ]);
+      expect(rows.every((r) => r.head_sha === breakGlass.labelledHead)).toBe(true);
+      // What enforce would have said for the labelled head: bypassed.
+      const verdicts = await t.db
+        .selectFrom("policy_verdicts")
+        .selectAll()
+        .where("enforced_reason", "=", "break_glass")
+        .execute();
+      expect(verdicts.length).toBeGreaterThan(0);
+      for (const v of verdicts) {
+        expect(v.head_sha).toBe(breakGlass.labelledHead);
+        expect(v.check_conclusion).toBe("neutral");
+      }
+    });
+  } else {
+    it("N-11 [max] break-glass: the only success is on the labelled head, through the policy feature client; the next head goes back to the normal conclusion", async () => {
+      await breakGlassScenario();
+      const writes = scenarioWrites();
+      for (const r of writes) {
+        expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(
+          classifyWrite(r.method, r.path).kind,
+        );
+      }
+      const headOf = (r: (typeof writes)[number]): string | undefined => {
+        if (typeof r.body?.head_sha === "string") return r.body.head_sha;
+        const id = Number(r.path.split("/").at(-1));
+        return api.state.checkRuns.find((c) => c.id === id)?.head_sha;
+      };
+      const checkWritesHere = writes.filter((r) => /\/check-runs(\/\d+)?$/.test(r.path));
+      const successes = checkWritesHere.filter((r) => r.body?.conclusion === "success");
+      expect(successes.length).toBeGreaterThan(0);
+      for (const r of successes) expect(headOf(r)).toBe(breakGlass.labelledHead);
+      // Every non-neutral write went through the policy client and an allowed gate answer.
+      const enforcing = checkWritesHere.filter(nonNeutral);
+      const gate = gateCalls.slice(breakGlass.gateFrom);
+      expect(gate.every((c) => c.feature === "policy")).toBe(true);
+      expect(gate.filter((c) => c.allowed)).toHaveLength(enforcing.length);
+      expect(refused.slice(breakGlass.refusedFrom).map((e) => e.message)).toEqual([]);
+
+      // The job's own run (N-7 created extra graft/policy runs with no external id on this head).
+      const runOf = (head: string) =>
+        api.state.checkRuns
+          .filter((c) => c.name === "graft/policy" && c.head_sha === head && c.external_id !== "")
+          .at(-1);
+      expect(runOf(breakGlass.labelledHead)).toMatchObject({ conclusion: "success" });
+      expect(runOf(breakGlass.labelledHead)?.output.title).toBe("Bypassed by break-glass (maya)");
+      const next = runOf(breakGlass.nextHead);
+      expect(next?.status).toBe("completed");
+      expect(next?.conclusion).not.toBe("success");
+      const latest = await t.db
+        .selectFrom("policy_verdicts")
+        .selectAll()
+        .where("head_sha", "=", breakGlass.nextHead)
+        .orderBy("facts_read_at", "desc")
+        .executeTakeFirstOrThrow();
+      expect(latest.enforced_reason).not.toBe("break_glass");
+      expect(latest.check_conclusion).toBe(next?.conclusion);
+
+      const rows = await scenarioAudit();
+      expect(rows.map((r) => [r.kind, r.reason, r.actor_login, r.policy_mode])).toEqual([
+        ["applied", null, "maya", "enforce"],
+        ["ignored", "role_too_low", "tom", "enforce"],
+      ]);
+    });
+  }
 });

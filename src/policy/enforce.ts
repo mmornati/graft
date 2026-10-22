@@ -89,7 +89,9 @@ export type EnforcedReason =
   | "reviews_truncated"
   | "changes_requested"
   | "approvals_missing"
-  | "card_pending";
+  | "card_pending"
+  /** Phase 1 step 3 (D5): a verified break-glass for the current head. */
+  | "break_glass";
 
 export type EnforcedConclusion = "success" | "failure" | "pending";
 
@@ -107,6 +109,11 @@ export interface EnforceInput {
   approvers: ApproverFacts | null;
   /** D9: the card is pending and the head is inside the wait window. */
   cardWait: boolean;
+  /**
+   * Phase 1 step 3 (D5): a break-glass Graft verified for the CURRENT head. Absent or null: none.
+   * It wins over every other rule; the job sets it only from an `applied` audit row (D6).
+   */
+  breakGlass?: { applied: true } | null;
 }
 
 const failure = (reason: EnforcedReason, constraints: ConstraintStatus[] = []): Enforced => ({
@@ -115,8 +122,15 @@ const failure = (reason: EnforcedReason, constraints: ConstraintStatus[] = []): 
   constraints,
 });
 
-/** §7: the first rule that applies wins. Block and policy errors win over everything. */
+/**
+ * §7: the first rule that applies wins. Block and policy errors win over everything, except a
+ * break-glass (step 3, D5), which is checked first: it is a bypass, so it must bypass a block too.
+ * The constraints are still computed, so that the details show what was bypassed.
+ */
 export function enforcedConclusion(i: EnforceInput): Enforced {
+  if (i.breakGlass?.applied === true) {
+    return { conclusion: "success", reason: "break_glass", constraints: constraintsOf(i) };
+  }
   if (i.state === "missing") return failure("no_policy");
   if (i.state === "invalid" || i.verdict === null) return failure("policy_invalid");
   const v = i.verdict;
@@ -138,6 +152,12 @@ export function enforcedConclusion(i: EnforceInput): Enforced {
   return constraints.length > 0 && constraints.every((c) => c.met)
     ? { conclusion: "success", reason: "requirements_met", constraints }
     : failure("approvals_missing", constraints);
+}
+
+/** The constraint statuses of a valid `would_require` verdict, else `[]`. */
+function constraintsOf(i: EnforceInput): ConstraintStatus[] {
+  if (i.state !== "ok" || i.verdict?.outcome !== "would_require") return [];
+  return satisfyConstraints(i.verdict.constraints, i.approvers ?? EMPTY);
 }
 
 const EMPTY: ApproverFacts = {

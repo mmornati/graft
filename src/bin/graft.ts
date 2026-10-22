@@ -25,10 +25,11 @@ const USAGE = `usage:
   graft pilot doctor|sync-reviewers|purge ...   (see the README, "Pilots and gate")
   graft baseline | gate report | metrics rollup | incident add|list|remove ...
   graft mode show|set|history|refresh-permissions ...   (see docs/features/modes.md)
+  graft audit list --repo <owner/repo> ...   (see docs/features/policy.md, "Break-glass")
   graft e2e setup|run|verify|report|cleanup ...   (see docs/e2e/runbook.md)
 `;
 
-const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics", "mode"]);
+const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit"]);
 
 const DEFAULT_SCHEMA_PATH = fileURLToPath(
   new URL("../../schema/graft.v1.schema.json", import.meta.url),

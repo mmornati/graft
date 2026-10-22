@@ -431,6 +431,99 @@ describe("enforce conclusion (Phase 1 step 2, §7)", () => {
     });
   });
 
+  // Phase 1 step 3 (D5): a verified break-glass wins over every other rule.
+  it("U-BG-1 breakGlass.applied: success break_glass for no_policy, policy_invalid, blocked, card wait, truncated reviews, change requests and missing approvals", () => {
+    const BG = { applied: true } as const;
+    const block = evaluatePolicy(
+      EXAMPLE,
+      facts({ files: files("secrets/prod.env"), risk: card("sensitive"), author: agent() }),
+    );
+    const approve = evaluatePolicy(
+      EXAMPLE,
+      facts({ files: files("docs/a.md"), risk: card("trivial") }),
+    );
+    const require = evaluatePolicy(
+      EXAMPLE,
+      facts({ files: files("infra/main.tf"), risk: card("sensitive"), author: agent() }),
+    );
+    const cases: [string, Parameters<typeof enforcedConclusion>[0]][] = [
+      ["no_policy", { state: "missing", verdict: null, approvers: null, cardWait: false }],
+      ["policy_invalid", { state: "invalid", verdict: null, approvers: null, cardWait: false }],
+      ["blocked", { state: "ok", verdict: block, approvers: SATISFYING, cardWait: true }],
+      ["card_pending", { state: "ok", verdict: approve, approvers: NONE, cardWait: true }],
+      [
+        "reviews_truncated",
+        {
+          state: "ok",
+          verdict: approve,
+          approvers: { ...SATISFYING, reviewsTruncated: true },
+          cardWait: false,
+        },
+      ],
+      [
+        "changes_requested",
+        {
+          state: "ok",
+          verdict: require,
+          approvers: { ...SATISFYING, changesRequestedBy: ["carol"] },
+          cardWait: false,
+        },
+      ],
+      ["approvals_missing", { state: "ok", verdict: require, approvers: NONE, cardWait: false }],
+    ];
+    for (const [normal, input] of cases) {
+      expect(enforcedConclusion(input).reason, normal).toBe(normal);
+      const bypassed = enforcedConclusion({ ...input, breakGlass: BG });
+      expect({ conclusion: bypassed.conclusion, reason: bypassed.reason }, normal).toEqual(
+        success("break_glass"),
+      );
+    }
+    // What was bypassed is still computed, so that the details can show it.
+    const missing = enforcedConclusion({
+      state: "ok",
+      verdict: require,
+      approvers: NONE,
+      cardWait: false,
+      breakGlass: BG,
+    });
+    expect(missing.constraints.length).toBeGreaterThan(0);
+    expect(missing.constraints.every((c) => !c.met)).toBe(true);
+  });
+
+  it("U-BG-2 without break-glass (absent or null) every U-ENF case is unchanged", () => {
+    const inputs: Parameters<typeof enforcedConclusion>[0][] = [];
+    for (const [, policy, f] of EXAMPLES) {
+      const verdict = evaluatePolicy(policy, f);
+      for (const approvers of [NONE, SATISFYING, { ...SATISFYING, reviewsTruncated: true }]) {
+        for (const cardWait of [false, true]) {
+          inputs.push({ state: "ok", verdict, approvers, cardWait });
+          inputs.push({
+            state: "ok",
+            verdict,
+            approvers: { ...approvers, changesRequestedBy: ["carol"] },
+            cardWait,
+          });
+        }
+      }
+    }
+    for (const state of ["missing", "invalid"] as const) {
+      inputs.push({ state, verdict: null, approvers: null, cardWait: false });
+    }
+    expect(inputs.length).toBeGreaterThan(100);
+    for (const input of inputs) {
+      const plain = enforcedConclusion(input);
+      expect(plain.reason).not.toBe("break_glass");
+      expect(enforcedConclusion({ ...input, breakGlass: null })).toEqual(plain);
+      expect(enforcedConclusion({ ...input, breakGlass: undefined })).toEqual(plain);
+    }
+    // The U-ENF table itself, through the same helper as U-ENF-1.
+    for (const [id, policy, f, without, withApprovals] of EXAMPLES) {
+      const v = evaluatePolicy(policy, f);
+      expect(enforce(v, NONE), id).toEqual(without);
+      expect(enforce(v, SATISFYING), id).toEqual(withApprovals);
+    }
+  });
+
   it("T2 GRAFT_POLICY_CARD_WAIT_SECONDS: default 600, 0 to 3600, integers only", () => {
     const env = (v?: string) => ({
       NODE_ENV: "test",
