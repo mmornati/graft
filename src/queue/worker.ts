@@ -1,7 +1,7 @@
 import type { JobContext } from "../core/context.js";
 import type { Registry } from "../webhooks/registry.js";
 import { PermanentJobError, sanitizeError } from "./errors.js";
-import type { PgBossJobQueue } from "./queue.js";
+import { type PgBossJobQueue, resolveJobOptions } from "./queue.js";
 
 export async function startWorker(
   queue: PgBossJobQueue,
@@ -10,6 +10,7 @@ export async function startWorker(
   opts: { concurrency: number; pollingIntervalSeconds?: number },
 ): Promise<void> {
   for (const job of registry.jobs) {
+    const { retryLimit } = resolveJobOptions(job);
     await queue.boss.work<object>(
       job.name,
       {
@@ -25,7 +26,11 @@ export async function startWorker(
           const log = ctx.log.child({ job: job.name, jobId: j.id });
           try {
             const data = job.schema.parse(j.data);
-            await job.handle(data, { ...ctx, log });
+            await job.handle(data, {
+              ...ctx,
+              log,
+              attempt: { retryCount: j.retryCount, retryLimit },
+            });
           } catch (raw) {
             // Octokit/SDK errors carry request and response bodies (possibly model output), and
             // both pino and pg-boss serialize them: only the sanitized error leaves this block.

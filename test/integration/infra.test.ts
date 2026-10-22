@@ -51,7 +51,8 @@ describe("change lock", () => {
 });
 
 describe("permanent job errors", () => {
-  it("I-Q-4 PermanentJobError completes the job with no retry; a plain Error is retried", async () => {
+  it("I-Q-4 PermanentJobError completes the job with no retry; a plain Error is retried; the handler sees its attempt", async () => {
+    const attempts: unknown[] = [];
     const permanent = defineJob({
       name: "test.permanent",
       schema: z.object({}),
@@ -64,7 +65,9 @@ describe("permanent job errors", () => {
       name: "test.plain",
       schema: z.object({}),
       options: { retryLimit: 3, retryDelaySeconds: 600 },
-      handle: async () => {
+      handle: async (_data, ctx) => {
+        // Step 3 review 1: a job can tell whether a retryable error will be retried.
+        attempts.push(ctx.attempt);
         throw new Error("transient");
       },
     });
@@ -91,6 +94,7 @@ describe("permanent job errors", () => {
       expect(await state(pid)).toEqual({ state: "completed", retry_count: 0 });
       await waitFor(async () => (await state(qid))?.state === "retry");
       expect((await state(qid))?.state).toBe("retry");
+      expect(attempts).toEqual([{ retryCount: 0, retryLimit: 3 }]);
     } finally {
       await queue.stop();
       for (const name of ["test.permanent", "test.plain"]) {
