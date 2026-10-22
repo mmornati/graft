@@ -7,6 +7,7 @@ import type { Db } from "../../db/client.js";
 import {
   type EffectiveModes,
   hasMembersRead,
+  hasStatusesRead,
   type Mode,
   type ModeKey,
   type ModeReason,
@@ -15,6 +16,15 @@ import {
 
 export const TEAMS_NOTE =
   "note: team constraints cannot be verified (no members:read); they will fail";
+/** Phase 1 step 4 (§10). */
+export const GUARD_STATUSES_NOTE = "note: guard reads check runs only (no statuses:read)";
+export const GUARD_OFF_NOTE = "note: guard detection is off on this shell's config";
+
+/** What `show` needs from this shell's configuration (Phase 1 step 4). */
+export interface ShowOptions {
+  /** `GRAFT_GUARD_DETECTION` of this shell; omitted means on. */
+  guardDetection?: boolean;
+}
 
 import { CEILING_STATE_KEY } from "./ceiling.js";
 import { modesOf } from "./effective.js";
@@ -93,7 +103,11 @@ function ceilingLine(c: CeilingInfo): string {
   return `  ${"ceiling".padEnd(11)}${c.ceiling}  (${where})`;
 }
 
-export function renderRepository(v: RepositoryView, ceiling: CeilingInfo): string {
+export function renderRepository(
+  v: RepositoryView,
+  ceiling: CeilingInfo,
+  opts: ShowOptions = {},
+): string {
   const { row, modes } = v;
   const lines = [
     `${row.fullName} (repository ${row.repositoryId}, installation ${row.installationId})`,
@@ -114,6 +128,9 @@ export function renderRepository(v: RepositoryView, ceiling: CeilingInfo): strin
   if (modes.policy.effective === "enforce" && !hasMembersRead(row.permissions)) {
     lines.push(`  ${TEAMS_NOTE}`);
   }
+  // Phase 1 step 4 (§10, D2): without statuses:read the guard works on check runs alone.
+  if (!hasStatusesRead(row.permissions)) lines.push(`  ${GUARD_STATUSES_NOTE}`);
+  if (opts.guardDetection === false) lines.push(`  ${GUARD_OFF_NOTE}`);
   if (v.pending > 0) {
     lines.push(
       `  ${"pending".padEnd(11)}${v.pending} ${v.pending === 1 ? "change" : "changes"} not yet applied by the worker`,
@@ -129,9 +146,13 @@ export function ceilingWarning(c: CeilingInfo): string | null {
     : null;
 }
 
-export function renderShow(views: readonly RepositoryView[], ceiling: CeilingInfo): string {
+export function renderShow(
+  views: readonly RepositoryView[],
+  ceiling: CeilingInfo,
+  opts: ShowOptions = {},
+): string {
   const warning = ceilingWarning(ceiling);
-  const blocks = views.map((v) => renderRepository(v, ceiling));
+  const blocks = views.map((v) => renderRepository(v, ceiling, opts));
   return `${warning === null ? "" : `${warning}\n`}${blocks.join("\n\n")}\n`;
 }
 

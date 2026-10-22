@@ -26,10 +26,20 @@ const USAGE = `usage:
   graft baseline | gate report | metrics rollup | incident add|list|remove ...
   graft mode show|set|history|refresh-permissions ...   (see docs/features/modes.md)
   graft audit list --repo <owner/repo> ...   (see docs/features/policy.md, "Break-glass")
+  graft guard list --repo <owner/repo> ...   (see docs/features/guard.md)
   graft e2e setup|run|verify|report|cleanup ...   (see docs/e2e/runbook.md)
 `;
 
-const OPS_GROUPS = new Set(["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit"]);
+const OPS_GROUPS = new Set([
+  "pilot",
+  "baseline",
+  "gate",
+  "incident",
+  "metrics",
+  "mode",
+  "audit",
+  "guard",
+]);
 
 const DEFAULT_SCHEMA_PATH = fileURLToPath(
   new URL("../../schema/graft.v1.schema.json", import.meta.url),
