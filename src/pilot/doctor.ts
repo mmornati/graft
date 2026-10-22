@@ -342,6 +342,32 @@ export async function runDoctor(
       `${nStuck} guard events stuck in confirming past twice the window`,
     );
   } else add("guard_confirming", "OK", "no guard event is stuck in confirming");
+
+  // guard (Phase 1 step 5, §13): revert PRs nobody has merged or closed
+  const stale = await sql<{ n: string }>`
+    select count(*)::text as n from guard_events
+    where repository_id in (select id from repositories where installation_id = ${id})
+      and status = 'revert_opened'
+      and coalesce(revert_claimed_at, updated_at) < ${ago(72 * 3600_000)}`.execute(db);
+  const nStale = num(stale.rows[0]?.n);
+  if (nStale > 0) {
+    add("guard_reverts_open", "WARN", `${nStale} revert PRs open for more than 72 hours`);
+  } else add("guard_reverts_open", "OK", "no revert PR open for more than 72 hours");
+
+  // guard (Phase 1 step 5, §13): revert jobs that ended in error
+  const errors = await sql<{ n: string }>`
+    select count(*)::text as n from guard_events
+    where repository_id in (select id from repositories where installation_id = ${id})
+      and revert_outcome = 'error'
+      and updated_at >= ${ago(7 * DAY_MS)}`.execute(db);
+  const nErrors = num(errors.rows[0]?.n);
+  if (nErrors > 0) {
+    add(
+      "guard_revert_errors",
+      "WARN",
+      `${nErrors} guard events with revert outcome error in the last 7 days`,
+    );
+  } else add("guard_revert_errors", "OK", "no guard revert ended in error in the last 7 days");
   return checks;
 }
 

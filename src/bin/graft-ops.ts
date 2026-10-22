@@ -669,7 +669,10 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     r.out(
       v.json
         ? `${JSON.stringify(showJson(views, ceiling))}\n`
-        : renderShow(views, ceiling, { guardDetection: r.config.guardDetection }),
+        : renderShow(views, ceiling, {
+            guardDetection: r.config.guardDetection,
+            guardRevert: r.config.guardRevert,
+          }),
     );
     return 0;
   }
@@ -753,7 +756,12 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     const [row] = await listRepositoryModeRows(r.db, { fullName: repo });
     if (!row) throw new Error("repository vanished");
     const view: RepositoryView = await viewRepository(r.db, row, ceiling);
-    r.out(renderShow([view], ceiling, { guardDetection: r.config.guardDetection }));
+    r.out(
+      renderShow([view], ceiling, {
+        guardDetection: r.config.guardDetection,
+        guardRevert: r.config.guardRevert,
+      }),
+    );
     for (const note of notEffectiveNotes(
       view,
       wanted.map((w) => w.key),

@@ -8,7 +8,7 @@
   "request_oauth_on_install": false,
   "default_permissions": {
     "metadata": "read",
-    "contents": "read",
+    "contents": "write",
     "issues": "read",
     "pull_requests": "write",
     "checks": "write",

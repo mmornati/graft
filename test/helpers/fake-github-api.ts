@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { blobSha, createGitStore, FILE, TreeWriteError } from "./git-trees.js";
 import {
   type FakeCommit,
   type FakeContent,
@@ -63,6 +64,8 @@ export interface RecordedApiRequest {
   ref: string | undefined;
   /** Parsed JSON body, if any. */
   body: Record<string, unknown> | undefined;
+  /** The `accept` header (Phase 1 step 5: no `.diff` or `.patch` media type is ever asked for). */
+  accept?: string | undefined;
 }
 
 interface Failure {
@@ -170,8 +173,32 @@ export function createFakeGitHubApi(
     commentsPageSize: null as number | null,
     checkRunsPageSize: null as number | null,
     nextId: 1000,
-    /** Phase 1 step 4: `GET /repos/{o}/{r}` (the default branch is read from here). */
-    repository: { id: REPO_ID, default_branch: "main", private: true },
+    /**
+     * Phase 1 step 4: `GET /repos/{o}/{r}` (the default branch is read from here). Step 5 adds the
+     * merge settings the revert job reads.
+     */
+    repository: {
+      id: REPO_ID,
+      default_branch: "main",
+      private: true,
+      allow_auto_merge: false,
+      allow_squash_merge: true,
+      allow_merge_commit: true,
+      allow_rebase_merge: true,
+    },
+    /**
+     * Phase 1 step 5: git trees and commits (`GET/POST …/git/trees`, `…/git/commits`). A commit of
+     * `history` with no object here gets one on first read: its parent's tree plus one file named
+     * after it (`history/<sha>.txt`), so every tracked commit has a tree and a merge changes one
+     * path. Tests replace that with `git.commits.set(sha, …)` for exact trees.
+     */
+    git: createGitStore(),
+    /** Phase 1 step 5: auto-merge enabled through GraphQL, by PR number. */
+    autoMerge: new Map<number, { mergeMethod: string }>(),
+    /** Phase 1 step 5: the next GraphQL mutations answer these errors, oldest first. */
+    graphqlErrors: [] as { type: string; message: string }[],
+    /** Phase 1 step 5: numbers given to pull requests created through the API. */
+    nextPullNumber: 500,
     /** Phase 1 step 4: the commit graph `GET /commits?sha=` walks (first parents only). */
     history: new Map<string, FakeMainCommit>(),
     /** Phase 1 step 4: `GET /commits/{sha}/pulls`, as PR numbers looked up in `pulls`. */
@@ -262,6 +289,50 @@ export function createFakeGitHubApi(
     }
   }
 
+  /** Phase 1 step 5: the git commit object for a SHA (synthesised for a `history` commit). */
+  function gitCommit(sha: string): { tree: string; parents: string[]; message: string } | null {
+    const known = state.git.commits.get(sha);
+    if (known) return known;
+    const h = state.history.get(sha);
+    if (!h) return null;
+    const parent = h.parents[0] === undefined ? null : gitCommit(h.parents[0]);
+    const tree = state.git.applyEntries(parent?.tree ?? null, [
+      { path: `history/${sha}.txt`, mode: FILE, type: "blob", sha: blobSha(sha) },
+    ]);
+    const c = { tree, parents: h.parents, message: "GRAFT_CANARY_COMMIT_MESSAGE" };
+    state.git.commits.set(sha, c);
+    return c;
+  }
+
+  const fullName = () => `${opts.owner ?? OWNER}/${opts.repo ?? REPO}`;
+
+  /** Phase 1 step 5: `POST /graphql`, `enablePullRequestAutoMerge` only. */
+  function graphql(body: Record<string, unknown> | undefined): Response {
+    const query = String(body?.query ?? "");
+    const vars = (body?.variables ?? {}) as Record<string, unknown>;
+    if (!query.includes("enablePullRequestAutoMerge")) {
+      return json(200, { errors: [{ type: "UNKNOWN", message: "unsupported query (fake)" }] });
+    }
+    const fail = (type: string, message: string) =>
+      json(200, { data: { enablePullRequestAutoMerge: null }, errors: [{ type, message }] });
+    const queued = state.graphqlErrors.shift();
+    if (queued) return fail(queued.type, queued.message);
+    const pull = [...state.pulls.values()].find((p) => p.node_id === vars.pullRequestId);
+    if (!pull) return fail("NOT_FOUND", "Could not resolve to a node");
+    if (!state.repository.allow_auto_merge) {
+      return fail("UNPROCESSABLE", "Auto merge is not allowed for this repository");
+    }
+    state.autoMerge.set(pull.number, { mergeMethod: String(vars.mergeMethod) });
+    return json(200, {
+      data: {
+        enablePullRequestAutoMerge: {
+          clientMutationId: vars.clientMutationId ?? null,
+          pullRequest: { number: pull.number, repository: { nameWithOwner: fullName() } },
+        },
+      },
+    });
+  }
+
   async function route(method: string, url: URL, body: Record<string, unknown> | undefined) {
     const path = url.pathname;
     let m: RegExpExecArray | null;
@@ -313,6 +384,7 @@ export function createFakeGitHubApi(
         ? json(404, { message: "Not Found" })
         : json(200, { url: `https://api.github.com${path}`, role: "member", state: membership });
     }
+    if (method === "POST" && path === "/graphql") return graphql(body);
     if (path !== repoPrefix && !path.startsWith(`${repoPrefix}/`)) {
       return json(404, { message: "Not Found (fake repo)" });
     }
@@ -325,8 +397,17 @@ export function createFakeGitHubApi(
       const direction = url.searchParams.get("direction") === "asc" ? 1 : -1;
       // `sort=created` orders by creation time (step 6); the default here stays `updated_at`.
       const key = url.searchParams.get("sort") === "created" ? "created_at" : "updated_at";
+      // `head=owner:branch` (Phase 1 step 5): only PRs from that branch of this repository.
+      const head = url.searchParams.get("head");
+      const headRef =
+        head === null
+          ? null
+          : head.startsWith(`${opts.owner ?? OWNER}:`)
+            ? head.slice((opts.owner ?? OWNER).length + 1)
+            : "\u0000none";
       const all = [...state.pulls.values()]
         .filter((p) => wantState === "all" || p.state === wantState)
+        .filter((p) => headRef === null || p.head.ref === headRef)
         .sort((a, b) => direction * (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0));
       if (state.listPageSize !== null) url.searchParams.set("per_page", String(state.listPageSize));
       return paged(all, url, path);
@@ -427,9 +508,155 @@ export function createFakeGitHubApi(
           if (hit) message = hit.commit.message;
         }
       }
-      return message === undefined
-        ? json(404, { message: "Not Found" })
-        : json(200, { sha, message });
+      // Phase 1 step 5: the tree and parents of a commit the git store knows.
+      const obj = gitCommit(sha);
+      if (message === undefined && obj === null) return json(404, { message: "Not Found" });
+      return json(200, {
+        sha,
+        message: message ?? obj?.message,
+        ...(obj === null
+          ? {}
+          : { tree: { sha: obj.tree }, parents: obj.parents.map((p) => ({ sha: p })) }),
+      });
+    }
+    m = is("GET", /^\/git\/trees\/([0-9a-f]{40})$/);
+    if (m) {
+      const sha = m[1] as string;
+      const tree = state.git.trees.get(sha);
+      if (!tree) return json(404, { message: "Not Found" });
+      return json(200, {
+        sha,
+        tree: [...tree.entries()].map(([name, e]) => ({ path: name, ...e })),
+        truncated: state.git.truncated.has(sha),
+      });
+    }
+    if (is("POST", /^\/git\/trees$/)) {
+      const entries = (body?.tree ?? []) as {
+        path: string;
+        mode: string;
+        type: string;
+        sha?: string | null;
+      }[];
+      const base = typeof body?.base_tree === "string" ? body.base_tree : null;
+      if (base !== null && !state.git.trees.has(base))
+        return json(422, { message: "Invalid tree" });
+      try {
+        const sha = state.git.applyEntries(
+          base,
+          entries.map((e) => ({ path: e.path, mode: e.mode, type: e.type, sha: e.sha ?? null })),
+        );
+        const tree = state.git.getTree(sha);
+        return json(201, {
+          sha,
+          tree: [...tree.entries()].map(([name, e]) => ({ path: name, ...e })),
+          truncated: false,
+        });
+      } catch (err) {
+        if (err instanceof TreeWriteError) return json(422, { message: "GitRPC::BadObjectState" });
+        throw err;
+      }
+    }
+    if (is("POST", /^\/git\/commits$/)) {
+      const tree = String(body?.tree ?? "");
+      if (!state.git.trees.has(tree)) return json(422, { message: "Tree SHA does not exist" });
+      const parents = ((body?.parents ?? []) as string[]).slice();
+      const message = String(body?.message ?? "");
+      const sha = state.git.commit(tree, parents, message);
+      return json(201, {
+        sha,
+        message,
+        tree: { sha: tree },
+        parents: parents.map((p) => ({ sha: p })),
+      });
+    }
+    if (is("POST", /^\/git\/refs$/)) {
+      const ref = String(body?.ref ?? "");
+      if (!ref.startsWith("refs/heads/")) return json(422, { message: "Reference name invalid" });
+      const branch = ref.slice("refs/heads/".length);
+      if (state.branches.has(branch)) return json(422, { message: "Reference already exists" });
+      const sha = String(body?.sha ?? "");
+      if (gitCommit(sha) === null) return json(422, { message: "Object does not exist" });
+      state.branches.set(branch, sha);
+      return json(201, { ref, object: { type: "commit", sha } });
+    }
+    m = is("DELETE", /^\/git\/refs\/heads\/(.+)$/);
+    if (m) {
+      const branch = decodeURIComponent(m[1] as string);
+      if (!state.branches.delete(branch)) {
+        return json(422, { message: "Reference does not exist" });
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (is("POST", /^\/pulls$/)) {
+      const head = String(body?.head ?? "");
+      const headSha = state.branches.get(head);
+      if (headSha === undefined) {
+        return json(422, {
+          message: "Validation Failed",
+          errors: [{ field: "head", code: "invalid" }],
+        });
+      }
+      if ([...state.pulls.values()].some((p) => p.state === "open" && p.head.ref === head)) {
+        return json(422, {
+          message: "Validation Failed",
+          errors: [
+            { message: `A pull request already exists for ${opts.owner ?? OWNER}:${head}.` },
+          ],
+        });
+      }
+      const number = state.nextPullNumber++;
+      const at = new Date(clock()).toISOString();
+      const pull: FakePull = {
+        number,
+        node_id: `PR_fake${number}`,
+        state: "open",
+        merged: false,
+        merge_commit_sha: null,
+        created_at: at,
+        updated_at: at,
+        closed_at: null,
+        merged_at: null,
+        body: (body?.body as string | undefined) ?? null,
+        title: String(body?.title ?? ""),
+        changed_files: 0,
+        additions: 0,
+        deletions: 0,
+        draft: body?.draft === true,
+        commits: 1,
+        user: { id: 9_000_000, login: botLogin, type: "Bot" },
+        merged_by: null,
+        labels: [],
+        head: { sha: headSha, ref: head },
+        base: {
+          ref: String(body?.base ?? ""),
+          sha: state.branches.get(String(body?.base ?? "")) ?? "",
+          repo: {
+            id: state.repository.id,
+            full_name: fullName(),
+            private: state.repository.private,
+            default_branch: state.repository.default_branch,
+          },
+        },
+      };
+      state.pulls.set(number, pull);
+      return json(201, pull);
+    }
+    m = is("POST", /^\/issues\/(\d+)\/labels$/);
+    if (m) {
+      const n = Number(m[1]);
+      const pull = state.pulls.get(n);
+      if (!pull && !state.issues.has(n)) return json(404, { message: "Not Found" });
+      const labels = ((body?.labels ?? []) as string[]).map(String);
+      if (pull) {
+        for (const l of labels) {
+          if (!pull.labels.some((x) => x.name === l)) pull.labels.push({ name: l });
+        }
+        return json(200, pull.labels);
+      }
+      return json(
+        200,
+        labels.map((name) => ({ name })),
+      );
     }
     m = is("GET", /^\/commits\/([^/]+)\/check-runs$/);
     if (m) {
@@ -470,6 +697,10 @@ export function createFakeGitHubApi(
         full_name: `${opts.owner ?? OWNER}/${opts.repo ?? REPO}`,
         private: state.repository.private,
         default_branch: state.repository.default_branch,
+        allow_auto_merge: state.repository.allow_auto_merge,
+        allow_squash_merge: state.repository.allow_squash_merge,
+        allow_merge_commit: state.repository.allow_merge_commit,
+        allow_rebase_merge: state.repository.allow_rebase_merge,
       });
     }
     if (is("GET", /^\/commits$/)) {
@@ -592,6 +823,7 @@ export function createFakeGitHubApi(
       query: Object.fromEntries(url.searchParams),
       ref: url.searchParams.get("ref") ?? undefined,
       body,
+      accept: new Headers(init?.headers ?? req?.headers).get("accept") ?? undefined,
     };
     requests.push(record);
 

@@ -12,6 +12,8 @@ import { POLICY_ERROR_CODES, type PolicyErrorCode } from "./errors.js";
 import { validateGlob } from "./globs.js";
 
 export type RiskClass = "trivial" | "logic" | "sensitive";
+/** Phase 1 step 5 (§11): the risk classes whose reverts may be auto-merged (never sensitive). */
+export type AutoMergeRisk = Exclude<RiskClass, "sensitive">;
 
 export interface Policy {
   version: 1;
@@ -21,9 +23,9 @@ export interface Policy {
   /**
    * Phase 1 step 4 (§9): the post-merge guard's scope. Absent when the file has no `guard` key, so
    * the canonical form (and the policy hash) of a file without it is unchanged. The evaluator
-   * ignores it.
+   * ignores it. Phase 1 step 5 (§11) adds `autoMergeReverts`, likewise only when present.
    */
-  guard?: { checks?: string[] };
+  guard?: { checks?: string[]; autoMergeReverts?: AutoMergeRisk[] };
 }
 export interface PolicyRule {
   index: number;
@@ -150,6 +152,12 @@ const guardSchema = z.strictObject(
       .min(1, { error: "wrong_type" })
       .max(LIMITS.guardChecks, { error: "too_many_items" })
       .optional(),
+    // Phase 1 step 5 (§11). `sensitive` is reported as `auto_merge_sensitive` (mapZodIssue).
+    auto_merge_reverts: z
+      .array(z.enum(["trivial", "logic"], { error: "risk_invalid" }), { error: "wrong_type" })
+      .min(1, { error: "wrong_type" })
+      .max(2, { error: "too_many_items" })
+      .optional(),
   },
   { error: "wrong_type" },
 );
@@ -247,6 +255,16 @@ function mapZodIssue(
     out.push({ code: "default_invalid", path: ["default"] });
     return;
   }
+  // Phase 1 step 5 (§11): a sensitive item gets its own code and message.
+  if (
+    path.length === 3 &&
+    path[0] === "guard" &&
+    path[1] === "auto_merge_reverts" &&
+    valueAt(raw, path) === "sensitive"
+  ) {
+    out.push({ code: "auto_merge_sensitive", path });
+    return;
+  }
   const code = CODES.has(issue.message) ? (issue.message as PolicyErrorCode) : "wrong_type";
   out.push({ code, path });
 }
@@ -256,7 +274,18 @@ export function structuralIssues(raw: unknown): { issues: RawIssue[]; data: RawP
   const res = policySchema.safeParse(raw);
   if (res.success) return { issues: [], data: res.data };
   const out: RawIssue[] = [];
-  for (const i of res.error.issues) mapZodIssue(i, [], raw, out);
+  // A list's length rule says nothing about a value that is not a list (zod 4 still runs it on a
+  // string, whose length it reads): the type error is reported alone.
+  const notLists = new Set(
+    res.error.issues
+      .filter((i) => i.code === "invalid_type" && i.expected === "array")
+      .map((i) => JSON.stringify(i.path)),
+  );
+  for (const i of res.error.issues) {
+    const length = i.code === "too_big" || i.code === "too_small";
+    if (length && notLists.has(JSON.stringify(i.path))) continue;
+    mapZodIssue(i, [], raw, out);
+  }
   return { issues: out, data: null };
 }
 
@@ -379,7 +408,12 @@ export function normalizePolicy(data: RawPolicy): Policy {
   };
   // Only when present: a file without `guard` keeps its canonical form and its hash.
   if (data.guard !== undefined) {
-    policy.guard = data.guard.checks === undefined ? {} : { checks: dedupe(data.guard.checks) };
+    const guard: NonNullable<Policy["guard"]> = {};
+    if (data.guard.checks !== undefined) guard.checks = dedupe(data.guard.checks);
+    if (data.guard.auto_merge_reverts !== undefined) {
+      guard.autoMergeReverts = dedupe(data.guard.auto_merge_reverts);
+    }
+    policy.guard = guard;
   }
   return policy;
 }

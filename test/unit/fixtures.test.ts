@@ -23,6 +23,8 @@ const EXPECTED = [
   "membership.added",
   "ping",
   "pull_request.closed",
+  // Phase 1 step 5: a Graft revert PR closed (D18).
+  "pull_request.closed.revert",
   "pull_request.edited",
   "pull_request.labeled",
   // Phase 1 step 3: the break-glass label (a variant of pull_request.labeled).

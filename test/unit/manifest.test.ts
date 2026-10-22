@@ -15,7 +15,8 @@ describe("github app manifest", () => {
     const m = manifest("app-manifest.json");
     expect(m.default_permissions).toEqual({
       metadata: "read",
-      contents: "read",
+      // Phase 1 step 5: the revert pull request (trees, commits, a branch).
+      contents: "write",
       issues: "read",
       pull_requests: "write",
       checks: "write",
@@ -71,6 +72,18 @@ describe("github app manifest", () => {
       expect(m.default_events, name).toEqual(expect.arrayContaining(["check_suite", "status"]));
       expect(m.default_events, name).not.toContain("workflow_run");
     }
+  });
+
+  it("U-MAN-6 the full manifest has contents: write; the report manifest has nothing above read but pull_requests and checks; neither has workflows", () => {
+    const full = manifest("app-manifest.json");
+    const report = manifest("app-manifest.report.json");
+    expect(full.default_permissions.contents).toBe("write");
+    expect(report.default_permissions.contents).toBe("read");
+    for (const [name, level] of Object.entries(report.default_permissions)) {
+      if (name === "pull_requests" || name === "checks") expect(level, name).toBe("write");
+      else expect(level, name).toBe("read");
+    }
+    for (const m of [full, report]) expect(m.default_permissions).not.toHaveProperty("workflows");
   });
 
   it("U-MAN-3 both manifests have the same events", () => {

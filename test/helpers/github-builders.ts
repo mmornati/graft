@@ -30,8 +30,11 @@ export interface FakePull {
   draft: boolean;
   commits: number;
   user: { id?: number; login: string; type: string } | null;
+  /** Phase 1 step 5: who merged it (the revert PR mentions them for a bot author). */
+  merged_by?: { id?: number; login: string; type: string } | null;
   labels: { name: string }[];
-  head: { sha: string };
+  /** `ref`: the head branch (Phase 1 step 5: `GET /pulls?head=` and revert PRs). */
+  head: { sha: string; ref?: string };
   base: {
     ref: string;
     sha?: string;

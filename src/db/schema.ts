@@ -359,10 +359,16 @@ export type GuardEventStatus =
   | "ambiguous"
   | "no_culprit"
   | "flaky"
+  | "needs_human"
   | "revert_opened"
   | "reverted"
+  | "revert_closed"
   | "dismissed"
   | "error";
+
+/** Phase 1 step 5 (0013): what `guard.revert` did with a `culprit_found` event. */
+export type RevertOutcome = "planned" | "opened" | "needs_human" | "skipped" | "error";
+export type AutoMergeState = "enabled" | "not_eligible" | "unavailable" | "would";
 
 /** Phase 1 step 4: one failing check of a guard event (at most 20 per event). */
 export interface GuardFailingCheck {
@@ -398,6 +404,18 @@ export interface GuardEventsTable {
   confirm_reason: "next_commit" | "window" | "off" | "flaky_rerun" | "flaky_next" | null;
   comment_id: number | null;
   guard_mode: "report" | "enforce" | null;
+  /** Phase 1 step 5 (0013). Counts and SHAs only: never a path, a title or a body. */
+  revert_outcome: RevertOutcome | null;
+  revert_reason: string | null;
+  revert_claimed_at: Date | null;
+  revert_plan_paths: number | null;
+  revert_conflicts: number | null;
+  revert_commit_sha: string | null;
+  revert_branch: string | null;
+  revert_labelled: Generated<boolean>;
+  auto_merge_state: AutoMergeState | null;
+  auto_merge_reason: string | null;
+  reverted_at: Date | null;
 }
 
 /** Phase 1 step 4: the first-parent history of each default branch (no messages, no files). */

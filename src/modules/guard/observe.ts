@@ -2,8 +2,9 @@
  * `guard.observe` and `guard.confirm` (Phase 1 step 4, §6, §7). The job reads CI results for one
  * default-branch commit from the API (never from the payload that triggered it), stores one class
  * per check, and runs detection and confirmation under the per-repository advisory lock. No GitHub
- * call is made inside that lock. A `culprit_found` event gets its comment afterwards, under the
- * change lock (lock order: repository lock, released, then change lock; never both).
+ * call is made inside that lock. Since Phase 1 step 5 (D1), an event that reaches `culprit_found`
+ * is handed to `guard.revert` after the lock is released; that job plans the revert and writes the
+ * comment (lock order: repository lock, released, then change lock; never both).
  */
 import type { Transaction } from "kysely";
 import type { JobContext } from "../../core/context.js";
@@ -31,7 +32,8 @@ import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { getActiveInstallation, getActiveRepository } from "../installations/index.js";
 import { getRepositoryModeRow } from "../modes/index.js";
-import { githubWebBase, publishGuardComment, safeHtmlUrl } from "./comment.js";
+import { githubWebBase, safeHtmlUrl } from "./comment.js";
+import { scheduleRevert } from "./revert.js";
 import {
   type ConfirmData,
   confirmKey,
@@ -654,10 +656,19 @@ export async function observeCommit(
     break;
   }
 
-  // After the repository lock: comments, each under its change lock (D11).
+  // After the repository lock (step 5, D1): each event that reached `culprit_found`, and each
+  // one still waiting for its comment, goes to `guard.revert`, one job per event.
   const pending = new Set(reached);
   for (const e of await eventsAwaitingComment(ctx.db, data.repositoryId)) pending.add(e.id);
-  for (const id of pending) await publishGuardComment(id, ctx, { octokit });
+  for (const eventId of pending) {
+    await scheduleRevert(ctx, {
+      installationId: data.installationId,
+      repositoryId: data.repositoryId,
+      owner: data.owner,
+      repo: data.repo,
+      eventId,
+    });
+  }
   return "observed";
 }
 

@@ -244,6 +244,18 @@
             "type": "string",
             "pattern": "^[^\\p{Cc}]{1,200}$"
           }
+        },
+        "auto_merge_reverts": {
+          "minItems": 1,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "trivial",
+              "logic"
+            ]
+          }
         }
       },
       "additionalProperties": false

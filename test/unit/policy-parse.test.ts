@@ -1496,7 +1496,49 @@ describe("graft.yaml guard key (Phase 1 step 4)", () => {
     expect(unknown.map((e) => [e.code, e.key, e.location])).toEqual([
       ["unknown_key", "other", "guard"],
     ]);
-    // `auto_merge_reverts` is step 5: still an unknown key here.
-    expect(codes("guard: { auto_merge_reverts: [trivial] }\n")).toEqual(["unknown_key"]);
+    // `auto_merge_reverts` is a step 5 key (U-PGD-3); any other key is still unknown.
+    expect(parse("version: 1\nguard: { auto_merge_reverts: [trivial], checks: [test] }\n").ok).toBe(
+      true,
+    );
+  });
+
+  it("U-PGD-3 guard.auto_merge_reverts: a valid list, sensitive, an unknown item, an empty list, three items; the hash without it is unchanged", () => {
+    const codes = (yaml: string) => codesOf(`version: 1\n${yaml}`);
+    const res = parse(
+      "version: 1\nguard:\n  checks: [test]\n  auto_merge_reverts: [logic, trivial]\n",
+    );
+    if (!res.ok) throw new Error(JSON.stringify(res.errors));
+    expect(res.policy.guard).toEqual({ checks: ["test"], autoMergeReverts: ["logic", "trivial"] });
+    // A repeated item counts once.
+    const only = parse("version: 1\nguard:\n  auto_merge_reverts: [trivial, trivial]\n");
+    if (!only.ok) throw new Error(JSON.stringify(only.errors));
+    expect(only.policy.guard).toEqual({ autoMergeReverts: ["trivial"] });
+
+    const sensitive = errorsOf("version: 1\nguard:\n  auto_merge_reverts: [logic, sensitive]\n");
+    expect(sensitive.map((e) => [e.code, e.location])).toEqual([
+      ["auto_merge_sensitive", "guard.auto_merge_reverts[2]"],
+    ]);
+    expect(formatPolicyError(sensitive[0] as never)).toContain(
+      "Reverts of sensitive changes are never auto-merged; remove sensitive.",
+    );
+    expect(codes("guard: { auto_merge_reverts: [risky] }\n")).toEqual(["risk_invalid"]);
+    expect(codes("guard: { auto_merge_reverts: [] }\n")).toEqual(["wrong_type"]);
+    expect(codes("guard: { auto_merge_reverts: [trivial, logic, trivial] }\n")).toEqual([
+      "too_many_items",
+    ]);
+    expect(codes("guard: { auto_merge_reverts: logic }\n")).toEqual(["wrong_type"]);
+
+    // A file without the key keeps its canonical form and hash.
+    const checksOnly = parse("version: 1\nguard:\n  checks: [test]\n");
+    if (!checksOnly.ok) throw new Error("parse failed");
+    expect(checksOnly.policy.guard).toEqual({ checks: ["test"] });
+    for (const [name, bytes] of [
+      ["docs/examples/graft.yaml", EXAMPLE],
+      ["minimal.yaml", fixture("minimal.yaml")],
+    ] as [string, Uint8Array][]) {
+      const r = parsePolicyText(bytes);
+      if (!r.ok) throw new Error(name);
+      expect(r.hash, name).toBe(BEFORE[name]);
+    }
   });
 });

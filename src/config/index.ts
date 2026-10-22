@@ -194,6 +194,10 @@ const EnvSchema = z.object({
   GRAFT_GUARD_OBSERVE_DELAY_SECONDS: withDefault(intString(0, 600), "30"),
   GRAFT_GUARD_RETENTION_DAYS: withDefault(intString(7, 365), "30"),
   GRAFT_GUARD_PRUNE_CRON: withDefault(cronOrOff, "45 3 * * *"),
+  GRAFT_GUARD_REVERT: withDefault(onOff, "on"),
+  GRAFT_GUARD_MAX_OPEN_REVERTS: withDefault(intString(1, 10), "3"),
+  GRAFT_GUARD_REVERT_MAX_PATHS: withDefault(intString(1, 1000), "300"),
+  GRAFT_GUARD_REVERT_MAX_TREE_READS: withDefault(intString(10, 1000), "200"),
 });
 
 export interface Config {
@@ -275,6 +279,14 @@ export interface Config {
   readonly guardRetentionDays: number;
   /** Cron for `guard.prune`, or null when switched off. */
   readonly guardPruneCron: string | null;
+  /** Phase 1 step 5 (D19): the revert kill switch. Off: no plan, no revert; detection unaffected. */
+  readonly guardRevert: boolean;
+  /** Phase 1 step 5 (D13): at most this many events per repository in `revert_opened`. */
+  readonly guardMaxOpenReverts: number;
+  /** Phase 1 step 5 (D8): a culprit changing more paths than this is left to a human. */
+  readonly guardRevertMaxPaths: number;
+  /** Phase 1 step 5 (D8): tree reads one revert plan may make. */
+  readonly guardRevertMaxTreeReads: number;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -392,5 +404,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     guardObserveDelaySeconds: d.GRAFT_GUARD_OBSERVE_DELAY_SECONDS,
     guardRetentionDays: d.GRAFT_GUARD_RETENTION_DAYS,
     guardPruneCron: d.GRAFT_GUARD_PRUNE_CRON,
+    guardRevert: d.GRAFT_GUARD_REVERT,
+    guardMaxOpenReverts: d.GRAFT_GUARD_MAX_OPEN_REVERTS,
+    guardRevertMaxPaths: d.GRAFT_GUARD_REVERT_MAX_PATHS,
+    guardRevertMaxTreeReads: d.GRAFT_GUARD_REVERT_MAX_TREE_READS,
   });
 }

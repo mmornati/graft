@@ -10,6 +10,12 @@
  * whose `status` is not `completed` or whose `conclusion` is not `neutral` is a Phase 1 write: only
  * `graft/policy`, only through a `policy` feature client, only when the gate allows it.
  *
+ * Phase 1 step 5 (§12): the guard's routes read their body too. `POST …/git/refs` must create
+ * `refs/heads/graft-revert/<uuid>`, a guard client's `POST …/pulls` must have a `graft-revert/<uuid>`
+ * head, and its `POST …/issues/{n}/labels` must add exactly `graft:revert`. `POST /graphql` is a
+ * guard route only for the exported `ENABLE_AUTO_MERGE_MUTATION` document with a
+ * `graft-guard:<owner>/<repo>#<n>` client mutation id; any other GraphQL body is unknown.
+ *
  * This file imports no database and no module code: the mode lookup arrives as a `MutationGate`.
  */
 import { PermanentJobError } from "../queue/errors.js";
@@ -19,6 +25,23 @@ export type Feature = "guard" | "mcp" | "policy";
 
 /** The only check run that may be published with a non-neutral body (Phase 1 step 2, D11). */
 export const ENFORCEABLE_CHECK = "graft/policy";
+
+/**
+ * Phase 1 step 5 (D15): the one GraphQL document a Graft client may send. The mutation guard
+ * compares a request's `query` with it character for character.
+ */
+export const ENABLE_AUTO_MERGE_MUTATION = `mutation GraftGuardEnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!, $clientMutationId: String!) {
+  enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod, clientMutationId: $clientMutationId }) {
+    clientMutationId
+    pullRequest { number repository { nameWithOwner } }
+  }
+}`;
+
+/** §12: the ref, head and label a guard write may carry. */
+export const REVERT_REF_RE = /^refs\/heads\/graft-revert\/[0-9a-f-]{36}$/;
+export const REVERT_HEAD_RE = /^graft-revert\/[0-9a-f-]{36}$/;
+export const REVERT_LABEL = "graft:revert";
+const CLIENT_MUTATION_ID_RE = /^graft-guard:([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})#\d+$/;
 
 export type WriteClass =
   | { kind: "read" }
@@ -219,6 +242,59 @@ export function checkRunBodyKind(
   return neutral ? { kind: "neutral" } : { kind: "enforce", name: own("name") };
 }
 
+/** A plain JSON object (not an array, not a class instance), or null. */
+function plainObject(body: unknown): Record<string, unknown> | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const proto = Object.getPrototypeOf(body);
+  if (proto !== Object.prototype && proto !== null) return null;
+  return body as Record<string, unknown>;
+}
+
+const ownValue = (b: Record<string, unknown>, k: string): unknown =>
+  Object.hasOwn(b, k) ? b[k] : undefined;
+
+/**
+ * §12: whether the body of a guard route is one the guard may send. Only the three routes with a
+ * body rule are checked; the others (trees, commits, the ref deletion) pass.
+ */
+export function guardBodyAllowed(method: string, path: string, body: unknown): boolean {
+  const p = (path.split("?")[0] ?? "").replace(/(.)\/$/, "$1");
+  if (method === "POST" && new RegExp(`${OWNER_REPO}/git/refs$`).test(p)) {
+    const b = plainObject(body);
+    const ref = b === null ? undefined : ownValue(b, "ref");
+    return typeof ref === "string" && REVERT_REF_RE.test(ref);
+  }
+  if (method === "POST" && new RegExp(`${OWNER_REPO}/pulls$`).test(p)) {
+    const b = plainObject(body);
+    const head = b === null ? undefined : ownValue(b, "head");
+    return typeof head === "string" && REVERT_HEAD_RE.test(head);
+  }
+  if (method === "POST" && new RegExp(`${OWNER_REPO}/issues/\\d+/labels$`).test(p)) {
+    const b = plainObject(body);
+    if (b === null || Object.keys(b).length !== 1) return false;
+    const labels = ownValue(b, "labels");
+    return Array.isArray(labels) && labels.length === 1 && labels[0] === REVERT_LABEL;
+  }
+  return true;
+}
+
+/**
+ * §12: a GraphQL body the guard may send, with the repository its client mutation id names; null
+ * for anything else (which is an unknown route, refused in every mode).
+ */
+export function guardGraphqlTarget(body: unknown): { owner: string; repo: string } | null {
+  const b = plainObject(body);
+  if (b === null) return null;
+  if (Object.keys(b).some((k) => k !== "query" && k !== "variables")) return null;
+  if (ownValue(b, "query") !== ENABLE_AUTO_MERGE_MUTATION) return null;
+  const vars = plainObject(ownValue(b, "variables"));
+  if (vars === null) return null;
+  const id = ownValue(vars, "clientMutationId");
+  if (typeof id !== "string") return null;
+  const hit = CLIENT_MUTATION_ID_RE.exec(id);
+  return hit ? { owner: hit[1] as string, repo: hit[2] as string } : null;
+}
+
 /** Path words that are part of a route; every other segment (names, branches) is templated. */
 const KNOWN_SEGMENTS = new Set([
   "api",
@@ -307,6 +383,26 @@ export function installMutationGuard(
     if (options.baseUrl !== undefined && String(options.baseUrl).replace(/\/+$/, "") !== base) {
       throw refusal("unknown_route");
     }
+    // §12: GraphQL is a guard route for one document only. Octokit sends it to `<base>/graphql`,
+    // or to `/api/graphql` on GitHub Enterprise Server (base `…/api/v3`).
+    const graphqlUrl = /\/api\/v3$/.test(base)
+      ? base.replace(/\/api\/v3$/, "/api/graphql")
+      : `${base}/graphql`;
+    if (parsed.url === graphqlUrl) {
+      const target = method === "POST" ? guardGraphqlTarget(parsed.body) : null;
+      if (target === null) throw refusal("unknown_route");
+      if (o.installationId === null) throw refusal("app_client");
+      if (o.feature === undefined) throw refusal("no_feature");
+      if (o.feature !== "guard") throw refusal("feature_not_allowed");
+      const verdict = await o.gate({
+        installationId: o.installationId,
+        owner: target.owner,
+        repo: target.repo,
+        feature: o.feature,
+      });
+      if (!verdict.allowed) throw refusal(verdict.reason);
+      return;
+    }
     if (!parsed.url.startsWith(`${base}/`)) throw refusal("unknown_route");
     const cls = classifyWrite(method, parsed.url.slice(base.length));
 
@@ -349,6 +445,13 @@ export function installMutationGuard(
         if (o.installationId === null) throw refusal("app_client");
         if (o.feature === undefined) throw refusal("no_feature");
         if (!cls.features.includes(o.feature)) throw refusal("feature_not_allowed");
+        // §12: the body rules of the guard's routes (the `mcp` feature's pulls are step 6's).
+        if (
+          o.feature === "guard" &&
+          !guardBodyAllowed(method, parsed.url.slice(base.length), parsed.body)
+        ) {
+          throw refusal("feature_not_allowed", " (body)");
+        }
         const verdict = await o.gate({
           installationId: o.installationId,
           owner: cls.owner,

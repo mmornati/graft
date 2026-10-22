@@ -1,6 +1,7 @@
 /**
- * `graft guard list` (Phase 1 step 4, §10). Reads the database only: no GitHub, no queue. The
- * output names SHAs, check names, PR numbers and statuses; `graft-ops.ts` makes it terminal-safe.
+ * `graft guard list` (Phase 1 step 4, §10; step 5, §13). Reads the database only: no GitHub, no
+ * queue. The output names SHAs, check names, PR numbers, statuses and revert outcomes;
+ * `graft-ops.ts` makes it terminal-safe.
  */
 import type { Db } from "../../db/client.js";
 import type { GuardEventStatus } from "../../db/schema.js";
@@ -14,8 +15,10 @@ export const GUARD_STATUSES: readonly GuardEventStatus[] = [
   "ambiguous",
   "no_culprit",
   "flaky",
+  "needs_human",
   "revert_opened",
   "reverted",
+  "revert_closed",
   "dismissed",
   "error",
 ];
@@ -63,7 +66,34 @@ function statusLabel(e: ListedEvent): string {
   return e.status === "flaky" && e.confirm_reason === null ? "flaky (unconfirmed)" : e.status;
 }
 
-/** One line per event: `detected_at  status  failing_sha(7)  checks(first 3)  culprit`. */
+const words = (code: string): string => code.replace(/_/g, " ");
+
+/** Step 5 (§13): what the revert became, or "" when there is no revert story. */
+export function revertLabel(e: ListedEvent): string {
+  switch (e.revert_outcome) {
+    case null:
+      return "";
+    case "planned":
+      return `would revert ${e.revert_plan_paths ?? 0} paths`;
+    case "opened":
+      return `revert #${e.revert_pr_number ?? "?"} (auto-merge ${e.auto_merge_state === "enabled" ? "on" : "off"})`;
+    case "needs_human":
+      return `needs human: ${words(e.revert_reason ?? "unknown")}${
+        e.revert_reason === "touched_later" ? ` (${e.revert_conflicts ?? 0})` : ""
+      }`;
+    case "skipped":
+      return `skipped: ${words(e.revert_reason ?? "unknown")}`;
+    case "error":
+      return `error: ${e.revert_reason ?? "unknown"}${
+        e.revert_pr_number === null ? "" : ` (revert #${e.revert_pr_number})`
+      }`;
+  }
+}
+
+/**
+ * One line per event: `detected_at  status  failing_sha(7)  checks(first 3)  culprit`, then the
+ * revert column when there is one.
+ */
 export function renderGuardList(events: readonly ListedEvent[]): string {
   if (events.length === 0) return "no guard events\n";
   return events
@@ -71,7 +101,8 @@ export function renderGuardList(events: readonly ListedEvent[]): string {
       const names = e.failing_checks.map((c) => c.name);
       const checks =
         names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
-      return `${iso(e.detected_at ?? e.created_at)}  ${statusLabel(e)}  ${e.failing_sha.slice(0, 7)}  ${checks}  ${who(e)}\n`;
+      const revert = revertLabel(e);
+      return `${iso(e.detected_at ?? e.created_at)}  ${statusLabel(e)}  ${e.failing_sha.slice(0, 7)}  ${checks}  ${who(e)}${revert === "" ? "" : `  ${revert}`}\n`;
     })
     .join("");
 }
@@ -94,6 +125,17 @@ export function guardListJson(events: readonly ListedEvent[]): unknown {
         confirmReason: e.confirm_reason,
         commentId: e.comment_id,
         guardMode: e.guard_mode,
+        revert: {
+          outcome: e.revert_outcome,
+          reason: e.revert_reason,
+          prNumber: e.revert_pr_number,
+          branch: e.revert_branch,
+          commitSha: e.revert_commit_sha,
+          planPaths: e.revert_plan_paths,
+          conflicts: e.revert_conflicts,
+          autoMergeState: e.auto_merge_state,
+          autoMergeReason: e.auto_merge_reason,
+        },
       };
     }),
   };

@@ -46,3 +46,6 @@ rules:
 # Phase 1 step 4: only these checks can open a post-merge guard event (default: every check).
 # guard:
 #   checks: [test, "lint (node 24)", ci/jenkins]
+#   # Phase 1 step 5: enable GitHub auto-merge on Graft's revert PRs of these risk classes
+#   # (trivial, logic; never sensitive). Read from the last green commit before the culprit.
+#   auto_merge_reverts: [trivial]

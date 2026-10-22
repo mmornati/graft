@@ -442,3 +442,13 @@ grep -rn "U-RVP-\|U-RVT-\|U-PGD-3\|I-REV-\|N-1[23]\|U-MAN-6" test/ | wc -l   # n
 - No log line, job payload, column or error message holds a token, file content, a diff, a commit message, PR text, a file path or YAML. File paths appear only in the guard comment and are never logged above debug.
 - Every non-GET request in every test log is either a Phase 0 route or one of the §12 routes through a `guard` client in enforce mode.
 - The live e2e runner's INV-1 still holds with the default sandbox (no runner change in this step).
+
+## 19. Deviations (build)
+
+Recorded by the build; the details and the choices where this spec is silent are in [decisions.md](../decisions.md#phase-1-step-5-revert-prs).
+
+- **I-REV-20** allows `GET …/contents/graft.yaml`: D16 reads the baseline's `graft.yaml` through the existing policy loader (`repos.getContent`). Nothing else under `/contents/` is requested.
+- **The markdown helpers** moved to `src/core/markdown.ts` (re-exported by `src/github/markdown.ts`), so the pure `src/guard/revert-text.ts` can use `codeSpan` without an import from `src/github`.
+- **`autoMergeEligibility`** returns `{ eligible: true, risk }` (the PR body names the risk class).
+- **N-1 and N-1g** are restated for the `max` profile as well as N-8 (the guard opens a revert there); N-2b and N-5 are adjusted to the guard's gate questions and the §12 ref rule.
+- **T1 (b):** no expansion of an added directory into files; the D9 check would catch a `sha: null` that GitHub does not apply to a directory (`tree_mismatch`), and HUMAN-TODO checks it.
