@@ -1,4 +1,5 @@
 import type { Config } from "../config/index.js";
+import { guardPruneJob } from "../modules/guard/index.js";
 import { feedbackSweepJob } from "../modules/intent/index.js";
 import { modesApplyJob, refreshAllPermissionsJob } from "../modules/modes/index.js";
 import { metricsRollupJob } from "../modules/pilot/index.js";
@@ -12,7 +13,11 @@ export async function applyCronSchedules(
   queue: Pick<JobQueue, "schedule" | "unschedule">,
   config: Pick<
     Config,
-    "feedbackPollCron" | "metricsRollupCron" | "modeApplyCron" | "permissionsRefreshCron"
+    | "feedbackPollCron"
+    | "metricsRollupCron"
+    | "modeApplyCron"
+    | "permissionsRefreshCron"
+    | "guardPruneCron"
   >,
 ): Promise<void> {
   if (config.feedbackPollCron) await queue.schedule(feedbackSweepJob, config.feedbackPollCron, {});
@@ -29,4 +34,7 @@ export async function applyCronSchedules(
   } else {
     await queue.unschedule(refreshAllPermissionsJob);
   }
+  // Phase 1 step 4 (D15). With GRAFT_GUARD_DETECTION=off the job itself does nothing.
+  if (config.guardPruneCron) await queue.schedule(guardPruneJob, config.guardPruneCron, {});
+  else await queue.unschedule(guardPruneJob);
 }

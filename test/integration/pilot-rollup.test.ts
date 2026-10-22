@@ -401,6 +401,7 @@ describe("daily rollup", () => {
         metricsRollupCron: null,
         modeApplyCron: null,
         permissionsRefreshCron: null,
+        guardPruneCron: null,
       });
       await queue.stop();
       await sql`delete from pgboss.job where name in (${metricsRollupJob.name}, ${feedbackSweepJob.name})`.execute(
