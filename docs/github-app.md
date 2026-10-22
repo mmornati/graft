@@ -44,6 +44,8 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 | `pull_request_review` event | — | `submitted` and `dismissed` refresh the approval count in the policy section (step 5). No new permission: reviews are covered by `pull_requests`. |
 | `push` event | — | A push to a branch that changes `graft.yaml` (or a forced or 20-commit push) re-evaluates the open PRs of that branch, at most 100 (step 5). No new permission: covered by `contents: read`. |
 | `check_run` event | — | `rerequested` re-runs our checks; `requested_action` delivers the card buttons (step 3). |
+| `statuses` | read | Phase 1 step 4: read the commit statuses of default-branch commits (`GET /repos/{o}/{r}/commits/{sha}/status`) for the post-merge guard. Without it the guard reads check runs only. Not `actions: read`: GitHub Actions jobs are check runs, which `checks` already covers. |
+| `check_suite`, `status` events | — | Phase 1 step 4: `check_suite.completed` and `status` on the default branch (and `check_run.completed`, already subscribed) schedule a `guard.observe` for the commit. The payload is a trigger: results are read from the API. A `push` to the default branch also starts `guard.track`. |
 | `installation`, `installation_repositories` | — | Delivered to every App without a subscription; drive the installations module. |
 | `members` (organization) | read | Phase 1 step 2: verify that an approver is an active member of a team named in `graft.yaml` (`GET /orgs/{org}/teams/{team_slug}` and `…/memberships/{username}`). Read only; nothing about teams is stored. Without it every team constraint is unverified and never met. |
 | `membership`, `team` events | — | Phase 1 step 2: `membership` (added, removed) and `team` (deleted, edited, added or removed from a repository) re-evaluate the installation's open PRs that have a team constraint, once per five-minute window, after the window closes. The payload is a trigger: only the installation id is read. |
@@ -53,6 +55,8 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 - `contents: write` (revert branches and PRs, Phase 1).
 - `statuses: read` and `actions: read`, plus the `status`, `workflow_run` and `check_suite` events (post-merge guard, Phase 1).
 - `administration`: never.
+
+**Phase 1 step 4: `statuses: read` and two events.** As for step 2, an organization owner accepts the new permission and the `check_suite` and `status` events on each installation, then the operator runs `pnpm graft mode refresh-permissions --installation <id>`. Until then `pnpm graft mode show` notes that the guard reads check runs only.
 
 **Phase 1 step 2: accepting the new permission on existing installations.** GitHub does not grant a new permission by itself: after the App's permissions are updated, an organization owner must accept `members: read` and the two events on each installation (GitHub shows a banner on the installation's settings page, and the App receives `installation.new_permissions_accepted`). Graft re-reads the permissions on that event, once a day and on `pnpm graft mode refresh-permissions --installation <id>`; `pnpm graft mode show` prints the permissions line and, for a repository that enforces policy without `members: read`, a note that team constraints will fail. Until then the installation keeps working: it fails closed on team constraints only.
 

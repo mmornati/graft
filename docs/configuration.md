@@ -51,6 +51,12 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_MODE_APPLY_CRON` | `* * * * *` | Cron for the worker job that republishes the policy check of a repository after `graft mode set`, or `off`. |
 | `GRAFT_PERMISSIONS_REFRESH_CRON` | `30 3 * * *` | Cron for the daily refresh of each installation's permissions from the GitHub API, or `off`. |
 | `GRAFT_BREAK_GLASS_LABEL` | `graft:break-glass` | The label a maintainer or admin adds to bypass the policy for one commit (Phase 1 step 3). 1 to 50 characters, no control characters or surrounding spaces, matched case-insensitively against label names. `off` (any case) turns break-glass off: the label is then an ordinary label and nothing is audited. Not settable from `graft.yaml`. See [Policy, break-glass](features/policy.md#break-glass). |
+| `GRAFT_GUARD_DETECTION` | `on` | `on` or `off`. The post-merge guard's kill switch: `off` drops every guard trigger and makes the guard jobs and crons do nothing. See [Post-merge guard](features/guard.md). |
+| `GRAFT_GUARD_CONFIRM` | `on` | `on` or `off`. Wait for a red default-branch check to persist (the next commit is red, or the window below passes) before naming a culprit; a check that turns green first makes the event `flaky`. `off`: the outcome is final at detection. |
+| `GRAFT_GUARD_CONFIRM_SECONDS` | `7200` | Integer 300 to 86400. The confirmation window; `guard.confirm` runs at its end. |
+| `GRAFT_GUARD_OBSERVE_DELAY_SECONDS` | `30` | Integer 0 to 600. How long `guard.observe` waits after a trigger; triggers for one commit within this window share one job. `0`: no wait and no grouping. |
+| `GRAFT_GUARD_RETENTION_DAYS` | `30` | Integer 7 to 365. Default-branch commits and CI results older than this are deleted by `guard.prune` (except those an open event refers to). |
+| `GRAFT_GUARD_PRUNE_CRON` | `45 3 * * *` | Cron for the daily `guard.prune` job, or `off`. |
 | `GRAFT_POLICY_CARD_WAIT_SECONDS` | `600` | Integer 0 to 3600. In enforce mode, how long `graft/policy` stays `in_progress` after a head is first evaluated while its intent card is still being written; after that it concludes on the conservative pending-card rules. `0` never waits. Report mode never waits (it still schedules the re-evaluation). See [Policy](features/policy.md#enforce-mode). |
 
 ## Deploying with federation

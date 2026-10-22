@@ -42,3 +42,7 @@ rules:
   - name: hotfix
     match: { labels: [hotfix] }
     require: { humans: 1, team: oncall }
+
+# Phase 1 step 4: only these checks can open a post-merge guard event (default: every check).
+# guard:
+#   checks: [test, "lint (node 24)", ci/jenkins]

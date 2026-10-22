@@ -136,6 +136,7 @@ nav:
     - Evaluation set: features/evaluation.md
     - Pilots and the gate: features/pilots-and-gate.md
     - Modes: features/modes.md
+    - Post-merge guard: features/guard.md
   - Operate:
     - Live e2e scenarios: e2e.md
     - E2E runbook: e2e/runbook.md

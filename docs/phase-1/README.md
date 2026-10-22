@@ -83,7 +83,7 @@ Detailed spec: [step-3-break-glass.md](step-3-break-glass.md). It adds one rule 
 
 ### Step 4 — Post-merge guard: detection and culprit (week 9)
 
-Detailed spec: [step-4-guard-detection.md](step-4-guard-detection.md). It deviates from the bullets below and from §4 in one place: CI results are read through the checks API (Actions jobs are check runs), so the guard needs `statuses: read` but not `actions: read` or the `workflow_run` event (its D2).
+Detailed spec: [step-4-guard-detection.md](step-4-guard-detection.md). User-facing page: [features/guard.md](../features/guard.md). It deviates from the bullets below and from §4 in one place: CI results are read through the checks API (Actions jobs are check runs), so the guard needs `statuses: read` but not `actions: read` or the `workflow_run` event (its D2).
 
 - New events: `check_suite` / `workflow_run` / `status` on the default branch (`actions: read`, `statuses: read`). Graft stores per-commit CI results for `main` (commit SHA, check name, conclusion; no logs).
 - **Culprit from existing results** (spec fix 3, no re-runs): when a check that was green on commit N−1 is red on commit N and N is the merge of exactly one PR, that PR is the culprit. If several merges landed between the last green and the first red, the event is `ambiguous`: Graft lists the candidates and opens nothing. A check that fails on one commit and passes on the next without a revert is recorded as `flaky` and does not trigger a revert (configurable confirmation: wait for the next commit's result, default on).
