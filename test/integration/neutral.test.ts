@@ -766,6 +766,13 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     breakGlass.refusedFrom = refused.length;
     const pull = api.state.pulls.get(PR_NUMBER);
     if (!pull) throw new Error("no pull");
+    // The step 4 guard scenario merged PR 2 earlier in this suite; break-glass needs an open PR,
+    // so it is reopened here with times after that merge (the change row then takes them).
+    pull.state = "open";
+    pull.merged = false;
+    pull.merge_commit_sha = null;
+    pull.merged_at = null;
+    pull.closed_at = null;
     breakGlass.labelledHead = pull.head.sha;
     api.state.permissions.set("maya", { id: 701, role: "maintain" });
     api.state.permissions.set("tom", { id: 702, role: "triage" });
@@ -773,7 +780,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     let eventId = 9000;
     const labelAction = async (action: "labeled" | "unlabeled", login: string, id: number) => {
       const events = api.state.issueEvents.get(PR_NUMBER) ?? [];
-      const at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+      const at = `2026-10-14T12:${String(minute++).padStart(2, "0")}:00Z`;
       events.push({
         id: eventId++,
         event: action,
@@ -797,7 +804,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await labelAction("labeled", "maya", 701);
     // A push after labelling: the bypass ends with it.
     pull.head.sha = breakGlass.nextHead;
-    pull.updated_at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+    pull.updated_at = `2026-10-14T12:${String(minute++).padStart(2, "0")}:00Z`;
     api.state.commits.set(PR_NUMBER, [
       makeCommit(
         breakGlass.nextHead,

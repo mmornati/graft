@@ -156,6 +156,8 @@ const changeId = async () => (await getChangeByNumber(t.db, 2000001, PR_NUMBER))
 describe("break-glass and audit log (integration)", () => {
   it("I-BG-1 migration 0010 down then up; down refuses while a break_glass verdict exists", async () => {
     await truncateAll(t.db);
+    // Step 4's migration sits on top of 0010.
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
     const reasonCheck = async () =>
       (
@@ -170,7 +172,7 @@ describe("break-glass and audit log (integration)", () => {
       expect(await reasonCheck()).not.toContain("break_glass");
       expect(await reasonCheck()).toContain("card_pending");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0010_audit_log"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0010_audit_log", "0011_guard"]);
     }
     expect(await reasonCheck()).toContain("break_glass");
     const indexes = await sql<{ indexname: string }>`
@@ -191,9 +193,14 @@ describe("break-glass and audit log (integration)", () => {
     label(MAYA);
     expect(await runLabeled()).toBe("published");
     expect((await lastVerdict())?.enforced_reason).toBe("break_glass");
-    await expect(migrateDownOne(t.db)).rejects.toThrow();
-    expect(await auditRows()).toHaveLength(1);
-    expect(await reasonCheck()).toContain("break_glass");
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
+    try {
+      await expect(migrateDownOne(t.db)).rejects.toThrow();
+      expect(await auditRows()).toHaveLength(1);
+      expect(await reasonCheck()).toContain("break_glass");
+    } finally {
+      expect(await migrateToLatest(t.db)).toEqual(["0011_guard"]);
+    }
 
     // The CHECKs: a reason iff ignored or stale; a 40-hex head; known kinds and roles.
     const base = (await auditRows())[0];
