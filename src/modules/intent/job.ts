@@ -1,13 +1,15 @@
+import type { Transaction } from "kysely";
 import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import { withChangeLock } from "../../db/locks.js";
+import type { Database } from "../../db/schema.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { classifyGitHubError, toJobError } from "../../github/errors.js";
 import { upsertManagedSection } from "../../github/managed-comment.js";
 import { resolveBaseCommit } from "../../policy/load.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
-import { getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
+import { type Change, getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import { ensureRepository, getActiveInstallation } from "../installations/index.js";
 import { computeProvenance, fetchPrCommits } from "../provenance/index.js";
 import { fetchIntentInputs } from "./fetch.js";
@@ -67,6 +69,17 @@ export type GenerateData = z.infer<typeof generateSchema>;
 
 export type IntentOutcome = "published" | "cached" | "stale" | "closed" | "skipped";
 
+/** How many times one run may re-read the PR to catch up with a newer snapshot of its head. */
+export const MAX_CATCH_UPS = 3;
+
+/**
+ * What a card depends on that can change without a new head: the base branch, the title and the
+ * body. Compared in memory between two snapshots of the same PR; never stored or logged.
+ */
+function cardInputsKey(p: LivePull): string {
+  return JSON.stringify([p.head.sha, p.base.ref, p.title, p.body ?? ""]);
+}
+
 export async function generateIntent(data: GenerateData, ctx: JobContext): Promise<IntentOutcome> {
   const { config } = ctx;
   const startedAtMs = Date.now();
@@ -109,7 +122,44 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
 
   // 2. Change row.
   const { change, applied } = await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now);
-  if (!applied) return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
+
+  /**
+   * Another job stored a newer snapshot of the SAME head. Usually that is Graft's own comment or
+   * check run bumping the PR's `updated_at`, not a change to what the card is made of. Re-read the
+   * PR: if the head, base, title and body are unchanged, adopt the newer snapshot and carry on;
+   * otherwise the change is real, and the job its webhook queued publishes the card instead.
+   * Bounded by MAX_CATCH_UPS per run. Never called inside a lock (it reads GitHub).
+   */
+  let catchUps = 0;
+  const catchUp = async (): Promise<boolean> => {
+    while (catchUps < MAX_CATCH_UPS) {
+      catchUps++;
+      let live: LivePull;
+      try {
+        const res = await octokit.rest.pulls.get({
+          owner: data.owner,
+          repo: data.repo,
+          pull_number: data.prNumber,
+        });
+        live = res.data as unknown as LivePull;
+      } catch (err) {
+        throw toJobError(err, "pulls.get");
+      }
+      if (live.state === "closed" || cardInputsKey(live) !== cardInputsKey(pull)) return false;
+      const stored = await upsertChangeFromPull(ctx.db, data.repositoryId, live, ctx.clock.now());
+      pull = live;
+      if (stored.applied) {
+        ctx.log.info({ changeId: change.id, catchUps }, "caught up with a newer snapshot");
+        return true;
+      }
+      if (stored.change.head_sha !== live.head.sha) return false;
+    }
+    return false;
+  };
+
+  if (!applied && !(change.head_sha === pull.head.sha && (await catchUp()))) {
+    return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
+  }
   if (pull.state === "closed") return done("closed", { changeId: change.id });
 
   // 3. A retry for a head that is no longer current is superseded.
@@ -187,10 +237,40 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   opts.startedAtMs = startedAtMs;
   const prepared = prepareCardInputs(inputs, opts);
 
-  const fresh = (current: Awaited<ReturnType<typeof getChange>>): boolean =>
+  const fresh = (current: Change | undefined): boolean =>
     !!current &&
     current.head_sha === pull.head.sha &&
     !(current.pr_updated_at !== null && current.pr_updated_at > new Date(pull.updated_at));
+  /** Fresh, or behind on the same head and able to catch up (outside any lock). */
+  const stillCurrent = async (): Promise<boolean> => {
+    const current = await getChange(ctx.db, change.id);
+    if (fresh(current)) return true;
+    return !!current && current.head_sha === pull.head.sha && (await catchUp());
+  };
+  /**
+   * Run `fn` under the change lock while the stored snapshot is this run's. When it is behind on
+   * the same head, release the lock, catch up and try again; `null` when the run is out of date.
+   */
+  const underFreshLock = async <T>(
+    fn: (tx: Transaction<Database>, current: Change) => Promise<T>,
+  ): Promise<T | null> => {
+    for (;;) {
+      const r: { ok: true; value: T } | { ok: false; behind: boolean } = await withChangeLock(
+        ctx.db,
+        change.id,
+        async (tx) => {
+          const current = await getChange(tx, change.id);
+          if (!current || !fresh(current)) {
+            ctx.log.info({ changeId: change.id }, "stale: head moved or newer snapshot stored");
+            return { ok: false, behind: !!current && current.head_sha === pull.head.sha };
+          }
+          return { ok: true, value: await fn(tx, current) };
+        },
+      );
+      if (r.ok) return r.value;
+      if (!r.behind || !(await catchUp())) return null;
+    }
+  };
 
   // 5. Cache: a good card for the same inputs is reused without a model call.
   const existing = await findCard(ctx.db, {
@@ -207,16 +287,14 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
     cached = true;
   } else {
     // 6. Pre-spend check: do not pay for a card that is already out of date.
-    if (!fresh(await getChange(ctx.db, change.id))) {
+    if (!(await stillCurrent())) {
       return done("stale", { changeId: change.id, reason: "before model calls" });
     }
 
     // 7.1 Outdated note (D11): a reviewer must not read the old card as the new head's.
     const previous = await latestPublishedCard(ctx.db, change.id);
     if (previous && previous.head_sha !== pull.head.sha) {
-      const noted = await withChangeLock(ctx.db, change.id, async (tx) => {
-        if (!fresh(await getChange(tx, change.id))) return false;
-        const current = await getChange(tx, change.id);
+      const noted = await underFreshLock(async (tx, current) => {
         try {
           const c = await upsertManagedSection(octokit, {
             owner: data.owner,
@@ -224,7 +302,7 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
             issueNumber: data.prNumber,
             appId: config.githubAppId,
             appBotLogin: config.githubAppSlug ? `${config.githubAppSlug}[bot]` : undefined,
-            knownCommentId: current?.graft_comment_id ?? null,
+            knownCommentId: current.graft_comment_id,
             section: "intent",
             markdown: renderPendingSection({
               headSha: pull.head.sha,
@@ -290,12 +368,7 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
     );
     retryScheduled = id !== null;
   }
-  const published = await withChangeLock(ctx.db, change.id, async (tx) => {
-    const current = await getChange(tx, change.id);
-    if (!current || !fresh(current)) {
-      ctx.log.info({ changeId: change.id }, "stale: head moved or newer snapshot stored");
-      return false;
-    }
+  const published = await underFreshLock(async (tx, current) => {
     const view = rowToView(card);
     try {
       // Order matters (README §7): the check run first, then the comment, then the display. A
