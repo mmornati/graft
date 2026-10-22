@@ -894,6 +894,27 @@ describe("break-glass and audit log (integration)", () => {
       expect(pull().labels?.map((l) => l.name)).toContain(LABEL);
     });
 
+    it("I-BG-25 another maintainer re-labels while a bypass is active: removed for the first, applied for the second, and the new bypass holds on later triggers", async () => {
+      label(MAYA);
+      await runLabeled();
+      unlabel(MAYA);
+      label(ADA);
+      expect(await runLabeled()).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect(lastCheck()?.output.title).toBe("Bypassed by break-glass (ada)");
+      const rows = await auditRows();
+      expect(rows.map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+        ["removed", "maya"],
+        ["applied", "ada"],
+      ]);
+      // Written in one run: the new row is 1 ms after the removal, which must not end it.
+      expect(rows[2]?.created_at.getTime()).toBe((rows[1]?.created_at.getTime() ?? 0) + 1);
+      expect(await run({ data: { trigger: "review" } })).toMatch(/published|unchanged/);
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(true);
+    });
+
     it("I-BG-21 the events lag: the label run retries while its retry policy allows, then fails closed (actor_unknown, and an active bypass ends)", async () => {
       label(MAYA);
       api.state.issueEventsLag = 1;
