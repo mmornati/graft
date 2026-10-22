@@ -619,7 +619,7 @@ describe("guard: detection and confirmation", () => {
     advance(60);
     run(C(2), "test", "failure");
     const [open] = await events();
-    const behind = new Date((open?.detected_at as Date).getTime() + 7199 * 1000);
+    const behind = new Date((open as { detected_at: Date }).detected_at.getTime() + 7199 * 1000);
     await observeCommit({ ...IDS, sha: C(2) }, { ...ctx(), clock: { now: () => behind } });
     expect((await events())[0]?.status).toBe("confirming");
     advance(7200);
