@@ -111,6 +111,33 @@ describe("github error classification", () => {
     expect((perm as PermanentJobError).reason).toBe("invalid");
     expect(inspect(perm, { depth: 8 })).not.toContain(SENTINEL);
     expect((perm.cause as { route?: string }).route).toBe("/repos/o/r/check-runs/:n");
+    // Team slugs and logins never reach the route (step 2 review 1, finding 3).
+    const routeOf = (url: string) =>
+      (
+        sanitizeError(
+          Object.assign(new Error("Bad Gateway"), { status: 502, request: { method: "GET", url } }),
+        ) as { route?: string }
+      ).route;
+    expect(routeOf("https://api.github.com/orgs/acme/teams/secret-team/memberships/alice")).toBe(
+      "/orgs/acme/teams/:name/memberships/:name",
+    );
+    expect(routeOf("https://api.github.com/orgs/acme/teams/secret-team")).toBe(
+      "/orgs/acme/teams/:name",
+    );
+    expect(routeOf("https://api.github.com/repos/o/r/collaborators/alice/permission")).toBe(
+      "/repos/o/r/collaborators/:name/permission",
+    );
+    const viaJob = toJobError(
+      Object.assign(new Error("Bad Gateway"), {
+        status: 502,
+        request: {
+          method: "GET",
+          url: "https://api.github.com/orgs/acme/teams/secret-team/memberships/alice",
+        },
+      }),
+      "team membership",
+    );
+    expect(inspect(viaJob, { depth: 8 })).not.toMatch(/secret-team|alice/);
     // Not an Error at all.
     expect(sanitizeError({ body: SENTINEL }).message).toBe("");
     expect(sanitizeError("x")).toBeInstanceOf(Error);

@@ -32,6 +32,34 @@ export interface ResolveInput {
   accountType: "User" | "Organization" | "Enterprise";
   /** The stored installation permissions; null when they were never read. */
   permissions: Readonly<Record<string, string>> | null;
+  /**
+   * Each reviewer's `author_association` (user id → value). It only orders the role checks, so
+   * that outsiders on a public repository cannot use up the D17 bound ahead of the people who
+   * hold access (step 2 review 1, finding 4). It is never proof of access: everyone checked still
+   * gets a role check, and anyone left unchecked keeps the fail-closed rules.
+   */
+  associations?: ReadonlyMap<number, string>;
+}
+
+/** Check order: the associations that usually mean access first, then everyone else. */
+const ASSOCIATION_RANK: Readonly<Record<string, number>> = {
+  OWNER: 0,
+  MEMBER: 1,
+  COLLABORATOR: 2,
+};
+
+/** Stable: the login order of `users` is kept within each association rank. */
+function checkOrder<T extends { id: number }>(
+  users: readonly T[],
+  associations: ReadonlyMap<number, string> | undefined,
+): T[] {
+  const rank = (u: T): number => {
+    const a = associations?.get(u.id);
+    return a !== undefined && Object.hasOwn(ASSOCIATION_RANK, a)
+      ? (ASSOCIATION_RANK[a] as number)
+      : 3;
+  };
+  return [...users].sort((a, b) => rank(a) - rank(b));
 }
 
 const rethrow = (err: unknown, what: string): never => {
@@ -54,10 +82,10 @@ export async function resolveApprovers(
     return r;
   };
 
-  // Approvers: at most MAX_ROLE_CHECKS checked, in login order; the rest do not count.
+  // Approvers: at most MAX_ROLE_CHECKS checked, by association then login; the rest do not count.
   const counted: ApproverFacts["counted"] = [];
   const notCounted: ApproverFacts["notCounted"] = [];
-  for (const [n, u] of i.approvals.currentApprovers.entries()) {
+  for (const [n, u] of checkOrder(i.approvals.currentApprovers, i.associations).entries()) {
     if (n >= MAX_ROLE_CHECKS) {
       notCounted.push({ login: u.login, why: "check_limit" });
       continue;
@@ -76,7 +104,7 @@ export async function resolveApprovers(
   // does not. A request Graft cannot judge blocks (fail closed): a 403 on the role check, or a
   // requester past the bound (at most MAX_ROLE_CHECKS checks for requesters).
   const changesRequestedBy: string[] = [];
-  for (const [n, u] of i.approvals.changesRequested.entries()) {
+  for (const [n, u] of checkOrder(i.approvals.changesRequested, i.associations).entries()) {
     const r = n < MAX_ROLE_CHECKS ? await role(u) : "unchecked";
     if (r === "write" || r === 403 || r === "unchecked") changesRequestedBy.push(u.login);
   }

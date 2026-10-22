@@ -166,12 +166,21 @@ export async function evaluatePolicyJobRun(
     );
   }
   const now = ctx.clock.now();
-  if ((await ensureRepository(ctx.db, data.installationId, pull.base.repo, now)) === "removed") {
-    return done("skipped", { reason: "repository removed" });
-  }
+  const repoState = await ensureRepository(ctx.db, data.installationId, pull.base.repo, now);
+  if (repoState === "removed") return done("skipped", { reason: "repository removed" });
   // Read once, outside the lock (step 2 D12). It decides the wording, the facts hash and whether
   // the enforce conclusion is published; a rollback that lands in between is refused by the gate.
-  const modes = await getEffectiveModes(ctx.db, data.repositoryId, config);
+  // A transfer race (review 1, finding 6): the row still belongs to the previous installation,
+  // whose modes this job must not act on. It evaluates under a `report` ceiling instead, which is
+  // what the D13 reset gives the new owner; `installation_repositories.added` then moves the row.
+  const moved = repoState === "other_installation";
+  if (moved)
+    ctx.log.info({ prNumber: data.prNumber }, "policy: repository on another installation");
+  const modes = await getEffectiveModes(
+    ctx.db,
+    data.repositoryId,
+    moved ? { modeCeiling: "report" } : config,
+  );
   const { change, applied } = await upsertChangeFromPull(ctx.db, data.repositoryId, pull, now);
   if (!applied) return done("stale", { changeId: change.id, reason: "newer snapshot stored" });
   if (pull.state === "closed") return done("closed", { changeId: change.id });
@@ -260,6 +269,13 @@ export async function evaluatePolicyJobRun(
         verdict: view.verdict,
         accountType: installation.account_type,
         permissions: installation.permissions_read_at === null ? null : installation.permissions,
+        associations: new Map(
+          reviews.flatMap((r) =>
+            r.user && r.author_association !== undefined
+              ? [[r.user.id, r.author_association] as const]
+              : [],
+          ),
+        ),
       });
     } else if (loaded.status === "missing") {
       const listed = await listChangedPaths(octokit, {

@@ -410,6 +410,8 @@ export interface ReviewLike {
   state: string;
   commit_id: string | null;
   submitted_at: string | null;
+  /** GitHub's `author_association`; orders the D17 role checks only, never proves access. */
+  author_association?: string;
 }
 export interface ApprovalCount {
   current: number;

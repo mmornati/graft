@@ -91,6 +91,8 @@ describe("policy facts", () => {
       state: "APPROVED",
       commit_id: HEAD_SHA,
       submitted_at: "2026-10-14T11:01:00Z",
+      // Kept to order the role checks (step 2 review 1, finding 4).
+      author_association: "COLLABORATOR",
     });
     api.state.reviews.set(PR_NUMBER, reviews.slice(0, 120));
     const fewer = await listReviews(octokit, target);

@@ -229,13 +229,18 @@ export async function listActiveRepositories(
 /**
  * Make sure a repository row exists (a repo created after an `all` install has none).
  * Active rows get their name/visibility/default branch refreshed; a removed row is left alone.
+ *
+ * `other_installation`: the row is active but belongs to another installation (a transfer whose
+ * `installation_repositories.added` has not arrived yet). The row is neither moved nor reset here;
+ * that is `upsertRepositories`' job, which resets the modes (step 2 D13). A caller that acts on the
+ * row's modes must not act on another installation's (step 2 review 1, finding 6).
  */
 export async function ensureRepository(
   ex: Executor,
   installationId: number,
   repo: { id: number; full_name: string; private: boolean; default_branch: string },
   now: Date,
-): Promise<"active" | "removed"> {
+): Promise<"active" | "removed" | "other_installation"> {
   await ex
     .insertInto("repositories")
     .values({
@@ -260,9 +265,10 @@ export async function ensureRepository(
     })
     .where("id", "=", repo.id)
     .where("removed_at", "is", null)
-    .returning("id")
+    .returning(["id", "installation_id"])
     .executeTakeFirst();
-  return updated ? "active" : "removed";
+  if (!updated) return "removed";
+  return Number(updated.installation_id) === installationId ? "active" : "other_installation";
 }
 
 /** The installation row when it exists and is neither deleted nor suspended. */

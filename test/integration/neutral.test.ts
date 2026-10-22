@@ -247,7 +247,11 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await post("pull_request_review.dismissed", "n-dismiss");
     // a team membership changes: the handler debounces, the fan-out re-evaluates
     await post("membership.added", "n-member");
-    await fanoutTeamChange({ installationId: INSTALLATION_ID }, jobContext(t));
+    // The fan-out is deferred past its window (trailing edge): run the queued job's data directly.
+    const fanout = await sql<{ data: { installationId: number; window: number } }>`
+      select data from pgboss.job where name = 'policy.team_fanout'`.execute(t.db);
+    expect(fanout.rows).toHaveLength(1);
+    await fanoutTeamChange(fanout.rows[0]?.data as never, jobContext(t));
     await drain();
     // label added
     const pull = api.state.pulls.get(PR_NUMBER);

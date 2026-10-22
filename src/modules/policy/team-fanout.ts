@@ -4,6 +4,15 @@
  * every open PR of the installation whose latest verdict has a team constraint. Team slugs are not
  * stored (Phase 0 D19), so Graft cannot tell which team changed; a 5-minute debounce bounds the
  * cost.
+ *
+ * The debounce is trailing-edge (step 2 review 1, finding 1). Every event of a window maps to the
+ * one fan-out job keyed on that window, and that job starts only after the window has closed (plus
+ * a margin), so it runs after every event of its window, whatever their order. A leading-edge
+ * debounce would lose an event that arrives after the fan-out ran but inside the same window: the
+ * job id is deterministic and deduplicates completed jobs too (`singletonJobId`). Each per-PR
+ * re-evaluation is keyed on the fan-out's window (from the payload, not the run time), so two
+ * fan-outs of different windows never collide. Cost: at most one fan-out per installation per
+ * window, and at most one re-evaluation per PR per window.
  */
 import { sql } from "kysely";
 import { z } from "zod";
@@ -16,7 +25,8 @@ import { FANOUT_MAX, policyEvaluateJob } from "./job.js";
 
 export const POLICY_TEAM_FANOUT_JOB = "policy.team_fanout";
 const WINDOW_SECONDS = 300;
-const START_AFTER_SECONDS = 60;
+/** How long after the window closes the fan-out starts (covers clock skew and late commits). */
+const MARGIN_SECONDS = 60;
 const FANOUT_BATCH = 10;
 const FANOUT_STEP_SECONDS = 5;
 const NAME_PART = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -26,7 +36,11 @@ const triggerPayload = z.looseObject({
   installation: z.looseObject({ id: z.number().int().positive() }),
 });
 
-export const teamFanoutSchema = z.object({ installationId: z.number().int().positive() });
+export const teamFanoutSchema = z.object({
+  installationId: z.number().int().positive(),
+  /** The debounce window (`floor(epoch seconds / 300)`) whose events this fan-out covers. */
+  window: z.number().int().nonnegative(),
+});
 export type TeamFanoutData = z.infer<typeof teamFanoutSchema>;
 
 export const teamFanoutJob = defineJob<TeamFanoutData>({
@@ -53,14 +67,16 @@ export const scheduleTeamFanout = defineWebhookHandler({
     if (!p) return;
     const installationId = p.installation.id;
     if (!(await getActiveInstallation(ctx.db, installationId))) return;
-    const window = Math.floor(ctx.clock.now().getTime() / (WINDOW_SECONDS * 1000));
+    const nowSeconds = ctx.clock.now().getTime() / 1000;
+    const window = Math.floor(nowSeconds / WINDOW_SECONDS);
+    // Trailing edge: start after the window closes, so the job runs after this event and after
+    // every other event of the same window.
+    const startAfterSeconds =
+      Math.ceil((window + 1) * WINDOW_SECONDS - nowSeconds) + MARGIN_SECONDS;
     await ctx.queue.send(
       teamFanoutJob,
-      { installationId },
-      {
-        singletonKey: `policy:team:${installationId}:${window}`,
-        startAfterSeconds: START_AFTER_SECONDS,
-      },
+      { installationId, window },
+      { singletonKey: `policy:team:${installationId}:${window}`, startAfterSeconds },
     );
   },
 });
@@ -83,14 +99,13 @@ export async function fanoutTeamChange(data: TeamFanoutData, ctx: JobContext): P
   if (res.rows.length > FANOUT_MAX) {
     ctx.log.warn({ outcome: "fanout_truncated", max: FANOUT_MAX }, "team fanout truncated");
   }
-  const window = Math.floor(ctx.clock.now().getTime() / (WINDOW_SECONDS * 1000));
   const chosen = res.rows.slice(0, FANOUT_MAX);
   let sent = 0;
   for (const [i, row] of chosen.entries()) {
     const [owner = "", repo = ""] = row.full_name.split("/");
     if (!NAME_PART.test(owner) || !NAME_PART.test(repo)) continue;
     const repositoryId = Number(row.repository_id);
-    await ctx.queue.send(
+    const id = await ctx.queue.send(
       policyEvaluateJob,
       {
         installationId: data.installationId,
@@ -101,11 +116,12 @@ export async function fanoutTeamChange(data: TeamFanoutData, ctx: JobContext): P
         trigger: "team",
       },
       {
-        singletonKey: `policy:team:${repositoryId}:${row.pr_number}:${window}`,
+        // The fan-out's window, not the run time: fan-outs of different windows never collide.
+        singletonKey: `policy:team:${repositoryId}:${row.pr_number}:${data.window}`,
         startAfterSeconds: Math.floor(i / FANOUT_BATCH) * FANOUT_STEP_SECONDS,
       },
     );
-    sent++;
+    if (id !== null) sent++;
   }
   ctx.log.info({ outcome: "enqueued", count: sent }, "team fanout done");
   return sent;

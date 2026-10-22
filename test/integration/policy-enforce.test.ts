@@ -320,6 +320,24 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(teamRequests().filter((r) => r.path.includes("/memberships/"))).toEqual([]);
   });
 
+  it("I-ENF-6b enforce: a pending team membership does not count", async () => {
+    await setMode("enforce");
+    const PAT = { login: "pat", userId: 504 };
+    api.state.permissions.set(PAT.login, { id: PAT.userId, role: "write" });
+    approve(PAT);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "approvals_missing" });
+    expect((await lastVerdict())?.approvals).toMatchObject({
+      counted: 1,
+      constraints: [{ met: false, approved: 0, unverified: [] }],
+    });
+    // The membership was asked, and answered pending.
+    expect(teamRequests().map((r) => r.path)).toContain(
+      `/orgs/${OWNER}/teams/security/memberships/pat`,
+    );
+  });
+
   it("I-ENF-7 enforce: a writer's change request fails the check; once dismissed it is re-evaluated and succeeds", async () => {
     await setMode("enforce");
     api.state.reviews.set(PR_NUMBER, [
@@ -344,6 +362,39 @@ describe("approvals Graft can enforce (integration)", () => {
       "published",
     );
     expect(lastCheck()?.conclusion).toBe("success");
+  });
+
+  it("I-ENF-7b enforce: a change requester whose role check answers 403, or past the bound, blocks", async () => {
+    await setMode("enforce");
+    // 403: Graft cannot tell whether bob can write, so his request blocks.
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 10, ...ALICE }),
+      makeReview({ id: 11, ...BOB, state: "CHANGES_REQUESTED" }),
+    ]);
+    api.failNext("GET", /\/collaborators\/bob\/permission$/, 403);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "changes_requested" });
+    expect(lastCheck()?.output.title).toBe("Changes requested by bob");
+
+    // Past the bound: 20 readers (checked, not blocking), then a 21st requester never checked.
+    const readers = Array.from({ length: 21 }, (_, i) => ({
+      login: `rd${String(i).padStart(2, "0")}`,
+      userId: 800 + i,
+    }));
+    for (const u of readers) api.state.permissions.set(u.login, { id: u.userId, role: "read" });
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 10, ...ALICE }),
+      ...readers.map((u, i) => makeReview({ id: 30 + i, ...u, state: "CHANGES_REQUESTED" })),
+    ]);
+    api.requests.length = 0;
+    await run({ nowMs: FIXED_NOW.getTime() + 1000 });
+    expect(
+      permissionRequests().filter((r) => /\/collaborators\/rd\d+\//.test(r.path)),
+    ).toHaveLength(20);
+    expect(lastCheck()?.conclusion).toBe("failure");
+    expect(await lastVerdict()).toMatchObject({ enforced_reason: "changes_requested" });
+    expect(lastCheck()?.output.title).toBe("Changes requested by rd20");
   });
 
   it("I-ENF-8 enforce: a pending card publishes in_progress and schedules card_wait; the card or the deadline completes it", async () => {
@@ -503,7 +554,7 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(lastCheck()).toMatchObject({ status: "completed", conclusion: "neutral" });
   });
 
-  it("I-ENF-11 membership.added → one team fan-out per installation per 5 minutes; only team-constrained open PRs are re-evaluated", async () => {
+  it("I-ENF-11 membership.added → one team fan-out per installation per 5 minutes, after the window closes; only team-constrained open PRs are re-evaluated", async () => {
     // PR 2: team constraint. PR 3: no team constraint. PR 4: team constraint, closed.
     await run();
     putContent(api, "b".repeat(40), "version: 1\n");
@@ -530,15 +581,18 @@ describe("approvals Graft can enforce (integration)", () => {
     await scheduleTeamFanout.handle(event("team.deleted", "d-t1"), ctx);
     const fanouts = await jobsNamed(t.db, "policy.team_fanout");
     expect(fanouts).toHaveLength(1);
-    expect(fanouts[0]?.data).toEqual({ installationId: INSTALLATION_ID });
     const window = Math.floor(FIXED_NOW.getTime() / 300_000);
+    expect(fanouts[0]?.data).toEqual({ installationId: INSTALLATION_ID, window });
     expect(fanouts[0]?.singleton_key).toBe(`policy:team:${INSTALLATION_ID}:${window}`);
+    // Trailing edge: it starts after the window closes, plus a margin.
     const delay =
       (fanouts[0]?.start_after.getTime() ?? 0) - (fanouts[0]?.created_on.getTime() ?? 0);
-    expect(delay).toBeGreaterThan(55_000);
+    const windowEnd = (window + 1) * 300_000;
+    expect(delay).toBeGreaterThanOrEqual(windowEnd - FIXED_NOW.getTime() + 55_000);
+    expect(delay).toBeLessThan(windowEnd - FIXED_NOW.getTime() + 65_000);
 
     const before = (await jobsNamed(t.db, "policy.evaluate")).length;
-    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID }, ctx)).toBe(1);
+    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID, window }, ctx)).toBe(1);
     const sent = (await jobsNamed(t.db, "policy.evaluate")).slice(before);
     expect(sent.map((j) => j.data)).toEqual([
       {
@@ -550,11 +604,53 @@ describe("approvals Graft can enforce (integration)", () => {
         trigger: "team",
       },
     ]);
+    expect(sent[0]?.singleton_key).toBe(`policy:team:${REPO_ID}:${PR_NUMBER}:${window}`);
     // An inactive installation fans out nothing.
     await t.db.updateTable("installations").set({ suspended_at: FIXED_NOW }).execute();
-    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID }, ctx)).toBe(0);
+    expect(await fanoutTeamChange({ installationId: INSTALLATION_ID, window }, ctx)).toBe(0);
     await scheduleTeamFanout.handle(event("membership.added", "d-m3"), ctx);
     expect(await jobsNamed(t.db, "policy.team_fanout")).toHaveLength(1);
+  });
+
+  it("I-ENF-11b membership.removed after a fan-out already ran: a later fan-out re-evaluates the PR (trailing-edge debounce)", async () => {
+    await setMode("enforce");
+    approve(ALICE);
+    await run();
+    expect(lastCheck()?.conclusion).toBe("success");
+    const T0 = FIXED_NOW.getTime();
+    const at = (ms: number) => ({ ...jobContext(t), clock: { now: () => new Date(ms) } });
+
+    // 1. membership.added: one fan-out, which runs at its start time.
+    await scheduleTeamFanout.handle(event("membership.added", "d-r1"), at(T0));
+    const [first] = await jobsNamed(t.db, "policy.team_fanout");
+    if (!first) throw new Error("no fan-out");
+    const ranAt = T0 + (first.start_after.getTime() - first.created_on.getTime());
+    const before = (await jobsNamed(t.db, "policy.evaluate")).length;
+    expect(await fanoutTeamChange(first.data as never, at(ranAt))).toBe(1);
+    await sql`update pgboss.job set state = 'completed', completed_on = now()
+              where id = ${first.id}::uuid`.execute(t.db);
+
+    // 2. alice leaves the team, one second after the fan-out ran.
+    api.state.teams.get("security")?.members.delete("alice");
+    const removedAt = ranAt + 1000;
+    const removed = event("membership.added", "d-r2") as { payload: { action: string } };
+    removed.payload.action = "removed";
+    await scheduleTeamFanout.handle(removed as never, at(removedAt));
+    const later = (await jobsNamed(t.db, "policy.team_fanout")).filter((j) => j.id !== first.id);
+    // A new fan-out exists, and it starts after the removal.
+    expect(later).toHaveLength(1);
+    const second = later[0];
+    if (!second) throw new Error("no second fan-out");
+    const secondRunsAt = removedAt + (second.start_after.getTime() - second.created_on.getTime());
+    expect(secondRunsAt).toBeGreaterThan(removedAt);
+    // Its per-PR re-evaluation is not swallowed by the first fan-out's.
+    expect(await fanoutTeamChange(second.data as never, at(secondRunsAt))).toBe(1);
+    const sent = (await jobsNamed(t.db, "policy.evaluate")).slice(before);
+    expect(sent).toHaveLength(2);
+    expect(new Set(sent.map((j) => j.singleton_key)).size).toBe(2);
+    // The re-evaluation reads the new membership: the approval no longer qualifies.
+    expect(await run({ data: { trigger: "team" }, nowMs: secondRunsAt })).toBe("published");
+    expect(lastCheck()?.conclusion).toBe("failure");
   });
 
   it("I-ENF-12 bounds: 25 approvers → 20 permission checks and 5 check_limit; at most 100 membership requests", async () => {
@@ -583,6 +679,61 @@ describe("approvals Graft can enforce (integration)", () => {
     expect(text).toContain("(too many checks in one evaluation)");
     expect(lastCheck()?.conclusion).toBe("failure");
     expect((await lastVerdict())?.approvals).toMatchObject({ counted: 20, notCounted: 5 });
+  });
+
+  it("I-ENF-12b public repository: 20 outsiders whose logins sort first do not use up the role checks of a member", async () => {
+    await setMode("enforce");
+    const outsiders = Array.from({ length: 20 }, (_, i) => ({
+      login: `aaa${String(i).padStart(2, "0")}`,
+      userId: 900 + i,
+    }));
+    const ZED = { login: "zed", userId: 950 };
+    api.state.permissions.set(ZED.login, { id: ZED.userId, role: "maintain" });
+    api.state.teams.get("security")?.members.set("zed", "active");
+    api.state.reviews.set(PR_NUMBER, [
+      ...outsiders.map((u, i) => makeReview({ id: 40 + i, ...u, association: "NONE" })),
+      makeReview({ id: 99, ...ZED, association: "MEMBER" }),
+    ]);
+    await run();
+    // The member is checked first; the outsiders after, and only up to the bound.
+    expect(permissionRequests()[0]?.path).toMatch(/\/collaborators\/zed\/permission$/);
+    expect(permissionRequests()).toHaveLength(20);
+    expect(lastCheck()?.conclusion).toBe("success");
+    expect((await lastVerdict())?.approvals).toMatchObject({ counted: 1, notCounted: 20 });
+    // The last outsider is past the bound and does not count (fail closed).
+    expect(lastCheck()?.output.text).toContain("(too many approvers to check)");
+  });
+
+  it("I-ENF-15 transfer race: a job for the new installation on a row still owned by the old one never acts on the old modes", async () => {
+    await setMode("enforce");
+    approve(ALICE);
+    const NEW_INSTALLATION = INSTALLATION_ID + 1;
+    await t.db
+      .insertInto("installations")
+      .values({
+        id: NEW_INSTALLATION,
+        account_id: 9000002,
+        account_login: "new-owner",
+        account_type: "Organization",
+        repository_selection: "selected",
+        permissions: JSON.stringify(PERMISSIONS),
+        permissions_read_at: FIXED_NOW,
+      })
+      .execute();
+    expect(await run({ data: { installationId: NEW_INSTALLATION } })).toBe("published");
+    // Nothing refused, nothing failed: the check is neutral and the row is untouched.
+    expect(refused).toEqual([]);
+    expect(lastCheck()).toMatchObject({ status: "completed", conclusion: "neutral" });
+    expect(await lastVerdict()).toMatchObject({
+      policy_mode: "report",
+      check_conclusion: "neutral",
+    });
+    const row = await t.db
+      .selectFrom("repositories")
+      .select(["installation_id", "policy_mode"])
+      .where("id", "=", REPO_ID)
+      .executeTakeFirstOrThrow();
+    expect(row).toMatchObject({ installation_id: INSTALLATION_ID, policy_mode: "enforce" });
   });
 
   it("I-ENF-13 enforce: no policy and an invalid policy fail with the fix text; report mode stays neutral", async () => {

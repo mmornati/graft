@@ -38,7 +38,14 @@ function shortMessage(m: unknown): string {
   return oneLine.length > MAX_MESSAGE ? `${oneLine.slice(0, MAX_MESSAGE)}...` : oneLine;
 }
 
-/** Path only (no host, no query), with numeric ids and SHAs replaced: a route template. */
+/**
+ * Path segments that are followed by a team slug or a login. That segment is replaced by `:name`:
+ * team slugs are never logged or stored (Phase 0 D19, step 2 §15), and neither are the logins of
+ * approvers and members (step 2 review 1, finding 3).
+ */
+const NAME_AFTER = new Set(["teams", "memberships", "members", "collaborators", "users"]);
+
+/** Path only (no host, no query), with numeric ids, SHAs, team slugs and logins replaced. */
 function routeTemplate(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
   let path = url;
@@ -47,9 +54,17 @@ function routeTemplate(url: unknown): string | undefined {
   } catch {
     // keep the raw text, trimmed below
   }
-  return path
-    .split("/")
-    .map((seg) => (/^[0-9a-f]{40}$/i.test(seg) ? ":sha" : /^\d+$/.test(seg) ? ":n" : seg))
+  const segments = path.split("/");
+  return segments
+    .map((seg, i) =>
+      /^[0-9a-f]{40}$/i.test(seg)
+        ? ":sha"
+        : /^\d+$/.test(seg)
+          ? ":n"
+          : seg !== "" && NAME_AFTER.has(segments[i - 1] ?? "")
+            ? ":name"
+            : seg,
+    )
     .join("/")
     .slice(0, 200);
 }
