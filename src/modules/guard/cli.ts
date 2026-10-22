@@ -55,6 +55,14 @@ function who(e: ListedEvent): string {
   return `candidates ${parts.join(" ")}`;
 }
 
+/**
+ * `flaky` with no reason was still undecided at its last confirm attempt, not green again (D9):
+ * neither a caught breakage nor a flake (step 4 review 2, nit D).
+ */
+function statusLabel(e: ListedEvent): string {
+  return e.status === "flaky" && e.confirm_reason === null ? "flaky (unconfirmed)" : e.status;
+}
+
 /** One line per event: `detected_at  status  failing_sha(7)  checks(first 3)  culprit`. */
 export function renderGuardList(events: readonly ListedEvent[]): string {
   if (events.length === 0) return "no guard events\n";
@@ -63,7 +71,7 @@ export function renderGuardList(events: readonly ListedEvent[]): string {
       const names = e.failing_checks.map((c) => c.name);
       const checks =
         names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
-      return `${iso(e.detected_at ?? e.created_at)}  ${e.status}  ${e.failing_sha.slice(0, 7)}  ${checks}  ${who(e)}\n`;
+      return `${iso(e.detected_at ?? e.created_at)}  ${statusLabel(e)}  ${e.failing_sha.slice(0, 7)}  ${checks}  ${who(e)}\n`;
     })
     .join("");
 }
@@ -83,6 +91,7 @@ export function guardListJson(events: readonly ListedEvent[]): unknown {
         unresolvedCommits: p.unresolved,
         detectedAt: (e.detected_at ?? e.created_at).toISOString(),
         confirmedAt: e.confirmed_at?.toISOString() ?? null,
+        confirmReason: e.confirm_reason,
         commentId: e.comment_id,
         guardMode: e.guard_mode,
       };

@@ -1084,4 +1084,96 @@ describe("break-glass and audit log (integration)", () => {
       ]);
     });
   });
+
+  describe("review 2: refuse-only rules with no test of their own", () => {
+    it("I-BG-26 nit 1: a label run without a sender id (queued before the deploy, or no sender) never applies, and is not retried", async () => {
+      label(MAYA);
+      // The events name maya, a maintainer, but the delivery carries no actor id to match.
+      expect(
+        await run({
+          data: { breakGlassHeadSha: HEAD_SHA },
+          attempt: { retryCount: 0, retryLimit: 5 },
+        }),
+      ).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.reason, r.actor_login])).toEqual([
+        ["ignored", "actor_unknown", null],
+      ]);
+      expect(roleReads()).toEqual([]);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+    });
+
+    it("I-BG-27 nit 2 (F2f): an unlabel after the bound event ends the bypass even on a D4-mismatch delivery, while the re-label lags", async () => {
+      label(MAYA);
+      expect(await runLabeled()).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      // Maya removes the label and tom re-adds it; tom's event is not listed yet. A label
+      // delivery for an older head then arrives: it must not replay maya's bypass.
+      unlabel(MAYA);
+      label(TOM);
+      api.state.issueEventsLag = 1;
+      expect(await runLabeled({ head: fakeSha(0xbad), by: TOM })).toBe("published");
+      expect(lastCheck()).toMatchObject({ conclusion: "failure" });
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toContainEqual([
+        "removed",
+        "maya",
+      ]);
+      expect(await mergedUnderBreakGlass(t.db, await changeId(), HEAD_SHA)).toBe(false);
+    });
+
+    it("I-BG-28 nit 2 (F2g): the store refuses a second applied row while one of the change is active", async () => {
+      label(MAYA);
+      // Only to create the change and its row ids; the rows below are written by hand.
+      expect(await run({ data: { trigger: "review" } })).toBe("published");
+      const id = await changeId();
+      const change = await t.db
+        .selectFrom("changes")
+        .select("repository_id")
+        .where("id", "=", id)
+        .executeTakeFirstOrThrow();
+      const applied = (headSha: string, labelEventId: number) => ({
+        repositoryId: change.repository_id,
+        changeId: id,
+        prNumber: PR_NUMBER,
+        headSha,
+        kind: "applied" as const,
+        reason: null,
+        actor: { id: MAYA.id, login: MAYA.login },
+        role: "maintain" as const,
+        self: false,
+        policyMode: "enforce" as const,
+        labelEventAt: FIXED_NOW,
+        labelEventId,
+        createdAt: FIXED_NOW,
+      });
+      const wrote = await t.db
+        .transaction()
+        .execute(async (tx) => [
+          await insertAuditRow(tx, applied(HEAD_SHA, 1)),
+          await insertAuditRow(tx, applied(fakeSha(0xbee), 2)),
+        ]);
+      expect(wrote).toEqual([true, false]);
+      expect((await auditRows()).map((r) => [r.kind, r.head_sha])).toEqual([["applied", HEAD_SHA]]);
+    });
+
+    it("I-BG-29 nit 3: a label run rolled back by a mode change at publish time is sent again with its filters", async () => {
+      label(MAYA);
+      // The mode is rolled back to report between the facts read and the check-run write: the
+      // mutation gate refuses the write (mode_report) and the transaction rolls back.
+      api.afterNext("GET", new RegExp(`/commits/${HEAD_SHA}/check-runs$`), async () => {
+        await setMode("report");
+      });
+      expect(await runLabeled()).toBe("stale");
+      expect(await auditRows()).toEqual([]);
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      expect(queued.map((j) => j.singleton_key)).toContain(
+        `policy:breakglass:${await changeId()}:${HEAD_SHA}:${EVAL_DATA.deliveryId}`,
+      );
+      const resent = queued.find((j) => j.singleton_key?.startsWith("policy:breakglass:"));
+      expect(resent?.data).toMatchObject({
+        breakGlassHeadSha: HEAD_SHA,
+        breakGlassActorId: MAYA.id,
+      });
+    });
+  });
 });

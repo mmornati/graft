@@ -94,7 +94,7 @@ Job data: `{ installationId, repositoryId, owner, repo, after: sha, before: sha 
 ## 6. CI results (`guard.observe`, read part)
 
 1. Same skips as `guard.track`. If the SHA is not a tracked default-branch commit, follow D13.
-2. Read check runs (`filter=latest`, `per_page=100`, at most 5 pages) and, when `statuses: read` is present, the combined status (`per_page=100`, at most 3 pages). Skip Graft's own check runs. Apply `guard.checks` (D17) at classification time: a key outside the list is stored as `ignored` with `filtered = true`.
+2. Read check runs (`filter=all` since step 4 review 2, `per_page=100`, at most 5 pages; a truncated read makes every result of the commit `ignored`) and, when `statuses: read` is present, the combined status (`per_page=100`, at most 3 pages). Skip Graft's own check runs. Apply `guard.checks` (D17) at classification time: a key outside the list is stored as `ignored` with `filtered = true`.
 3. Upsert one `ci_results` row per (repository, sha, key): `name`, `source`, `class`, `completed_at`, `html_url` (only if it starts with the configured GitHub web base URL; otherwise NULL), `observed_at`. A newer `completed_at` replaces an older one. An older one never overwrites.
 4. Run detection (§7) for the keys whose class changed in this upsert, and for every open (`confirming`) event of the repository.
 
