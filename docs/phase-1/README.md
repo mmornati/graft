@@ -73,6 +73,8 @@ Detailed spec: [step-2-approvals.md](step-2-approvals.md). It deviates from the 
 
 ### Step 3 — Break-glass and audit log (week 8)
 
+Detailed spec: [step-3-break-glass.md](step-3-break-glass.md). It adds one rule the bullets below leave open: the break-glass binds to the head SHA in the signed `labeled` delivery, and is refused when the live head differs (its D4).
+
 - Label `graft:break-glass` (name configurable). On `labeled`, Graft checks the **sender's** permission at that moment: only `maintain` or `admin` counts; anyone else's label is ignored and reported.
 - A valid break-glass applies to the head SHA at the time of labelling; a new push needs a new label. It writes an `audit_log` row (repository, PR, head SHA, actor, at, mode), adds a line to the managed comment, and marks the PR for the post-merge guard as "merged under break-glass".
 - Report mode: the row is written and the check summary says "would bypass"; the conclusion stays `neutral`.
