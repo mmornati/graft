@@ -165,4 +165,5 @@ nav:
       - "Step 2: Approvals": phase-1/step-2-approvals.md
       - "Step 3: Break-glass": phase-1/step-3-break-glass.md
       - "Step 4: Guard detection": phase-1/step-4-guard-detection.md
+      - "Step 5: Revert PRs": phase-1/step-5-revert-prs.md
       - Human to-do: phase-1/HUMAN-TODO.md
