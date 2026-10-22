@@ -6,6 +6,7 @@ import { sql } from "kysely";
 import type { Config } from "../config/index.js";
 import type { Db } from "../db/client.js";
 import { hasMembersRead } from "../modes/index.js";
+import { countAppliedSince } from "../modules/audit/index.js";
 import { resolveCeiling } from "../modules/modes/cli.js";
 import { modesOf } from "../modules/modes/effective.js";
 import { listRepositoryModeRows } from "../modules/modes/store.js";
@@ -297,6 +298,17 @@ export async function runDoctor(
       `${enforcingWithoutMembers} repositories enforcing policy without members:read (team constraints will fail)`,
     );
   } else add("teams", "OK", "no repository enforces policy without members:read");
+
+  // break_glass (Phase 1 step 3, T7): every bypass in the last 7 days, so operators notice them
+  const bypasses = await countAppliedSince(db, id, ago(7 * DAY_MS));
+  if (bypasses.length > 0) {
+    const total = bypasses.reduce((n, b) => n + b.n, 0);
+    add(
+      "break_glass",
+      "WARN",
+      `break-glass applied in the last 7 days: ${total} (${bypasses.map((b) => `${b.fullName} ${b.n}`).join(", ")})`,
+    );
+  } else add("break_glass", "OK", "no break-glass applied in the last 7 days");
   return checks;
 }
 

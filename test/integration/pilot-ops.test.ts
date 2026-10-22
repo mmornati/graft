@@ -179,6 +179,7 @@ describe("pilot doctor", () => {
       ["OK", "permissions"],
       ["OK", "modes"],
       ["OK", "teams"],
+      ["OK", "break_glass"],
     ]);
     expect(res.out).toContain("graft-sandbox/api");
     const json = JSON.parse(
@@ -188,8 +189,40 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(13);
+    expect(json.checks).toHaveLength(14);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
+  });
+
+  it("I-BG-14 doctor: a break-glass applied in the last 7 days is a WARN per repository, and the exit code stays 0", async () => {
+    const change = await healthy();
+    const audit = (kind: string, at: Date) =>
+      sql`insert into audit_log (repository_id, change_id, pr_number, head_sha, kind, reason,
+        actor_id, actor_login, actor_role, policy_mode, created_at)
+        values (${PILOT_A.repo}, ${change}, 1, ${SHA(1)}, ${kind},
+          ${kind === "ignored" ? "role_too_low" : null}, 7, 'maya', 'maintain', 'enforce', ${at})`.execute(
+        t.db,
+      );
+    // Older than 7 days, and an ignored label: neither is a bypass to report.
+    await audit("applied", ago(8 * DAY));
+    await audit("ignored", ago(HOUR));
+    let res = await withCrons(() =>
+      run("pilot", "doctor", "--installation", String(PILOT_A.id), "--json"),
+    );
+    let checks = JSON.parse(res.out).checks as { id: string; status: string; detail: string }[];
+    expect(checks.find((c) => c.id === "break_glass")).toMatchObject({ status: "OK" });
+
+    await audit("applied", ago(DAY));
+    await audit("removed", ago(HOUR));
+    res = await withCrons(() => run("pilot", "doctor", "--installation", String(PILOT_A.id)));
+    expect(res.code, res.out).toBe(0);
+    expect(res.out).toMatch(
+      /^WARN\s+break_glass: break-glass applied in the last 7 days: 1 \(graft-sandbox\/api 1\)$/m,
+    );
+    res = await withCrons(() =>
+      run("pilot", "doctor", "--installation", String(PILOT_A.id), "--json"),
+    );
+    checks = JSON.parse(res.out).checks;
+    expect(checks.filter((c) => c.status !== "OK").map((c) => c.id)).toEqual(["break_glass"]);
   });
 
   it("I-DOC-2 failed jobs, no delivery in 8 days and an over-budget repository are FAILs; --json has the shape", async () => {
@@ -248,12 +281,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(13);
+    expect(checks).toHaveLength(14);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(13);
+    expect(JSON.parse(missing.out).checks).toHaveLength(14);
     expect(missing.err).toBe("");
   });
 
@@ -378,6 +411,12 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
   });
   await sql`insert into mode_changes (repository_id, key, from_value, to_value, actor, reason)
     values (${o.repo}, 'policy_mode', 'report', 'enforce', 'op', 'seed')`.execute(t.db);
+  // Phase 1 step 3: a break-glass row (it holds a login).
+  await sql`insert into audit_log (repository_id, change_id, pr_number, head_sha, kind, actor_id,
+    actor_login, actor_role, policy_mode, created_at)
+    values (${o.repo}, ${change}, 1, ${head}, 'applied', ${80 + o.seq}, 'maint', 'maintain', 'enforce', now())`.execute(
+    t.db,
+  );
   await addReviewer(t.db, { changeId: change, userId: 70 + o.seq });
   await t.db
     .insertInto("reviewer_check_denials")
@@ -466,6 +505,7 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
     mode_changes: await n(
       sql`select count(*) as n from mode_changes where repository_id = ${repo}`,
     ),
+    audit_log: await n(sql`select count(*) as n from audit_log where repository_id = ${repo}`),
     pgboss_jobs: await n(
       sql`select count(*) as n from pgboss.job where data->>'installationId' = ${String(id)} or data->'payload'->'installation'->>'id' = ${String(id)}`,
     ),
@@ -884,13 +924,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0009_enforce"]);
+    expect(down).toEqual(["0010_audit_log"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0009_enforce"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0010_audit_log"]);
     }
   });
 });

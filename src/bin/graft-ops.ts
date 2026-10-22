@@ -1,6 +1,6 @@
 /**
  * The operations half of `pnpm graft` (step 6, T9): `pilot`, `baseline`, `gate`, `incident`,
- * `metrics` and, from Phase 1 step 1, `mode`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
+ * `metrics` and, from Phase 1 step 1, `mode` (step 3 adds `audit`). `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
  * running with an empty environment and without `db`, `config` or `modules` (U-CLI-6).
  *
  * Every command loads `.env` and the configuration (a ConfigError prints its message only and
@@ -32,6 +32,16 @@ import { refuseAllGate } from "../github/mutation-guard.js";
 import { RateLimitAbort } from "../github/rate-limit.js";
 import { unconfiguredLlm } from "../llm/index.js";
 import type { ModeKey } from "../modes/index.js";
+import {
+  AUDIT_LIMIT_DEFAULT,
+  AUDIT_LIMIT_MAX,
+  auditEntries,
+  auditJson,
+  isAuditKind,
+  parseSince,
+  renderAuditLine,
+  repositoryIdsByName,
+} from "../modules/audit/index.js";
 import { listChangesToPoll, pollReactions } from "../modules/intent/index.js";
 import {
   notEffectiveNotes,
@@ -138,6 +148,8 @@ const USAGE = `usage:
                  [--mcp-write off|on] --reason "<text>" [--actor <name>]
   graft mode history --repo <owner/repo> [--limit <1..200>] [--json]
   graft mode refresh-permissions --installation <id>
+  graft audit list --repo <owner/repo> [--since <ISO date>] [--kind applied|ignored|stale|removed]
+                   [--limit <1..500, default 50>] [--json]
 `;
 
 class UsageError extends Error {
@@ -804,6 +816,43 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
   throw new UsageError();
 }
 
+/** The `audit` group (Phase 1 step 3, spec §8). Reads the database only. */
+async function audit(sub: string | undefined, rest: string[], r: Run): Promise<number> {
+  if (sub !== "list") throw new UsageError();
+  const v = args(rest, {
+    repo: { type: "string" },
+    since: { type: "string" },
+    kind: { type: "string" },
+    limit: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const repo = parseRepo(str(v.repo));
+  const sinceText = str(v.since);
+  const since = sinceText === undefined ? undefined : parseSince(sinceText);
+  if (since === null)
+    throw new UsageError("--since must be an ISO date (YYYY-MM-DD or a timestamp)");
+  const kindText = str(v.kind);
+  if (kindText !== undefined && !isAuditKind(kindText)) {
+    throw new UsageError("--kind must be applied, ignored, stale or removed");
+  }
+  const limit = parsePositiveInt("--limit", str(v.limit), AUDIT_LIMIT_DEFAULT);
+  if (limit > AUDIT_LIMIT_MAX) throw new UsageError(`--limit must be 1 to ${AUDIT_LIMIT_MAX}`);
+  const repositoryIds = await repositoryIdsByName(r.db, repo);
+  if (repositoryIds.length === 0) {
+    r.err("unknown repository\n");
+    return 1;
+  }
+  const rows = await auditEntries(r.db, {
+    repositoryIds,
+    since,
+    kind: kindText !== undefined && isAuditKind(kindText) ? kindText : undefined,
+    limit,
+  });
+  if (v.json) r.out(`${JSON.stringify(auditJson(rows))}\n`);
+  else for (const row of rows) r.out(`${renderAuditLine(row)}\n`);
+  return 0;
+}
+
 export async function main(
   argv: string[],
   io: CliIo,
@@ -812,7 +861,9 @@ export async function main(
   const out = (s: string) => io.out(toTerminalSafe(s));
   const err = (s: string) => io.err(toTerminalSafe(s));
   const [group, sub, ...rest] = argv;
-  if (!["pilot", "baseline", "gate", "incident", "metrics", "mode"].includes(group ?? "")) {
+  if (
+    !["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit"].includes(group ?? "")
+  ) {
     err(USAGE);
     return 2;
   }
@@ -844,6 +895,7 @@ export async function main(
     if (group === "gate") return await gate(sub, rest, run);
     if (group === "metrics") return await metrics(sub, rest, run);
     if (group === "mode") return await mode(sub, rest, run);
+    if (group === "audit") return await audit(sub, rest, run);
     return await incident(sub, rest, run);
   } catch (e) {
     if (e instanceof UsageError) {
