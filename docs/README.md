@@ -24,6 +24,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | [graft-yaml.md](graft-yaml.md) | The full `graft.yaml` v1 reference. Example: [examples/graft.yaml](examples/graft.yaml). |
 | [features/evaluation.md](features/evaluation.md) | `pnpm eval`: case sets, encryption, labeling, live runs, the synthetic CI baseline. |
 | [features/modes.md](features/modes.md) | Report and enforce modes, `pnpm graft mode`, the ceiling, rollback, the mutation guard. |
+| [features/guard.md](features/guard.md) | The post-merge guard: default-branch history, CI result classes, the culprit rule, confirmation, the report-mode comment, `guard.checks`, `pnpm graft guard list`. |
 | [features/pilots-and-gate.md](features/pilots-and-gate.md) | Pilot CLI, the Phase 0 gate, review-time baseline, rollup, incidents. |
 | [e2e.md](e2e.md) | The live end-to-end runner against a real sandbox repository. |
 

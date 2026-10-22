@@ -1,5 +1,5 @@
 /**
- * The neutral regression suite (Phase 1 step 1, T10; Phase 1 step 2, T11).
+ * The neutral regression suite (Phase 1 step 1, T10; Phase 1 step 2, T11; Phase 1 step 4, T12).
  *
  * Every Phase 1 step adds its feature to this suite in report mode. A failure here means Graft
  * would change outcomes for a team that has not opted in.
@@ -19,6 +19,7 @@ import {
   type MutationRefusedError,
 } from "../../src/github/mutation-guard.js";
 import { buildServer } from "../../src/http/server.js";
+import { confirmEvent } from "../../src/modules/guard/index.js";
 import { modesApplyJob, mutationGate } from "../../src/modules/modes/index.js";
 import { fanoutTeamChange } from "../../src/modules/policy/team-fanout.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
@@ -64,6 +65,10 @@ const TEAM_POLICY = EXAMPLE_POLICY.replace(
   "match: { author: agent, risk: sensitive }\n    require: { humans: 1, team: security }",
 );
 const OTHER_INSTALLATION = INSTALLATION_ID + 1;
+/** Phase 1 step 4: the default branch after PR 2 is merged (M) and one more commit (N). */
+const MERGE_SHA = fakeSha(0x4e01);
+const NEXT_SHA = fakeSha(0x4e02);
+const ACTIONS_APP = 15368;
 
 interface Profile {
   name: "default" | "max";
@@ -82,6 +87,7 @@ const PROFILES: Profile[] = [
       pull_requests: "write",
       checks: "write",
       members: "read",
+      statuses: "read",
     },
   },
   {
@@ -94,6 +100,7 @@ const PROFILES: Profile[] = [
       pull_requests: "write",
       checks: "write",
       members: "read",
+      statuses: "read",
     },
   },
 ];
@@ -108,11 +115,22 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
   // The policy check's mode line before the mode changes, after the first and after the second.
   const lines = { before: "", first: "", second: "" };
   const writesAround = { before: 0, afterFirst: 0 };
+  /** Phase 1 step 4: every feature a client was built for, and the guard scenario's results. */
+  const featureClients: (string | null)[] = [];
+  const guard = {
+    requestsAtEnd: 0,
+    featureClients: [] as (string | null)[],
+    gateFeatures: [] as string[],
+    writesBeforeReplay: 0,
+    writesAfterReplay: 0,
+  };
   // default: enforce, then back to report. max: it starts at enforce, so report (a rollback) first.
   const FIRST = profile.name === "max" ? "report" : "enforce";
   const SECOND = profile.name === "max" ? "enforce" : "report";
 
-  const config = () => testConfig({ GRAFT_MODE_CEILING: profile.ceiling });
+  // The guard observes right away (no delay) so that the suite's drain sees its jobs.
+  const config = () =>
+    testConfig({ GRAFT_MODE_CEILING: profile.ceiling, GRAFT_GUARD_OBSERVE_DELAY_SECONDS: "0" });
   const policyRun = () =>
     api.state.checkRuns.filter((c) => c.name === "graft/policy" && c.head_sha === HEAD_2).at(0);
   const writes = () => api.requests.filter((r) => r.method !== "GET" && r.method !== "HEAD");
@@ -178,7 +196,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     t = await createTestApp({
       supervise: true,
       llm: scenarioLlm(),
-      config: { GRAFT_MODE_CEILING: profile.ceiling },
+      config: { GRAFT_MODE_CEILING: profile.ceiling, GRAFT_GUARD_OBSERVE_DELAY_SECONDS: "0" },
     });
     await truncateAll(t.db);
     clearPolicyCache();
@@ -189,7 +207,14 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       gateCalls.push({ feature: q.feature, allowed: v.allowed });
       return v;
     };
-    t.deps.github = fakeGitHubFactory(api, gate, (e) => refused.push(e));
+    const factory = fakeGitHubFactory(api, gate, (e) => refused.push(e));
+    t.deps.github = {
+      asApp: () => factory.asApp(),
+      forInstallation: (id, opts) => {
+        featureClients.push(opts?.feature ?? null);
+        return factory.forInstallation(id, opts);
+      },
+    };
     api.state.installationPermissions = profile.permissions;
     server = await buildServer(t.deps);
     await startWorker(t.deps.queue, t.deps.registry, jobContext(t), {
@@ -344,6 +369,85 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await transfer(OTHER_INSTALLATION, "n-transfer-away");
     await transfer(INSTALLATION_ID, "n-transfer-back");
     await apply();
+    // The transfer reset the modes; the max profile goes back to every mode at its maximum.
+    if (profile.name === "max") {
+      await t.db
+        .updateTable("repositories")
+        .set({ policy_mode: "enforce", guard_mode: "enforce", mcp_write: "on" })
+        .execute();
+    }
+    // The pull request is merged last: the mode changes above re-evaluate open PRs only.
+    const merged = api.state.pulls.get(PR_NUMBER);
+    if (!merged) throw new Error("no pull");
+    // Phase 1 step 4 (T12): the guard. PR 2 is merged into main as M; CI was green on the
+    // parent (B2), is red on M, and red again on the next commit N. Both pushes and the check
+    // runs arrive as webhooks; the confirm job runs too.
+    merged.state = "closed";
+    merged.merged = true;
+    merged.merge_commit_sha = MERGE_SHA;
+    merged.merged_at = "2026-10-14T11:40:00Z";
+    merged.closed_at = "2026-10-14T11:40:00Z";
+    api.state.history.set(B2, { parents: [] });
+    api.state.history.set(MERGE_SHA, { parents: [B2] });
+    api.state.history.set(NEXT_SHA, { parents: [MERGE_SHA] });
+    api.state.commitPulls.set(MERGE_SHA, [PR_NUMBER]);
+    const ciRun = (sha: string, conclusion: string) => {
+      const id = api.state.nextId++;
+      api.state.checkRuns.push({
+        id,
+        name: "test",
+        head_sha: sha,
+        status: "completed",
+        conclusion,
+        external_id: "",
+        output: { title: "", summary: "" },
+        app: { id: ACTIONS_APP },
+        completed_at: "2026-10-14T11:45:00Z",
+        html_url: `https://github.com/${FULL_NAME}/runs/${id}`,
+      });
+    };
+    const pushMain = (delivery: string, before: string, after: string) =>
+      post("push.default", delivery, (p) => {
+        p.before = before;
+        p.after = after;
+      });
+    ciRun(B2, "success");
+    await pushMain("n-guard-base", "0".repeat(40), B2);
+    ciRun(MERGE_SHA, "failure");
+    api.state.branches.set("main", MERGE_SHA);
+    putContent(api, MERGE_SHA, `${TEAM_POLICY}\n# tightened\n`);
+    await pushMain("n-guard-merge", B2, MERGE_SHA);
+    ciRun(NEXT_SHA, "failure");
+    api.state.branches.set("main", NEXT_SHA);
+    await pushMain("n-guard-next", MERGE_SHA, NEXT_SHA);
+    await post("check_run.completed", "n-guard-run", (p) => {
+      const run = p.check_run as { head_sha: string; check_suite: { head_sha: string } };
+      run.head_sha = NEXT_SHA;
+      run.check_suite.head_sha = NEXT_SHA;
+    });
+    const confirmJobs = await sql<{ data: { eventId: string } }>`
+      select data from pgboss.job where name = 'guard.confirm'`.execute(t.db);
+    expect(confirmJobs.rows).toHaveLength(1);
+    await confirmEvent(confirmJobs.rows[0]?.data as { eventId: string }, jobContext(t));
+    await drain();
+    guard.requestsAtEnd = api.requests.length;
+    guard.featureClients = [...featureClients];
+    guard.gateFeatures = gateCalls.map((c) => c.feature);
+    // N-9: a second observe and a replayed check_run.completed, also after the stored comment id
+    // was lost (a retry after the POST but before the commit): no write.
+    guard.writesBeforeReplay = writes().length;
+    await post("check_run.completed", "n-guard-replay", (p) => {
+      const run = p.check_run as { head_sha: string; check_suite: { head_sha: string } };
+      run.head_sha = NEXT_SHA;
+      run.check_suite.head_sha = NEXT_SHA;
+    });
+    await t.db.updateTable("guard_events").set({ comment_id: null }).execute();
+    await post("check_run.completed", "n-guard-replay-2", (p) => {
+      const run = p.check_run as { head_sha: string; check_suite: { head_sha: string } };
+      run.head_sha = MERGE_SHA;
+      run.check_suite.head_sha = MERGE_SHA;
+    });
+    guard.writesAfterReplay = writes().length;
   }, 240_000);
 
   afterAll(async () => {
@@ -373,9 +477,11 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
         if (r.body && "conclusion" in r.body) expect(r.body.conclusion).toBe("neutral");
         expect(nonNeutral(r), JSON.stringify(r.body?.status)).toBe(false);
       }
-      const names = new Set(api.state.checkRuns.map((c) => c.name));
+      // Graft's own runs (step 4 adds other apps' CI runs on the default branch to the fake).
+      const own = api.state.checkRuns.filter((c) => c.app.id === 12345);
+      const names = new Set(own.map((c) => c.name));
       expect([...names].sort()).toEqual(["graft/intent", "graft/policy", "graft/provenance"]);
-      for (const run of api.state.checkRuns) {
+      for (const run of own) {
         if (run.status === "completed")
           expect(run.conclusion, `${run.name} ${run.id}`).toBe("neutral");
       }
@@ -430,7 +536,9 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       for (const r of all.filter((x) => nameOf(x) !== "graft/policy")) {
         expect(nonNeutral(r), `${nameOf(r)} ${JSON.stringify(r.body)}`).toBe(false);
       }
-      for (const run of api.state.checkRuns.filter((c) => c.name !== "graft/policy")) {
+      for (const run of api.state.checkRuns.filter(
+        (c) => c.name !== "graft/policy" && c.app.id === 12345,
+      )) {
         expect(run.conclusion, `${run.name} ${run.id}`).toBe("neutral");
       }
       // The gate is asked only for feature-client writes: one allowed `policy` answer per
@@ -448,6 +556,40 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       }
     });
   }
+
+  it(`N-1g [${profile.name}] the guard's only write is one comment on the culprit PR, with the marker`, async () => {
+    const rows = await t.db.selectFrom("guard_events").selectAll().execute();
+    expect(rows.map((r) => [r.failing_sha, r.status, r.confirm_reason])).toEqual([
+      [MERGE_SHA, "culprit_found", "next_commit"],
+    ]);
+    const guardComments = api.state.comments.filter((c) =>
+      c.body.startsWith("<!-- graft:guard-event "),
+    );
+    expect(guardComments).toHaveLength(1);
+    expect(guardComments[0]?.issue_number).toBe(PR_NUMBER);
+    expect(guardComments[0]?.body.split("\n")[0]).toBe(`<!-- graft:guard-event ${rows[0]?.id} -->`);
+    // Report mode in the default profile; enforce (effective) in max, which only changes the line.
+    expect(guardComments[0]?.body.split("\n").at(-1)).toBe(
+      profile.name === "max"
+        ? "Graft mode: enforce. Revert PRs are not available in this version; nothing was opened."
+        : "Graft mode: report. Graft opens nothing; this is what it would do.",
+    );
+    expect(rows[0]?.guard_mode).toBe(profile.name === "max" ? "enforce" : "report");
+  });
+
+  it(`N-8 [${profile.name}] no request used a phase1 route or a guard feature client`, () => {
+    const upTo = api.requests.slice(0, guard.requestsAtEnd);
+    for (const r of upTo) {
+      if (r.method === "GET" || r.method === "HEAD") continue;
+      expect(classifyWrite(r.method, r.path).kind, `${r.method} ${r.path}`).not.toBe("phase1");
+    }
+    expect(guard.featureClients).not.toContain("guard");
+    expect(guard.gateFeatures).not.toContain("guard");
+  });
+
+  it(`N-9 [${profile.name}] a second observe after confirmation and a replayed check_run.completed add no write`, () => {
+    expect(guard.writesAfterReplay).toBe(guard.writesBeforeReplay);
+  });
 
   it(`N-3 [${profile.name}] the guard refused nothing in the Phase 0 flows, and no job failed`, async () => {
     expect(refused.map((e) => e.message)).toEqual([]);
@@ -624,6 +766,13 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     breakGlass.refusedFrom = refused.length;
     const pull = api.state.pulls.get(PR_NUMBER);
     if (!pull) throw new Error("no pull");
+    // The step 4 guard scenario merged PR 2 earlier in this suite; break-glass needs an open PR,
+    // so it is reopened here with times after that merge (the change row then takes them).
+    pull.state = "open";
+    pull.merged = false;
+    pull.merge_commit_sha = null;
+    pull.merged_at = null;
+    pull.closed_at = null;
     breakGlass.labelledHead = pull.head.sha;
     api.state.permissions.set("maya", { id: 701, role: "maintain" });
     api.state.permissions.set("tom", { id: 702, role: "triage" });
@@ -631,7 +780,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     let eventId = 9000;
     const labelAction = async (action: "labeled" | "unlabeled", login: string, id: number) => {
       const events = api.state.issueEvents.get(PR_NUMBER) ?? [];
-      const at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+      const at = `2026-10-14T12:${String(minute++).padStart(2, "0")}:00Z`;
       events.push({
         id: eventId++,
         event: action,
@@ -655,7 +804,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await labelAction("labeled", "maya", 701);
     // A push after labelling: the bypass ends with it.
     pull.head.sha = breakGlass.nextHead;
-    pull.updated_at = `2026-10-14T11:${String(minute++).padStart(2, "0")}:00Z`;
+    pull.updated_at = `2026-10-14T12:${String(minute++).padStart(2, "0")}:00Z`;
     api.state.commits.set(PR_NUMBER, [
       makeCommit(
         breakGlass.nextHead,

@@ -1431,3 +1431,72 @@ describe("step 6: lookalike globs, warnings and the exact-text shortcut", () => 
     ]);
   });
 });
+
+describe("graft.yaml guard key (Phase 1 step 4)", () => {
+  // Computed with the code before this step (origin/main at 6e5885b).
+  const BEFORE: Record<string, string> = {
+    "docs/examples/graft.yaml": "15b4511afd2fc506ff72ebece14e5ee93fb97e2f9132c5d4fcbb462f9193fe71",
+    "minimal.yaml": "2eb972bc224ae0b92fddeb0637a3e45cc994530571651360f8b100fa96608ebf",
+    "non-ascii-glob.yaml": "c876d2138c082a10ddbebe91891ce21d084087138d4e86cc89f38dcf72fb60b7",
+  };
+
+  it("U-PGD-1 guard.checks parses; a file without guard keeps the hash it had before this step", () => {
+    const res = parse('version: 1\nguard:\n  checks: [test, "lint (node 24)", ci/jenkins, test]\n');
+    if (!res.ok) throw new Error(JSON.stringify(res.errors));
+    expect(res.policy.guard).toEqual({ checks: ["test", "lint (node 24)", "ci/jenkins"] });
+    // Its presence is part of the canonical form; nothing else changes.
+    const without = parse("version: 1\n");
+    if (!without.ok) throw new Error("parse failed");
+    expect(without.policy.guard).toBeUndefined();
+    expect(res.hash).not.toBe(without.hash);
+    const { guard: _guard, ...rest } = res.policy;
+    expect(rest).toEqual(without.policy);
+    // The evaluator ignores it: the same verdict with and without.
+    const facts: PolicyFacts = {
+      files: [{ path: "src/a.ts", previousPath: null }],
+      listingComplete: true,
+      size: { lines: 1, files: 1 },
+      risk: { value: "logic", final: true, source: "card" },
+      author: { kind: "human", agent: null },
+      labels: [],
+    };
+    expect(evaluatePolicy(res.policy, facts)).toEqual(evaluatePolicy(without.policy, facts));
+
+    const files: [string, Uint8Array][] = [
+      ["docs/examples/graft.yaml", EXAMPLE],
+      ...readdirSync(new URL("../fixtures/policy/", import.meta.url)).map(
+        (f) => [f, fixture(f)] as [string, Uint8Array],
+      ),
+    ];
+    let checked = 0;
+    for (const [name, bytes] of files) {
+      const r = parsePolicyText(bytes);
+      if (!r.ok) {
+        expect(BEFORE[name], name).toBeUndefined();
+        continue;
+      }
+      expect(r.hash, name).toBe(BEFORE[name]);
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(BEFORE).length);
+  });
+
+  it("U-PGD-2 empty list, 51 items, a 201-character name, a control character and an unknown key", () => {
+    const codes = (yaml: string) => codesOf(`version: 1\n${yaml}`);
+    expect(codes("guard: { checks: [] }\n")).toEqual(["wrong_type"]);
+    const many = Array.from({ length: 51 }, (_, i) => `c${i}`).join(", ");
+    expect(codes(`guard: { checks: [${many}] }\n`)).toEqual(["too_many_items"]);
+    expect(codes(`guard: { checks: [${"x".repeat(201)}] }\n`)).toEqual(["wrong_type"]);
+    expect(parse(`version: 1\nguard: { checks: ["${"x".repeat(200)}"] }\n`).ok).toBe(true);
+    expect(codes('guard: { checks: ["bad\\u0007name"] }\n')).toEqual(["wrong_type"]);
+    expect(codes('guard: { checks: [""] }\n')).toEqual(["wrong_type"]);
+    expect(codes("guard: { checks: test }\n")).toEqual(["wrong_type"]);
+    expect(codes("guard: [test]\n")).toEqual(["wrong_type"]);
+    const unknown = errorsOf("version: 1\nguard:\n  other: 1\n");
+    expect(unknown.map((e) => [e.code, e.key, e.location])).toEqual([
+      ["unknown_key", "other", "guard"],
+    ]);
+    // `auto_merge_reverts` is step 5: still an unknown key here.
+    expect(codes("guard: { auto_merge_reverts: [trivial] }\n")).toEqual(["unknown_key"]);
+  });
+});

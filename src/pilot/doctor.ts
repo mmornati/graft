@@ -5,7 +5,7 @@
 import { sql } from "kysely";
 import type { Config } from "../config/index.js";
 import type { Db } from "../db/client.js";
-import { hasMembersRead } from "../modes/index.js";
+import { hasMembersRead, hasStatusesRead } from "../modes/index.js";
 import { countAppliedSince } from "../modules/audit/index.js";
 import { resolveCeiling } from "../modules/modes/cli.js";
 import { modesOf } from "../modules/modes/effective.js";
@@ -31,6 +31,7 @@ export async function runDoctor(
     | "feedbackPollCron"
     | "metricsRollupCron"
     | "modeCeiling"
+    | "guardConfirmSeconds"
   >,
   o: { installationId: number; now: Date },
 ): Promise<Check[]> {
@@ -309,6 +310,38 @@ export async function runDoctor(
       `break-glass applied in the last 7 days: ${total} (${bypasses.map((b) => `${b.fullName} ${b.n}`).join(", ")})`,
     );
   } else add("break_glass", "OK", "no break-glass applied in the last 7 days");
+
+  // guard (Phase 1 step 4, T10): without statuses:read the guard reads check runs only
+  const perms = await db
+    .selectFrom("installations")
+    .select(["permissions", "permissions_read_at"])
+    .where("id", "=", id)
+    .where("deleted_at", "is", null)
+    .executeTakeFirst();
+  if (perms && !hasStatusesRead(perms.permissions_read_at === null ? null : perms.permissions)) {
+    add(
+      "guard_statuses",
+      "WARN",
+      "installation without statuses:read (guard reads check runs only)",
+    );
+  } else add("guard_statuses", "OK", "the guard can read commit statuses");
+
+  // guard (Phase 1 step 4, T10): events still confirming past twice the window
+  const stuck = await sql<{ n: string }>`
+    select count(*)::text as n from guard_events
+    where repository_id in (select id from repositories where installation_id = ${id})
+      and status = 'confirming'
+      and coalesce(detected_at, created_at) < ${ago(2 * config.guardConfirmSeconds * 1000)}`.execute(
+    db,
+  );
+  const nStuck = num(stuck.rows[0]?.n);
+  if (nStuck > 0) {
+    add(
+      "guard_confirming",
+      "WARN",
+      `${nStuck} guard events stuck in confirming past twice the window`,
+    );
+  } else add("guard_confirming", "OK", "no guard event is stuck in confirming");
   return checks;
 }
 

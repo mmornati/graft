@@ -26,3 +26,10 @@ Things only a person can do. The developer agent never ticks these. Each item na
 - [ ] **On a sandbox PR in enforce mode:** label as a maintainer → `success`; push → back to the normal conclusion; label as a triage user → ignored. Then run `pnpm graft audit list --repo …` and check all three rows. Who: repo owner.
 - [ ] **Check the issue events API on a real PR** (T1 could not, offline): the `labeled` event's `actor` is the person who added the label, events are listed oldest first, and the installation token can read them with `issues: read` / `pull_requests: read`. Who: operator.
 - [ ] **Run the step 3 manual smoke test** against a real or tunnelled App (not run by the developer agent). Who: operator.
+
+## Step 4: guard detection
+
+- [ ] **Accept `statuses: read` and the `check_suite` and `status` events** on every installation, then `pnpm graft mode refresh-permissions --installation <id>`. Who: org owner, then operator.
+- [ ] **On a sandbox repository**, merge a PR that breaks a check on `main`, then push one more commit. Check that a guard comment appears on the culprit PR and that `pnpm graft guard list --repo …` shows `culprit_found`. Then re-run a failing check until it passes on a fresh break, and check that the event is `flaky` with no comment. This also checks the T1 (a) answer: the guard must see other apps' `check_run.completed` deliveries. Who: repo owner.
+- [ ] **Tell pilot teams** that the guard comments on merged PRs that broke `main`, and that nothing is reverted until they opt in to `guard_mode: enforce` (step 5). Who: product owner.
+- [ ] **Run the step 4 manual smoke test** (spec §15: `push.default.json`, then `check_run.completed.json`, through `pnpm webhook:send` with a dev server and worker) and record it in the PR description; the developer agent ran only the offline suite. Who: operator.

@@ -171,7 +171,8 @@ const event = (fixture: string, deliveryId: string) =>
 describe("approvals Graft can enforce (integration)", () => {
   it("I-ENF-1 migration 0009 down then up; down needs no pending row", async () => {
     await truncateAll(t.db);
-    // Step 3's migration sits on top of 0009.
+    // Steps 3 and 4's migrations sit on top of 0009.
+    expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
     expect(await migrateDownOne(t.db)).toEqual(["0009_enforce"]);
     try {
@@ -184,7 +185,7 @@ describe("approvals Graft can enforce (integration)", () => {
         where conname = 'policy_verdicts_check_conclusion_check'`.execute(t.db);
       expect(check.rows[0]?.def).not.toContain("pending");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0009_enforce", "0010_audit_log"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0009_enforce", "0010_audit_log", "0011_guard"]);
     }
     const cols = await sql<{ column_name: string }>`
       select column_name from information_schema.columns

@@ -18,6 +18,12 @@ export interface Policy {
   sensitivePaths: string[];
   default: { humans: number; teams: string[] };
   rules: PolicyRule[];
+  /**
+   * Phase 1 step 4 (§9): the post-merge guard's scope. Absent when the file has no `guard` key, so
+   * the canonical form (and the policy hash) of a file without it is unchanged. The evaluator
+   * ignores it.
+   */
+  guard?: { checks?: string[] };
 }
 export interface PolicyRule {
   index: number;
@@ -42,6 +48,8 @@ export const RULE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,79}$/;
 /** The step 2 `Graft-Agent` value rule. */
 export const AGENT_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:/@+()-]{0,99}$/;
 const LABEL_RE = /^[^\p{Cc}]{1,50}$/u;
+/** Phase 1 step 4: a check name or status context, 1-200 characters, no control character. */
+export const GUARD_CHECK_RE = /^[^\p{Cc}]{1,200}$/u;
 
 const oneOrList = <T extends z.ZodType, L extends z.ZodType>(item: T, list: L) =>
   z.union([item, list]);
@@ -133,6 +141,19 @@ const ruleSchema = z.strictObject(
   { error: "wrong_type" },
 );
 
+const guardSchema = z.strictObject(
+  {
+    checks: z
+      .array(z.string({ error: "wrong_type" }).regex(GUARD_CHECK_RE, { error: "wrong_type" }), {
+        error: "wrong_type",
+      })
+      .min(1, { error: "wrong_type" })
+      .max(LIMITS.guardChecks, { error: "too_many_items" })
+      .optional(),
+  },
+  { error: "wrong_type" },
+);
+
 export const policySchema = z.strictObject(
   {
     version: z.literal(1),
@@ -142,6 +163,7 @@ export const policySchema = z.strictObject(
       .array(ruleSchema, { error: "wrong_type" })
       .max(LIMITS.rules, { error: "too_many_rules" })
       .optional(),
+    guard: guardSchema.optional(),
   },
   { error: "wrong_type" },
 );
@@ -349,10 +371,15 @@ export function normalizePolicy(data: RawPolicy): Policy {
     return { index: i + 1, name: r.name ?? null, match, action };
   });
   const def = data.default?.require;
-  return {
+  const policy: Policy = {
     version: 1,
     sensitivePaths: dedupe(data.sensitive_paths ?? []),
     default: { humans: def?.humans ?? 1, teams: dedupe(asList(def?.team) ?? []) },
     rules,
   };
+  // Only when present: a file without `guard` keeps its canonical form and its hash.
+  if (data.guard !== undefined) {
+    policy.guard = data.guard.checks === undefined ? {} : { checks: dedupe(data.guard.checks) };
+  }
+  return policy;
 }

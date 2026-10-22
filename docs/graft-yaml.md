@@ -85,6 +85,9 @@ rules:
 | `approve` | `auto` | Anything else: `approve_invalid`. |
 | `block` | `true` | Anything else, `false` included: `block_invalid`. |
 
+| `guard` | mapping | Optional (Phase 1 step 4). Only `checks` is allowed (`unknown_key`). The policy engine ignores it. |
+| `guard.checks` | list of strings | Optional, 1 to 50 exact check names or status contexts, 1 to 200 characters each, no control characters, case-sensitive. When present, only these checks can open a [post-merge guard](features/guard.md) event. It is read from the last green commit before the candidates, never from the commit that went red. An empty list, a long name or a control character: `wrong_type`; more than 50: `too_many_items`. |
+
 Unknown keys at any level are errors (`unknown_key`).
 
 `approve: auto` may use only `risk`, `only_paths` and `size`. `author`, `agent` and `labels` are controlled by whoever writes the pull request (trailers can be forged, and anyone with triage access can add labels), and `paths` is any-of, so they can only tighten: use them in `require` and `block` rules.

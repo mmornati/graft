@@ -10,6 +10,7 @@ import {
   fakeSha,
   OWNER,
   REPO,
+  REPO_ID,
 } from "./github-builders.js";
 
 export interface FakeComment {
@@ -34,6 +35,22 @@ export interface FakeCheckRun {
   app: { id: number };
   actions?: { label: string; identifier: string; description: string }[];
   completed_at?: string | null;
+  /** Phase 1 step 4: the run's page (guard comments link the first failing check). */
+  html_url?: string;
+}
+
+/** Phase 1 step 4: a commit status (`GET /commits/{sha}/status` serves the latest per context). */
+export interface FakeStatus {
+  context: string;
+  state: "success" | "failure" | "error" | "pending";
+  target_url?: string | null;
+  updated_at: string;
+}
+
+/** Phase 1 step 4: a commit of the default branch's history (`GET /commits?sha=`). */
+export interface FakeMainCommit {
+  parents: string[];
+  date?: string;
 }
 
 export interface RecordedApiRequest {
@@ -146,6 +163,14 @@ export function createFakeGitHubApi(
     commentsPageSize: null as number | null,
     checkRunsPageSize: null as number | null,
     nextId: 1000,
+    /** Phase 1 step 4: `GET /repos/{o}/{r}` (the default branch is read from here). */
+    repository: { id: REPO_ID, default_branch: "main", private: true },
+    /** Phase 1 step 4: the commit graph `GET /commits?sha=` walks (first parents only). */
+    history: new Map<string, FakeMainCommit>(),
+    /** Phase 1 step 4: `GET /commits/{sha}/pulls`, as PR numbers looked up in `pulls`. */
+    commitPulls: new Map<string, number[]>(),
+    /** Phase 1 step 4: `GET /commits/{sha}/status`. */
+    statuses: new Map<string, FakeStatus[]>(),
   };
   const requests: RecordedApiRequest[] = [];
   const failures: Failure[] = [];
@@ -280,7 +305,9 @@ export function createFakeGitHubApi(
         ? json(404, { message: "Not Found" })
         : json(200, { url: `https://api.github.com${path}`, role: "member", state: membership });
     }
-    if (!path.startsWith(`${repoPrefix}/`)) return json(404, { message: "Not Found (fake repo)" });
+    if (path !== repoPrefix && !path.startsWith(`${repoPrefix}/`)) {
+      return json(404, { message: "Not Found (fake repo)" });
+    }
     const rest = path.slice(repoPrefix.length);
     const is = (meth: string, re: RegExp): RegExpExecArray | null =>
       method === meth ? re.exec(rest) : null;
@@ -418,6 +445,60 @@ export function createFakeGitHubApi(
         );
       }
       return json(200, { total_count: runs.length, check_runs: runs.slice().reverse() });
+    }
+    if (method === "GET" && rest === "") {
+      return json(200, {
+        id: state.repository.id,
+        name: opts.repo ?? REPO,
+        full_name: `${opts.owner ?? OWNER}/${opts.repo ?? REPO}`,
+        private: state.repository.private,
+        default_branch: state.repository.default_branch,
+      });
+    }
+    if (is("GET", /^\/commits$/)) {
+      // First parents from `sha`: enough for a first-parent walk.
+      const start = url.searchParams.get("sha") ?? "";
+      const perPage = Number(url.searchParams.get("per_page") ?? "30");
+      if (!state.history.has(start)) return json(404, { message: "No commit found for SHA" });
+      const out: Record<string, unknown>[] = [];
+      let cur: string | undefined = start;
+      while (cur !== undefined && out.length < perPage) {
+        const c = state.history.get(cur);
+        if (!c) break;
+        out.push({
+          sha: cur,
+          commit: {
+            message: "GRAFT_CANARY_COMMIT_MESSAGE",
+            committer: { date: c.date ?? "2026-10-14T11:00:00Z" },
+          },
+          parents: c.parents.map((sha) => ({ sha })),
+        });
+        cur = c.parents[0];
+      }
+      return json(200, out);
+    }
+    m = is("GET", /^\/commits\/([0-9a-f]{40})\/pulls$/);
+    if (m) {
+      const numbers = state.commitPulls.get(m[1] as string) ?? [];
+      return json(
+        200,
+        numbers.flatMap((n) => {
+          const pull = state.pulls.get(n);
+          return pull ? [pull] : [];
+        }),
+      );
+    }
+    m = is("GET", /^\/commits\/([0-9a-f]{40})\/status$/);
+    if (m) {
+      const all = state.statuses.get(m[1] as string) ?? [];
+      const perPage = Number(url.searchParams.get("per_page") ?? "30");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      return json(200, {
+        state: all.some((x) => x.state !== "success") ? "failure" : "success",
+        sha: m[1],
+        total_count: all.length,
+        statuses: all.slice((page - 1) * perPage, page * perPage),
+      });
     }
     if (method === "POST" && rest === "/check-runs") {
       const run: FakeCheckRun = {

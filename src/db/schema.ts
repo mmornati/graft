@@ -347,6 +347,32 @@ export interface AuditLogTable {
   created_at: Date;
 }
 
+export type GuardEventStatus =
+  | "detected"
+  | "confirming"
+  | "culprit_found"
+  | "ambiguous"
+  | "no_culprit"
+  | "flaky"
+  | "revert_opened"
+  | "reverted"
+  | "dismissed"
+  | "error";
+
+/** Phase 1 step 4: one failing check of a guard event (at most 20 per event). */
+export interface GuardFailingCheck {
+  key: string;
+  name: string;
+  source: "check_run" | "status";
+}
+
+/** Phase 1 step 4: one candidate commit of a guard event (at most 50 per event). */
+export interface GuardCandidate {
+  sha: string;
+  prNumber: number | null;
+  kind: "pr" | "direct" | "multiple" | "unresolved" | "truncated";
+}
+
 export interface GuardEventsTable {
   id: Generated<string>;
   repository_id: number;
@@ -355,9 +381,46 @@ export interface GuardEventsTable {
   ci_run_url: string | null;
   culprit_change_id: string | null;
   revert_pr_number: number | null;
-  status: "detected" | "culprit_found" | "revert_opened" | "reverted" | "dismissed" | "error";
+  status: GuardEventStatus;
   created_at: Timestamp;
   updated_at: Timestamp;
+  /** Phase 1 step 4 (0011). */
+  last_green_sha: string | null;
+  failing_checks: Json<GuardFailingCheck[]>;
+  candidates: Json<GuardCandidate[]>;
+  detected_at: Date | null;
+  confirmed_at: Date | null;
+  confirm_reason: "next_commit" | "window" | "off" | "flaky_rerun" | "flaky_next" | null;
+  comment_id: number | null;
+  guard_mode: "report" | "enforce" | null;
+}
+
+/** Phase 1 step 4: the first-parent history of each default branch (no messages, no files). */
+export interface MainCommitsTable {
+  repository_id: number;
+  sha: string;
+  parent_sha: string | null;
+  seq: number;
+  chain_break: Generated<boolean>;
+  pr_source: "change" | "api" | "direct" | "multiple" | "unresolved";
+  change_id: string | null;
+  pr_number: number | null;
+  committed_at: Date | null;
+  tracked_at: Date;
+}
+
+/** Phase 1 step 4: the latest result class per (commit, check). Never output or logs. */
+export interface CiResultsTable {
+  repository_id: number;
+  sha: string;
+  key: string;
+  name: string;
+  source: "check_run" | "status";
+  class: "green" | "red" | "ignored";
+  filtered: Generated<boolean>;
+  html_url: string | null;
+  completed_at: Date | null;
+  observed_at: Date;
 }
 
 export interface WebhookDeliveriesTable {
@@ -476,6 +539,8 @@ export interface Database {
   mode_changes: ModeChangesTable;
   service_state: ServiceStateTable;
   audit_log: AuditLogTable;
+  main_commits: MainCommitsTable;
+  ci_results: CiResultsTable;
 }
 
 export const TABLE_NAMES = [
@@ -502,4 +567,6 @@ export const TABLE_NAMES = [
   "mode_changes",
   "service_state",
   "audit_log",
+  "main_commits",
+  "ci_results",
 ] as const satisfies readonly (keyof Database)[];

@@ -1,4 +1,5 @@
 import * as changes from "../modules/changes/index.js";
+import * as guard from "../modules/guard/index.js";
 import * as installations from "../modules/installations/index.js";
 import * as intent from "../modules/intent/index.js";
 import * as modes from "../modules/modes/index.js";
@@ -9,7 +10,7 @@ import { createRegistry, type Registry } from "../webhooks/registry.js";
 
 /** THE list of modules. Later steps add one line each here. */
 export function buildAppRegistry(): Registry {
-  const modules = [installations, changes, provenance, intent, policy, pilot, modes];
+  const modules = [installations, changes, provenance, intent, policy, pilot, modes, guard];
   return createRegistry({
     webhookHandlers: modules.flatMap((m) => [...m.webhookHandlers]),
     jobs: modules.flatMap((m) => [...m.jobs]),

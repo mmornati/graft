@@ -295,7 +295,11 @@ const EXPECTED: MetricsCounts = {
 };
 
 // This queue registers the feedback and rollup jobs only; the modes crons have their own test.
-const OTHER_CRONS_OFF = { GRAFT_MODE_APPLY_CRON: "off", GRAFT_PERMISSIONS_REFRESH_CRON: "off" };
+const OTHER_CRONS_OFF = {
+  GRAFT_MODE_APPLY_CRON: "off",
+  GRAFT_PERMISSIONS_REFRESH_CRON: "off",
+  GRAFT_GUARD_PRUNE_CRON: "off",
+};
 
 describe("daily rollup", () => {
   it("I-ROLL-1 every counter of a seeded day equals a hand count (latest verdict at the merge head, excluded authors left out)", async () => {
@@ -401,6 +405,7 @@ describe("daily rollup", () => {
         metricsRollupCron: null,
         modeApplyCron: null,
         permissionsRefreshCron: null,
+        guardPruneCron: null,
       });
       await queue.stop();
       await sql`delete from pgboss.job where name in (${metricsRollupJob.name}, ${feedbackSweepJob.name})`.execute(

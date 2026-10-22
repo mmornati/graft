@@ -1,6 +1,6 @@
 /**
  * The operations half of `pnpm graft` (step 6, T9): `pilot`, `baseline`, `gate`, `incident`,
- * `metrics` and, from Phase 1 step 1, `mode` (step 3 adds `audit`). `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
+ * `metrics`, from Phase 1 step 1 `mode`, from step 3 `audit` and from step 4 `guard`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
  * running with an empty environment and without `db`, `config` or `modules` (U-CLI-6).
  *
  * Every command loads `.env` and the configuration (a ConfigError prints its message only and
@@ -42,6 +42,12 @@ import {
   renderAuditLine,
   repositoryIdsByName,
 } from "../modules/audit/index.js";
+import {
+  GUARD_STATUSES,
+  guardList,
+  guardListJson,
+  renderGuardList,
+} from "../modules/guard/index.js";
 import { listChangesToPoll, pollReactions } from "../modules/intent/index.js";
 import {
   notEffectiveNotes,
@@ -150,6 +156,7 @@ const USAGE = `usage:
   graft mode refresh-permissions --installation <id>
   graft audit list --repo <owner/repo> [--since <ISO date>] [--kind applied|ignored|stale|removed]
                    [--limit <1..500, default 50>] [--json]
+  graft guard list --repo <owner/repo> [--status <status>] [--limit <1..200>] [--json]
 `;
 
 class UsageError extends Error {
@@ -659,7 +666,11 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     const ceiling = await resolveCeiling(r.db, r.config);
     const views = [];
     for (const row of rows) views.push(await viewRepository(r.db, row, ceiling));
-    r.out(v.json ? `${JSON.stringify(showJson(views, ceiling))}\n` : renderShow(views, ceiling));
+    r.out(
+      v.json
+        ? `${JSON.stringify(showJson(views, ceiling))}\n`
+        : renderShow(views, ceiling, { guardDetection: r.config.guardDetection }),
+    );
     return 0;
   }
   if (sub === "set") {
@@ -742,7 +753,7 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     const [row] = await listRepositoryModeRows(r.db, { fullName: repo });
     if (!row) throw new Error("repository vanished");
     const view: RepositoryView = await viewRepository(r.db, row, ceiling);
-    r.out(renderShow([view], ceiling));
+    r.out(renderShow([view], ceiling, { guardDetection: r.config.guardDetection }));
     for (const note of notEffectiveNotes(
       view,
       wanted.map((w) => w.key),
@@ -853,6 +864,38 @@ async function audit(sub: string | undefined, rest: string[], r: Run): Promise<n
   return 0;
 }
 
+/** The `guard` group (Phase 1 step 4, §10). Reads the database only. */
+async function guard(sub: string | undefined, rest: string[], r: Run): Promise<number> {
+  if (sub !== "list") throw new UsageError();
+  const v = args(rest, {
+    repo: { type: "string" },
+    status: { type: "string" },
+    limit: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const repo = parseRepo(str(v.repo));
+  const status = str(v.status);
+  if (
+    v.status !== undefined &&
+    (status === undefined || !GUARD_STATUSES.includes(status as never))
+  ) {
+    throw new UsageError(`--status must be one of ${GUARD_STATUSES.join(", ")}`);
+  }
+  const limit = parsePositiveInt("--limit", str(v.limit), 20);
+  if (limit > 200) throw new UsageError("--limit must be 1 to 200");
+  const [row] = await listRepositoryModeRows(r.db, { fullName: repo });
+  if (!row) {
+    r.err("unknown or removed repository\n");
+    return 1;
+  }
+  const events = await guardList(r.db, row.repositoryId, {
+    ...(status === undefined ? {} : { status: status as (typeof GUARD_STATUSES)[number] }),
+    limit,
+  });
+  r.out(v.json ? `${JSON.stringify(guardListJson(events))}\n` : renderGuardList(events));
+  return 0;
+}
+
 export async function main(
   argv: string[],
   io: CliIo,
@@ -862,7 +905,9 @@ export async function main(
   const err = (s: string) => io.err(toTerminalSafe(s));
   const [group, sub, ...rest] = argv;
   if (
-    !["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit"].includes(group ?? "")
+    !["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit", "guard"].includes(
+      group ?? "",
+    )
   ) {
     err(USAGE);
     return 2;
@@ -896,6 +941,7 @@ export async function main(
     if (group === "metrics") return await metrics(sub, rest, run);
     if (group === "mode") return await mode(sub, rest, run);
     if (group === "audit") return await audit(sub, rest, run);
+    if (group === "guard") return await guard(sub, rest, run);
     return await incident(sub, rest, run);
   } catch (e) {
     if (e instanceof UsageError) {

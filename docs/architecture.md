@@ -99,7 +99,7 @@ Reviewer feedback on cards (reactions and check-run buttons, and the one excepti
 
 ## Source layout
 
-Layout: `src/config` (env), `src/core` (clock, logger, context), `src/db` (Kysely, migrations), `src/queue` (pg-boss wrapper, worker), `src/webhooks` (receiver, registry, dispatch job), `src/github` (Octokit factory, the only place an Octokit is built; managed comment; markdown safety), `src/llm` (model clients: the only place an Anthropic client is built), `src/http`, `src/modules`, `src/eval` (the evaluation tool, step 4: a tool, not a module; it imports Graft code only through `modules/intent/index.ts`, `modules/provenance/index.ts`, `modules/changes/index.ts`, `src/llm`, `src/github/client-factory.ts` and `src/github/errors.ts`, never `db`, `queue`, `webhooks`, `http` or `config`), `src/bin` (entry points, including `eval.ts`), and at the repo root `eval/` (JSON Schemas, the synthetic set, the saved baseline and the thresholds). `src/db` imports nothing from `src/modules`. Step 5 adds `src/policy` (the `graft.yaml` library: schema, safe YAML parse, glob checks, the pure evaluator, the GitHub loader and its cache; it imports nothing from `src/modules`), `src/modules/policy` (handlers, jobs, facts, rendering, store), `src/core/glob.ts` (the glob semantics shared by the risk floor, `GRAFT_INTENT_SENSITIVE_PATHS` and `graft.yaml`), `src/core/signals.ts` (cross-module signals) and `src/bin/graft.ts` (the `pnpm graft policy` CLI). Step 6 adds `src/modules/pilot` (handlers, jobs, signal listener, stores), `src/pilot` (CLI-side libraries; it may import `db`, `config`, `github`, `core` and the modules' `index.ts`; `src/pilot` is imported by `src/bin` and, for `normalizeEvent` and `writeFileAtomic`, `src/e2e`) and `src/bin/graft-ops.ts`, which `graft.ts` loads with a dynamic `import()` for `pilot`, `baseline`, `gate`, `incident` and `metrics`, so that `graft policy check` still runs with an empty environment (U-CLI-6). The live e2e runner adds `src/e2e` (a tool like `src/eval`; **import boundary**: it imports only `src/config`, `src/core`, `src/db/client.ts`, `src/db/migrator.ts`, `src/github/{client-factory,errors,rate-limit,managed-comment}.ts`, `src/llm/pricing.ts`, `src/pilot/baseline.ts` (only `normalizeEvent`), `src/pilot/atomic-write.ts`, `src/policy/parse.ts`, `src/eval/terminal.ts` and the modules' `index.ts`, never `src/bin`, `src/queue`, `src/webhooks`, `src/http` or `test/`; only `src/bin/graft.ts` imports it, with a dynamic `import()`; U-LIVE-BOUND-1 enforces both), `e2e/` at the repo root (the sandbox list and the fixtures) and `docs/e2e/`. `src/modes` (Phase 1 step 1: the pure effective-mode rule; it imports no `db`, `github` or `modules`), `src/modules/modes` (stores, jobs and the mutation gate) and `src/github/mutation-guard.ts` (the write allow-list). Phase 1 step 2 adds `src/policy/enforce.ts` (pure: constraint satisfaction and the enforce conclusion), `src/github/collaborator.ts` (the collaborator role check shared by the reviewer sync and approvals), `src/modules/policy/approvals.ts` (role checks and team memberships per job) and `src/modules/policy/team-fanout.ts` (the `membership` and `team` triggers). Phase 1 step 3 adds `src/modules/audit` (the `audit_log` store and the `graft audit list` helpers; no handler, no job) and `src/modules/policy/break-glass.ts`.
+Layout: `src/config` (env), `src/core` (clock, logger, context), `src/db` (Kysely, migrations), `src/queue` (pg-boss wrapper, worker), `src/webhooks` (receiver, registry, dispatch job), `src/github` (Octokit factory, the only place an Octokit is built; managed comment; markdown safety), `src/llm` (model clients: the only place an Anthropic client is built), `src/http`, `src/modules`, `src/eval` (the evaluation tool, step 4: a tool, not a module; it imports Graft code only through `modules/intent/index.ts`, `modules/provenance/index.ts`, `modules/changes/index.ts`, `src/llm`, `src/github/client-factory.ts` and `src/github/errors.ts`, never `db`, `queue`, `webhooks`, `http` or `config`), `src/bin` (entry points, including `eval.ts`), and at the repo root `eval/` (JSON Schemas, the synthetic set, the saved baseline and the thresholds). `src/db` imports nothing from `src/modules`. Step 5 adds `src/policy` (the `graft.yaml` library: schema, safe YAML parse, glob checks, the pure evaluator, the GitHub loader and its cache; it imports nothing from `src/modules`), `src/modules/policy` (handlers, jobs, facts, rendering, store), `src/core/glob.ts` (the glob semantics shared by the risk floor, `GRAFT_INTENT_SENSITIVE_PATHS` and `graft.yaml`), `src/core/signals.ts` (cross-module signals) and `src/bin/graft.ts` (the `pnpm graft policy` CLI). Step 6 adds `src/modules/pilot` (handlers, jobs, signal listener, stores), `src/pilot` (CLI-side libraries; it may import `db`, `config`, `github`, `core` and the modules' `index.ts`; `src/pilot` is imported by `src/bin` and, for `normalizeEvent` and `writeFileAtomic`, `src/e2e`) and `src/bin/graft-ops.ts`, which `graft.ts` loads with a dynamic `import()` for `pilot`, `baseline`, `gate`, `incident` and `metrics`, so that `graft policy check` still runs with an empty environment (U-CLI-6). The live e2e runner adds `src/e2e` (a tool like `src/eval`; **import boundary**: it imports only `src/config`, `src/core`, `src/db/client.ts`, `src/db/migrator.ts`, `src/github/{client-factory,errors,rate-limit,managed-comment}.ts`, `src/llm/pricing.ts`, `src/pilot/baseline.ts` (only `normalizeEvent`), `src/pilot/atomic-write.ts`, `src/policy/parse.ts`, `src/eval/terminal.ts` and the modules' `index.ts`, never `src/bin`, `src/queue`, `src/webhooks`, `src/http` or `test/`; only `src/bin/graft.ts` imports it, with a dynamic `import()`; U-LIVE-BOUND-1 enforces both), `e2e/` at the repo root (the sandbox list and the fixtures) and `docs/e2e/`. `src/modes` (Phase 1 step 1: the pure effective-mode rule; it imports no `db`, `github` or `modules`), `src/modules/modes` (stores, jobs and the mutation gate) and `src/github/mutation-guard.ts` (the write allow-list). Phase 1 step 2 adds `src/policy/enforce.ts` (pure: constraint satisfaction and the enforce conclusion), `src/github/collaborator.ts` (the collaborator role check shared by the reviewer sync and approvals), `src/modules/policy/approvals.ts` (role checks and team memberships per job) and `src/modules/policy/team-fanout.ts` (the `membership` and `team` triggers). Phase 1 step 3 adds `src/modules/audit` (the `audit_log` store and the `graft audit list` helpers; no handler, no job) and `src/modules/policy/break-glass.ts`. Phase 1 step 4 adds `src/guard/detect.ts` (pure: result classes, check keys, the culprit rule and confirmation; it imports no `db`, `github` or `modules`) and `src/modules/guard` (handlers, `guard.track`, `guard.observe`, `guard.confirm`, `guard.prune`, the comment, the store and the `graft guard list` view).
 
 ## Policy contract (step 5)
 
@@ -125,9 +125,21 @@ Layout: `src/config` (env), `src/core` (clock, logger, context), `src/db` (Kysel
 
 **D8: the mode is in the facts hash.** The policy job adds the effective `policy_mode` to its `factsHash` and stores it in `policy_verdicts.policy_mode`, so a mode change always republishes the check even when nothing else differs (the "unchanged" short cut compares that hash).
 
+## Guard contract (Phase 1 step 4)
+
+Spec: [phase-1/step-4-guard-detection.md](phase-1/step-4-guard-detection.md). User page: [features/guard.md](features/guard.md).
+
+**Triggers vs API reads.** `push` to the default branch, `check_run.completed`, `check_suite.completed` and `status` are triggers only: the handlers check the branch hint (`refs/heads/<default_branch>`, `check_suite.head_branch`, `branches[].name`) and that a check run is not Graft's own, then enqueue. `guard.track` reads the default branch (`repos.get`), the commits (`repos.listCommits`, first parents only) and the PR behind each commit (`changes`, then `commits/{sha}/pulls`) from the API. `guard.observe` reads `checks.listForRef` (`filter=latest`) and, with `statuses: read`, the combined status. A payload never decides what is stored.
+
+**Tables.** `main_commits` (repository, SHA, first parent, `seq`, `chain_break`, PR mapping), `ci_results` (repository, SHA, key, name, source, class, completed time, a GitHub link) and the step 4 columns of `guard_events` (last green SHA, failing checks, candidates, detection and confirmation times and reason, comment id, guard mode). No output, log, commit message or PR text is stored. Both new tables cascade from `repositories`, are covered by the pilot purge, and are pruned daily after `GRAFT_GUARD_RETENTION_DAYS`.
+
+**Lock order.** Detection runs inside a per-repository advisory lock (`pg_advisory_xact_lock(hashtext('guard:' || repository_id))`): results are upserted, transitions found and events opened or settled in one transaction, with no GitHub call inside. The comment is written afterwards under `withChangeLock(culprit change)`. The two locks are never held at once: repository lock, released, then change lock. `guard.checks` is read from `graft.yaml` at the transition's last green commit before the lock; a transition whose baseline was not loaded yet is set aside and the lock phase runs again.
+
+**The D10 write.** For a `culprit_found` event only, one `POST /repos/{o}/{r}/issues/{n}/comments` on the culprit PR through the default installation client (a `phase0` route; no `guard` feature client exists in this step). The first line is `<!-- graft:guard-event <id> -->`; inside the change lock Graft re-reads the event and searches the PR's comments (at most 10 pages, App-authored only, the managed comment's rule 3) for the marker before writing, and stores the comment id and the effective guard mode in the same transaction.
+
 ## Data model
 
-Defined in [`src/db/schema.ts`](../src/db/schema.ts) (Kysely types) and created by the migrations in [`src/db/migrations/`](../src/db/migrations/). Every app table cascades from `installations` through `repositories`, which is what makes `pnpm graft pilot purge` complete; `webhook_deliveries` and `pilot_purges` have no foreign key (the purge deletes the installation's deliveries itself, and `pilot_purges` outlives the purge). `guard_events` exists for the Phase 1 post-merge guard and is not written in Phase 0. Only paths, SHAs, numbers, logins or user IDs where needed, and the model's own prose are stored; never file contents, diffs, PR titles or bodies.
+Defined in [`src/db/schema.ts`](../src/db/schema.ts) (Kysely types) and created by the migrations in [`src/db/migrations/`](../src/db/migrations/). Every app table cascades from `installations` through `repositories`, which is what makes `pnpm graft pilot purge` complete; `webhook_deliveries` and `pilot_purges` have no foreign key (the purge deletes the installation's deliveries itself, and `pilot_purges` outlives the purge). `guard_events` is written by the Phase 1 post-merge guard (step 4), with `main_commits` and `ci_results`. Only paths, SHAs, numbers, logins or user IDs where needed, and the model's own prose are stored; never file contents, diffs, PR titles or bodies.
 
 ```mermaid
 erDiagram
@@ -148,6 +160,8 @@ erDiagram
     changes |o--o{ intent_spend : "ledger"
     changes ||--o{ policy_verdicts : "per head"
     repositories ||--o{ guard_events : "Phase 1"
+    repositories ||--o{ main_commits : "default-branch history"
+    repositories ||--o{ ci_results : "CI result classes"
     changes |o--o{ guard_events : "culprit"
     changes ||--o{ pr_reviewers : "eligible reviewers"
     changes ||--o{ reviewer_check_denials : "403 or 404"
@@ -248,6 +262,26 @@ erDiagram
         bigint repository_id FK
         uuid culprit_change_id FK
         text status
+        text failing_sha
+        text last_green_sha
+        bigint comment_id
+    }
+    main_commits {
+        bigint repository_id FK
+        text sha
+        text parent_sha
+        bigint seq
+        boolean chain_break
+        text pr_source
+        int pr_number
+    }
+    ci_results {
+        bigint repository_id FK
+        text sha
+        text key
+        text name
+        text source
+        text class
     }
     webhook_deliveries {
         text delivery_id PK
@@ -308,4 +342,4 @@ erDiagram
     }
 ```
 
-`TABLE_NAMES` in `src/db/schema.ts` lists all 23 tables (Phase 1 added `mode_changes`, `service_state` and `audit_log`); `OWNED_ROWS` in `src/pilot/purge.ts` must cover each of them (I-PURGE-2).
+`TABLE_NAMES` in `src/db/schema.ts` lists all 25 tables (Phase 1 added `mode_changes`, `service_state`, `audit_log`, `main_commits` and `ci_results`); `OWNED_ROWS` in `src/pilot/purge.ts` must cover each of them (I-PURGE-2).

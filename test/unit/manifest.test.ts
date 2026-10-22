@@ -21,13 +21,17 @@ describe("github app manifest", () => {
       checks: "write",
       // Phase 1 step 2: team constraints (D15).
       members: "read",
+      // Phase 1 step 4: commit statuses for the post-merge guard (D2).
+      statuses: "read",
     });
     expect(m.default_events).toEqual([
       "check_run",
+      "check_suite",
       "membership",
       "pull_request",
       "pull_request_review",
       "push",
+      "status",
       "team",
     ]);
     expect(m.public).toBe(false);
@@ -57,6 +61,16 @@ describe("github app manifest", () => {
     expect(report.public).toBe(false);
     expect(report.name).toMatch(/report only/i);
     expect(report.description).toMatch(/report only/i);
+  });
+
+  it("U-MAN-5 statuses is never above read and neither manifest has actions; both carry check_suite and status", () => {
+    for (const name of ["app-manifest.json", "app-manifest.report.json"]) {
+      const m = manifest(name);
+      expect(m.default_permissions.statuses, name).toBe("read");
+      expect(m.default_permissions, name).not.toHaveProperty("actions");
+      expect(m.default_events, name).toEqual(expect.arrayContaining(["check_suite", "status"]));
+      expect(m.default_events, name).not.toContain("workflow_run");
+    }
   });
 
   it("U-MAN-3 both manifests have the same events", () => {

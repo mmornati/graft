@@ -101,6 +101,19 @@ export function hasMembersRead(
   return Object.hasOwn(LEVEL, have) && LEVEL[have as PermissionLevel] >= LEVEL.read;
 }
 
+/**
+ * Phase 1 step 4 (D2): whether the stored permissions include `statuses` at read or above. Without
+ * it the guard reads check runs only. null (never read) and an unknown level count as missing.
+ */
+export function hasStatusesRead(
+  permissions: Readonly<Record<string, string>> | null | undefined,
+): boolean {
+  if (permissions === null || permissions === undefined) return false;
+  if (!Object.hasOwn(permissions, "statuses")) return false;
+  const have = permissions.statuses as string;
+  return Object.hasOwn(LEVEL, have) && LEVEL[have as PermissionLevel] >= LEVEL.read;
+}
+
 export function effectiveModes(input: EffectiveModesInput): EffectiveModes {
   const r = input.requested;
   return {

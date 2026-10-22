@@ -364,6 +364,7 @@ export async function createLiveEnv(
         metricsRollupCron: null,
         modeApplyCron: null,
         permissionsRefreshCron: null,
+        guardPruneCron: null,
       });
       await server.close();
       await t.deps.queue.stop();
