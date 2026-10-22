@@ -223,6 +223,19 @@ describe("revert plan: what Graft does not revert (D8)", () => {
     const trunc = world({ "src/a.ts": "1" }, { "src/a.ts": "2" });
     trunc.git.truncated.add(trunc.t.head);
     expect(await trunc.plan()).toEqual({ kind: "needs_human", reason: "too_large", conflicts: [] });
+    // Step 5 review 1, finding 8: a truncated tree in the diff itself (the base), with a tip that
+    // is not the head, so no tip lookup can catch it.
+    const truncBase = world(
+      { "src/a.ts": "1" },
+      { "src/a.ts": "2" },
+      { "src/a.ts": "2", "later.ts": "l" },
+    );
+    truncBase.git.truncated.add(truncBase.t.base);
+    expect(await truncBase.plan()).toEqual({
+      kind: "needs_human",
+      reason: "too_large",
+      conflicts: [],
+    });
   });
 
   it("U-RVP-8b a tree entry name with a slash, '.' or '..' never reaches a tree write", async () => {

@@ -354,6 +354,23 @@ export async function runDoctor(
     add("guard_reverts_open", "WARN", `${nStale} revert PRs open for more than 72 hours`);
   } else add("guard_reverts_open", "OK", "no revert PR open for more than 72 hours");
 
+  // guard (step 5 review 1, finding 4): a claim with no outcome holds a cap slot and blocks
+  // another revert of the same culprit
+  const claimed = await sql<{ n: string }>`
+    select count(*)::text as n from guard_events
+    where repository_id in (select id from repositories where installation_id = ${id})
+      and revert_claimed_at is not null
+      and revert_outcome is null
+      and revert_claimed_at < ${ago(3600_000)}`.execute(db);
+  const nClaimed = num(claimed.rows[0]?.n);
+  if (nClaimed > 0) {
+    add(
+      "guard_revert_claims",
+      "WARN",
+      `${nClaimed} guard events claimed for a revert more than an hour ago with no outcome`,
+    );
+  } else add("guard_revert_claims", "OK", "no revert claim older than an hour without an outcome");
+
   // guard (Phase 1 step 5, §13): revert jobs that ended in error
   const errors = await sql<{ n: string }>`
     select count(*)::text as n from guard_events

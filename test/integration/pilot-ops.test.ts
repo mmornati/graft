@@ -191,6 +191,7 @@ describe("pilot doctor", () => {
       ["OK", "guard_statuses"],
       ["OK", "guard_confirming"],
       ["OK", "guard_reverts_open"],
+      ["OK", "guard_revert_claims"],
       ["OK", "guard_revert_errors"],
     ]);
     expect(res.out).toContain("graft-sandbox/api");
@@ -201,7 +202,7 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(18);
+    expect(json.checks).toHaveLength(19);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
   });
 
@@ -293,12 +294,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(18);
+    expect(checks).toHaveLength(19);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(18);
+    expect(JSON.parse(missing.out).checks).toHaveLength(19);
     expect(missing.err).toBe("");
   });
 

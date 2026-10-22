@@ -126,6 +126,43 @@ const isRetryable = (err: unknown): boolean => !(err instanceof PermanentJobErro
 const writeError = (err: unknown, what: string): Error =>
   err instanceof MutationRefusedError ? err : toJobError(err, what);
 
+/**
+ * Step 5 review 1, finding 5: a refusal because the mode went back (`mode_report`, `mode_off`) is
+ * `mode_changed`; any other refusal (a deactivated repository, a body or route Graft should never
+ * send) is `refused_<reason>`, so a defect does not read as a rollback.
+ */
+export function refusalClass(err: MutationRefusedError): string {
+  if (err.refusal === "mode_report" || err.refusal === "mode_off") return "mode_changed";
+  return `refused_${err.refusal}`.slice(0, 40);
+}
+
+/**
+ * Step 5 review 1, finding 4: an event whose culprit was confirmed (or, without a confirmation
+ * time, detected) longer ago than the configured bound. The confirmation, not the detection, is
+ * what sends `guard.revert`, so a long confirmation window does not make every event stale.
+ */
+export function isStale(
+  e: Pick<GuardEventRow, "confirmed_at" | "detected_at" | "created_at">,
+  now: Date,
+  maxAgeHours: number,
+): boolean {
+  const since = e.confirmed_at ?? e.detected_at ?? e.created_at;
+  return now.getTime() - since.getTime() > maxAgeHours * 3_600_000;
+}
+
+/**
+ * Step 5 review 1, nit 11: a `planned` outcome was decided in report mode, so its comment carries
+ * the report line even when the comment is written later, after the repository moved to enforce.
+ */
+function modeFor(
+  row: GuardEventRow,
+  mode: ModeState<"report" | "enforce">,
+): ModeState<"report" | "enforce"> {
+  return row.revert_outcome === "planned" && mode.effective === "enforce"
+    ? { ...mode, requested: "report", effective: "report" }
+    : mode;
+}
+
 // ---------------------------------------------------------------------------------------------
 // What the plan needs (step 5)
 // ---------------------------------------------------------------------------------------------
@@ -316,7 +353,12 @@ async function gather(
   if (range === null) return { kind: "needs_human", reason: "history_incomplete", conflicts: [] };
   const repo = await readRepo(octokit, data);
   const tip = await readTip(octokit, reader, data, repo.defaultBranch);
-  const baseline = await baselineAt(octokit, data, event.last_green_sha ?? event.failing_sha);
+  // Step 5 review 1, nit 10: never the failing commit, which the culprit controls (D16). With no
+  // last green commit (not reachable today), every key counts and auto-merge is off.
+  const baseline: Baseline =
+    event.last_green_sha === null
+      ? { checks: null, autoMerge: "not_configured" }
+      : await baselineAt(octokit, data, event.last_green_sha);
   // D20: a key must be in scope at the newer baseline too.
   const remaining = event.failing_checks.filter((c) =>
     allowedByGuardChecks(baseline.checks, c.name),
@@ -384,7 +426,7 @@ export interface WriteInput {
 
 async function storePr(
   ctx: JobContext,
-  w: WriteInput,
+  w: Pick<WriteInput, "eventId" | "changeId">,
   pr: { number: number; state: string; merged: boolean },
   branch: string,
 ): Promise<void> {
@@ -410,7 +452,7 @@ async function storePr(
 /** D17 c/d: the revert PR of this event's branch, open or closed. */
 async function findPr(
   gh: GitHubClient,
-  w: WriteInput,
+  w: Pick<WriteInput, "data" | "eventId">,
 ): Promise<{ number: number; nodeId: string; state: string; merged: boolean } | null> {
   const branch = revertBranch(w.eventId);
   let list: Awaited<ReturnType<GitHubClient["rest"]["pulls"]["list"]>>["data"];
@@ -441,6 +483,33 @@ async function sameCommit(
 ): Promise<boolean> {
   const c = await reader.commit(sha);
   return c.tree === tree && c.parents.length === 1 && c.parents[0] === parent;
+}
+
+/**
+ * D9: the tree written is the tip with exactly the plan undone. Every plan path holds its `before`
+ * entry, and nothing else differs from the tip (step 5 review 1, finding 2: the diff from the tip
+ * catches a directory GitHub did not delete and a path the request did not name). A tree that
+ * cannot be read within the budget does not match.
+ */
+async function treeMatchesPlan(w: WriteInput, tree: string): Promise<boolean> {
+  try {
+    for (const c of w.changes) {
+      if (!sameEntry(await entryAt(w.reader, tree, c.path), c.before)) return false;
+    }
+    const written = await diffTrees(w.reader, w.tip.tree, tree, {
+      maxPaths: w.changes.length,
+      maxTreeReads: Number.POSITIVE_INFINITY,
+    });
+    if (!Array.isArray(written) || written.length !== w.changes.length) return false;
+    const planned = new Map(w.changes.map((c) => [c.path, c] as const));
+    return written.every((d) => {
+      const c = planned.get(d.path);
+      return c !== undefined && sameEntry(d.before, c.after) && sameEntry(d.after, c.before);
+    });
+  } catch (err) {
+    if (err instanceof TreeReadBudgetExceeded) return false;
+    throw err;
+  }
 }
 
 /**
@@ -500,17 +569,8 @@ export async function openRevert(
     } catch (err) {
       throw writeError(err, "git.createTree");
     }
-    try {
-      for (const c of w.changes) {
-        if (!sameEntry(await entryAt(w.reader, tree, c.path), c.before)) {
-          throw new PermanentJobError("revert tree does not restore the plan", "tree_mismatch");
-        }
-      }
-    } catch (err) {
-      if (err instanceof TreeReadBudgetExceeded) {
-        throw new PermanentJobError("revert tree could not be checked", "tree_mismatch");
-      }
-      throw err;
+    if (!(await treeMatchesPlan(w, tree))) {
+      throw new PermanentJobError("revert tree does not restore the plan", "tree_mismatch");
     }
     // D10: the commit (an earlier run's is reused when it is the same tree on the same tip).
     let commit = e.revert_commit_sha;
@@ -769,7 +829,7 @@ export async function runRevert(
     await publishGuardComment(event.id, ctx, {
       octokit,
       section: sectionOf(row, extras),
-      mode: guardMode,
+      mode: modeFor(row, guardMode),
     });
     return "commented";
   };
@@ -794,7 +854,7 @@ export async function runRevert(
   /** A failure in steps 5-9: retried while the queue can, then stored as `error`. */
   const failed = async (err: unknown): Promise<RevertRun> => {
     if (err instanceof MutationRefusedError) {
-      await settle("error", "mode_changed");
+      await settle("error", refusalClass(err));
       return comment();
     }
     if (isRetryable(err) && canRetry(ctx)) throw err;
@@ -826,6 +886,16 @@ export async function runRevert(
       return "stopped";
     if (await eventByRevertPr(ctx.db, data.repositoryId, change.pr_number)) {
       await settle("skipped", "revert_of_revert");
+      return comment();
+    }
+    // Step 5 review 1, finding 4: a revert never opens days late (a job sent again long after
+    // its event). An event whose writes began is resumed whatever its age.
+    if (
+      event.revert_commit_sha === null &&
+      event.revert_branch === null &&
+      isStale(event, now(), ctx.config.guardRevertMaxAgeHours)
+    ) {
+      await settle("skipped", "stale");
       return comment();
     }
   }
@@ -914,6 +984,20 @@ export async function runRevert(
     // An opened revert whose label or auto-merge is left, after a rollback to report: those
     // writes would be refused, so the run ends as the refusal would (§7, step 9).
     if (event.revert_outcome !== null) {
+      await settle("error", "mode_changed");
+      return comment({ restoredTo: g.range.base });
+    }
+    // Step 5 review 1, finding 6: an enforce run began writing, then the repository went back to
+    // report. What GitHub holds is never a plan: a PR from the branch is adopted (a GET with the
+    // default client), and the event ends `error mode_changed` either way.
+    if (event.revert_commit_sha !== null || event.revert_branch !== null) {
+      try {
+        const found = await findPr(octokit, { data, eventId: event.id });
+        if (found)
+          await storePr(ctx, { eventId: event.id, changeId }, found, revertBranch(event.id));
+      } catch (err) {
+        return failed(err);
+      }
       await settle("error", "mode_changed");
       return comment({ restoredTo: g.range.base });
     }
@@ -1066,12 +1150,69 @@ export async function runRevert(
   return comment({ restoredTo: g.range.base });
 }
 
+/**
+ * Step 5 review 1, finding 4: the last attempt of a run that failed outside `failed()` (the
+ * installation token, the modes, the claim, the comment itself). An event with no outcome gets
+ * `error` with the failure's class, which releases a claimed cap slot, and the comment is tried
+ * once. Best effort: a second failure is logged, and the job still fails.
+ */
+export async function settleFailedRun(
+  data: RevertData,
+  ctx: JobContext,
+  err: unknown,
+): Promise<void> {
+  try {
+    const e = await getEvent(ctx.db, data.eventId);
+    if (
+      e === undefined ||
+      e.repository_id !== data.repositoryId ||
+      e.comment_id !== null ||
+      e.culprit_change_id === null ||
+      !COMMENTED_STATUSES.includes(e.status)
+    ) {
+      return;
+    }
+    if (e.revert_outcome === null) {
+      await updateEvent(
+        ctx.db,
+        e.id,
+        { revertOutcome: "error", revertReason: errorClass(err) },
+        ctx.clock.now(),
+      );
+      ctx.log.info(
+        { eventId: e.id, outcome: "error", reason: errorClass(err) },
+        "guard revert settled after its last attempt",
+      );
+    }
+    const row = (await getEvent(ctx.db, e.id)) as GuardEventRow;
+    const guardMode = (await getEffectiveModes(ctx.db, data.repositoryId, ctx.config)).guard;
+    await publishGuardComment(e.id, ctx, {
+      section: sectionOf(row),
+      mode: modeFor(row, guardMode as ModeState<"report" | "enforce">),
+    });
+  } catch (again) {
+    ctx.log.warn(
+      { eventId: data.eventId, errorClass: errorClass(again) },
+      "guard revert could not be settled after its last attempt",
+    );
+  }
+}
+
 export const guardRevertJob = defineJob<RevertData>({
   name: REVERT_JOB,
   schema: revertSchema,
-  options: { retryLimit: 3 },
+  // Step 5 review 1, finding 4: the job row (and with it the singleton id of D1) is kept one hour
+  // after the job ends, not 7 days, so a later observe can send a failed run again. The database
+  // state, not the job row, is what makes a revert happen once.
+  options: { retryLimit: 3, deleteAfterSeconds: 3600 },
   async handle(data, ctx) {
-    const outcome = await runRevert(data, ctx);
+    let outcome: RevertRun;
+    try {
+      outcome = await runRevert(data, ctx);
+    } catch (err) {
+      if (!isRetryable(err) || !canRetry(ctx)) await settleFailedRun(data, ctx, err);
+      throw err;
+    }
     ctx.log.info({ eventId: data.eventId, outcome }, "guard revert done");
   },
 });

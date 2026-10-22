@@ -14,7 +14,9 @@
  * `refs/heads/graft-revert/<uuid>`, a guard client's `POST …/pulls` must have a `graft-revert/<uuid>`
  * head, and its `POST …/issues/{n}/labels` must add exactly `graft:revert`. `POST /graphql` is a
  * guard route only for the exported `ENABLE_AUTO_MERGE_MUTATION` document with a
- * `graft-guard:<owner>/<repo>#<n>` client mutation id; any other GraphQL body is unknown.
+ * `graft-guard:<owner>/<repo>#<n>` client mutation id; any other GraphQL body is unknown. Its
+ * `pullRequestId` must be the node id of pull request `<n>` of that repository, as this client
+ * created or read it (step 5 review 1, finding 7).
  *
  * This file imports no database and no module code: the mode lookup arrives as a `MutationGate`.
  */
@@ -41,7 +43,8 @@ export const ENABLE_AUTO_MERGE_MUTATION = `mutation GraftGuardEnableAutoMerge($p
 export const REVERT_REF_RE = /^refs\/heads\/graft-revert\/[0-9a-f-]{36}$/;
 export const REVERT_HEAD_RE = /^graft-revert\/[0-9a-f-]{36}$/;
 export const REVERT_LABEL = "graft:revert";
-const CLIENT_MUTATION_ID_RE = /^graft-guard:([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})#\d+$/;
+const CLIENT_MUTATION_ID_RE =
+  /^graft-guard:([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})#(\d{1,9})$/;
 
 export type WriteClass =
   | { kind: "read" }
@@ -135,7 +138,8 @@ const ROUTES: readonly Route[] = [
   },
   {
     method: "DELETE",
-    re: new RegExp(`${OWNER_REPO}/git/refs/heads/graft-revert/[A-Za-z0-9_./-]+$`),
+    // Step 5 review 1, nit 9: only a branch the guard names, `graft-revert/<event uuid>`.
+    re: new RegExp(`${OWNER_REPO}/git/refs/heads/graft-revert/[0-9a-f-]{36}$`),
     kind: "phase1",
     features: ["guard"],
   },
@@ -155,21 +159,30 @@ const ROUTES: readonly Route[] = [
 ];
 
 /**
+ * The one path normalisation every rule of this file uses: the query string is dropped, and so is
+ * one trailing slash. A path with a fragment (`#`), a percent escape or a backslash, or one that
+ * does not start with `/`, is null (step 5 review 1, finding 1: a `#` once classified as a route
+ * while its body rule saw another path). Nothing is decoded, so a path cannot be made to look like
+ * another route.
+ */
+function normalisedPath(rawPath: string): string | null {
+  const q = rawPath.indexOf("?");
+  let path = q >= 0 ? rawPath.slice(0, q) : rawPath;
+  if (rawPath.includes("#")) return null;
+  if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  if (!path.startsWith("/") || path.includes("%") || path.includes("\\")) return null;
+  return path;
+}
+
+/**
  * Classifies a request by method and path (no host; the API base path already removed). A write
- * with a dot segment, an empty segment or a percent escape is `unknown`: nothing is decoded or
- * normalised, so a path cannot be made to look like another route.
+ * with a dot segment, an empty segment, a fragment or a percent escape is `unknown`.
  */
 export function classifyWrite(method: string, rawPath: string): WriteClass {
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD") return { kind: "read" };
-  const q = rawPath.indexOf("?");
-  let path = q >= 0 ? rawPath.slice(0, q) : rawPath;
-  const hash = path.indexOf("#");
-  if (hash >= 0) path = path.slice(0, hash);
-  if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
-  if (!path.startsWith("/") || path.includes("%") || path.includes("\\")) {
-    return { kind: "unknown" };
-  }
+  const path = normalisedPath(rawPath);
+  if (path === null) return { kind: "unknown" };
   const segments = path.slice(1).split("/");
   if (segments.some((s) => s === "" || s === "." || s === "..")) return { kind: "unknown" };
   for (const route of ROUTES) {
@@ -202,7 +215,8 @@ export function checkRunWrite(
   rawPath: string,
 ): { owner: string; repo: string } | null {
   const m = method.toUpperCase();
-  const path = (rawPath.split("?")[0] ?? "").split("#")[0]?.replace(/(.)\/$/, "$1") ?? "";
+  const path = normalisedPath(rawPath);
+  if (path === null) return null;
   for (const w of CHECK_RUN_WRITES) {
     if (w.method !== m) continue;
     const hit = w.re.exec(path);
@@ -253,36 +267,59 @@ function plainObject(body: unknown): Record<string, unknown> | null {
 const ownValue = (b: Record<string, unknown>, k: string): unknown =>
   Object.hasOwn(b, k) ? b[k] : undefined;
 
+/** §12: the guard routes that carry no body rule (their body names only SHAs and modes). */
+const GUARD_BODILESS: readonly { method: string; re: RegExp }[] = [
+  { method: "POST", re: new RegExp(`${OWNER_REPO}/git/trees$`) },
+  { method: "POST", re: new RegExp(`${OWNER_REPO}/git/commits$`) },
+  { method: "DELETE", re: new RegExp(`${OWNER_REPO}/git/refs/heads/graft-revert/[0-9a-f-]{36}$`) },
+];
+
+/** Step 5 review 1, nit 9: a revert PR's base is a plain branch name (no `owner:` form). */
+const PLAIN_BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
+
 /**
- * §12: whether the body of a guard route is one the guard may send. Only the three routes with a
- * body rule are checked; the others (trees, commits, the ref deletion) pass.
+ * §12: whether the body of a guard route is one the guard may send. It fails closed: a route it
+ * does not know is refused, and the three bodiless routes (trees, commits, the ref deletion) are
+ * listed by name. The path is normalised as `classifyWrite` does it.
  */
 export function guardBodyAllowed(method: string, path: string, body: unknown): boolean {
-  const p = (path.split("?")[0] ?? "").replace(/(.)\/$/, "$1");
-  if (method === "POST" && new RegExp(`${OWNER_REPO}/git/refs$`).test(p)) {
+  const p = normalisedPath(path);
+  if (p === null) return false;
+  const m = method.toUpperCase();
+  if (m === "POST" && new RegExp(`${OWNER_REPO}/git/refs$`).test(p)) {
     const b = plainObject(body);
     const ref = b === null ? undefined : ownValue(b, "ref");
     return typeof ref === "string" && REVERT_REF_RE.test(ref);
   }
-  if (method === "POST" && new RegExp(`${OWNER_REPO}/pulls$`).test(p)) {
+  if (m === "POST" && new RegExp(`${OWNER_REPO}/pulls$`).test(p)) {
     const b = plainObject(body);
-    const head = b === null ? undefined : ownValue(b, "head");
-    return typeof head === "string" && REVERT_HEAD_RE.test(head);
+    if (b === null) return false;
+    const head = ownValue(b, "head");
+    const base = ownValue(b, "base");
+    return (
+      typeof head === "string" &&
+      REVERT_HEAD_RE.test(head) &&
+      typeof base === "string" &&
+      PLAIN_BRANCH_RE.test(base)
+    );
   }
-  if (method === "POST" && new RegExp(`${OWNER_REPO}/issues/\\d+/labels$`).test(p)) {
+  if (m === "POST" && new RegExp(`${OWNER_REPO}/issues/\\d+/labels$`).test(p)) {
     const b = plainObject(body);
     if (b === null || Object.keys(b).length !== 1) return false;
     const labels = ownValue(b, "labels");
     return Array.isArray(labels) && labels.length === 1 && labels[0] === REVERT_LABEL;
   }
-  return true;
+  return GUARD_BODILESS.some((r) => r.method === m && r.re.test(p));
 }
 
 /**
- * §12: a GraphQL body the guard may send, with the repository its client mutation id names; null
- * for anything else (which is an unknown route, refused in every mode).
+ * §12: a GraphQL body the guard may send, with the repository and pull request number its client
+ * mutation id names and the node id it targets; null for anything else (which is an unknown
+ * route, refused in every mode).
  */
-export function guardGraphqlTarget(body: unknown): { owner: string; repo: string } | null {
+export function guardGraphqlTarget(
+  body: unknown,
+): { owner: string; repo: string; number: number; pullRequestId: string } | null {
   const b = plainObject(body);
   if (b === null) return null;
   if (Object.keys(b).some((k) => k !== "query" && k !== "variables")) return null;
@@ -290,9 +327,44 @@ export function guardGraphqlTarget(body: unknown): { owner: string; repo: string
   const vars = plainObject(ownValue(b, "variables"));
   if (vars === null) return null;
   const id = ownValue(vars, "clientMutationId");
-  if (typeof id !== "string") return null;
+  const pullRequestId = ownValue(vars, "pullRequestId");
+  if (typeof id !== "string" || typeof pullRequestId !== "string") return null;
   const hit = CLIENT_MUTATION_ID_RE.exec(id);
-  return hit ? { owner: hit[1] as string, repo: hit[2] as string } : null;
+  return hit
+    ? {
+        owner: hit[1] as string,
+        repo: hit[2] as string,
+        number: Number(hit[3]),
+        pullRequestId,
+      }
+    : null;
+}
+
+/** A pull request a guard client read or created: what its GraphQL write may target. */
+interface SeenPull {
+  owner: string;
+  repo: string;
+  number: number;
+}
+const MAX_SEEN_PULLS = 200;
+const PULLS_RE = new RegExp(`${OWNER_REPO}/pulls(?:/\\d+)?$`);
+
+/**
+ * Step 5 review 1, finding 7: the node ids of the pull requests in a `…/pulls` response (create,
+ * get, list) of the client's own repository route, with their number. The GraphQL rule requires
+ * the node id it enables auto-merge on to be one of these, for the repository and number its
+ * client mutation id names, so the gate's repository is the pull request's.
+ */
+function recordPulls(seen: Map<string, SeenPull>, path: string | null, data: unknown): void {
+  if (path === null) return;
+  const hit = PULLS_RE.exec(path);
+  if (!hit) return;
+  for (const p of Array.isArray(data) ? data : [data]) {
+    const v = p as { node_id?: unknown; number?: unknown } | null;
+    if (typeof v?.node_id !== "string" || typeof v.number !== "number") continue;
+    if (seen.size >= MAX_SEEN_PULLS) return;
+    seen.set(v.node_id, { owner: hit[1] as string, repo: hit[2] as string, number: v.number });
+  }
 }
 
 /** Path words that are part of a route; every other segment (names, branches) is templated. */
@@ -360,12 +432,20 @@ export function installMutationGuard(
     onRefused?: (e: MutationRefusedError) => void;
   },
 ): void {
+  const seenPulls = new Map<string, SeenPull>();
+  const base = o.baseUrl.replace(/\/+$/, "");
+  if (o.feature === "guard") {
+    octokit.hook.after("request", (response, options) => {
+      const url = octokit.request.endpoint.parse(options).url;
+      if (!url.startsWith(`${base}/`)) return;
+      recordPulls(seenPulls, normalisedPath(url.slice(base.length)), response.data);
+    });
+  }
   octokit.hook.before("request", async (options) => {
     const parsed = octokit.request.endpoint.parse(options);
     const method = parsed.method.toUpperCase();
     if (method === "GET" || method === "HEAD") return;
 
-    const base = o.baseUrl.replace(/\/+$/, "");
     const refusal = (reason: string, suffix = ""): MutationRefusedError => {
       const err = new MutationRefusedError(
         method,
@@ -394,6 +474,15 @@ export function installMutationGuard(
       if (o.installationId === null) throw refusal("app_client");
       if (o.feature === undefined) throw refusal("no_feature");
       if (o.feature !== "guard") throw refusal("feature_not_allowed");
+      const pull = seenPulls.get(target.pullRequestId);
+      if (
+        pull === undefined ||
+        pull.owner.toLowerCase() !== target.owner.toLowerCase() ||
+        pull.repo.toLowerCase() !== target.repo.toLowerCase() ||
+        pull.number !== target.number
+      ) {
+        throw refusal("feature_not_allowed", " (pull request)");
+      }
       const verdict = await o.gate({
         installationId: o.installationId,
         owner: target.owner,

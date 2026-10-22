@@ -18,6 +18,7 @@ import { insertAuditRow } from "../../src/modules/audit/index.js";
 import { guardCheckRun } from "../../src/modules/guard/handlers.js";
 import {
   guardPullRequestClosed,
+  guardRevertJob,
   observeCommit,
   openRevert,
   type RevertData,
@@ -29,6 +30,7 @@ import { apiTreeReader } from "../../src/modules/guard/trees.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { runDoctor } from "../../src/pilot/doctor.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
+import { resolveJobOptions } from "../../src/queue/queue.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
 import { FIXED_NOW, testConfig } from "../helpers/config.js";
 import { testDb, truncateAll } from "../helpers/db.js";
@@ -59,6 +61,7 @@ const C = (n: number) => fakeSha(0xc000 + n);
 const short = (sha: string) => sha.slice(0, 7);
 const ENFORCE = { GRAFT_MODE_CEILING: "enforce" };
 const RETRYING = { retryCount: 0, retryLimit: 3 };
+const LAST_ATTEMPT = { retryCount: 3, retryLimit: 3 };
 /** The PR number the fake gives the first pull request created through the API. */
 const REVERT_PR = 500;
 
@@ -407,6 +410,24 @@ describe("guard revert: report mode", () => {
     expect(gateCalls).toEqual([]);
   });
 
+  it("I-REV-2b a planned outcome whose comment failed is commented later with the report line, even after the repository moved to enforce", async () => {
+    const id = await culprit();
+    api.afterNext("POST", /\/issues\/\d+\/comments$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx({}, RETRYING))).rejects.toThrow();
+    // The lost answer: the fake kept no comment, as if GitHub never wrote it.
+    api.state.comments.length = 0;
+    expect((await eventById(id)).revert_outcome).toBe("planned");
+    await enforceMode();
+    expect(await runRevert(data, ctx(ENFORCE, RETRYING))).toBe("commented");
+    expect(commentLines(1).at(-3)).toMatch(/^Graft would open a pull request reverting this merge/);
+    expect(commentLines(1).at(-1)).toBe(REPORT_LINE);
+    expect(api.find("POST", /\/git\//)).toEqual([]);
+  });
+
   it("I-REV-3 report mode refused: the write step with a guard client while guard_mode is report: mode_report before any request", async () => {
     const id = await culprit();
     const guard = await t.deps.github.forInstallation(INSTALLATION_ID, { feature: "guard" });
@@ -556,6 +577,45 @@ describe("guard revert: enforce", () => {
       Array.from({ length: 5 }, () => ({ feature: "guard", allowed: true })),
     );
     expect(refused).toEqual([]);
+  });
+
+  it("I-REV-5b the D9 check: a directory GitHub does not delete, or a path the request did not name, ends error tree_mismatch before the commit", async () => {
+    const quirks: [string, (q: FakeGitHubApi["state"]["git"]["quirks"]) => void][] = [
+      ["sha: null kept on a directory", (q) => (q.keepNullTrees = true)],
+      [
+        "an extra path written",
+        (q) =>
+          q.extra.push({ path: "keep/k.ts", mode: "100644", type: "blob", sha: blobSha("evil") }),
+      ],
+    ];
+    for (const [name, quirk] of quirks) {
+      await reset();
+      await enforceMode();
+      history(3);
+      const BASE = { "a.ts": "a1", "keep/k.ts": "k" };
+      files(C(1), BASE);
+      // The culprit adds a whole directory (one change on its entry) and modifies a file.
+      files(C(2), { ...BASE, "a.ts": "a2", "new/n.ts": "n", "new/m.ts": "m" });
+      files(C(3), { ...BASE, "a.ts": "a2", "new/n.ts": "n", "new/m.ts": "m", "later.ts": "l" });
+      quirk(api.state.git.quirks);
+      const id = await culprit(ENFORCE);
+      await runReverts(ENFORCE);
+      expect(routes(), name).toEqual([R("POST", "/git/trees"), R("POST", "/issues/{n}/comments")]);
+      expect(await eventById(id), name).toMatchObject({
+        status: "culprit_found",
+        revert_outcome: "error",
+        revert_reason: "tree_mismatch",
+        revert_commit_sha: null,
+        revert_branch: null,
+        revert_pr_number: null,
+      });
+      expect(api.find("POST", /\/git\/commits$/), name).toEqual([]);
+      expect(api.find("POST", /\/git\/refs$/), name).toEqual([]);
+      expect(api.find("POST", /\/pulls$/), name).toEqual([]);
+      expect(commentLines().at(-3), name).toBe(
+        "Graft could not open the revert (tree_mismatch). An operator can see the event with `graft guard list`.",
+      );
+    }
   });
 
   it("I-REV-6 a changed path modified again on main: needs_human, the comment lists it, no write besides the comment", async () => {
@@ -724,6 +784,29 @@ describe("guard revert: enforce", () => {
     ).toBe(true);
     expect(api.state.pulls.has(REVERT_PR + 1)).toBe(false);
 
+    // Step 5 review 1, finding 8: the same crash, and the PR is closed before the retry. The
+    // adopted PR gets its final state: revert_closed, which the cap does not count.
+    await reset();
+    await enforceMode();
+    id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/pulls$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [dataClosed] = await takeReverts();
+    if (!dataClosed) throw new Error("no job");
+    await expect(runRevert(dataClosed, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    Object.assign(api.state.pulls.get(REVERT_PR) as object, {
+      state: "closed",
+      closed_at: now.toISOString(),
+    });
+    await runRevert(dataClosed, ctx(ENFORCE, RETRYING));
+    expect(await eventById(id)).toMatchObject({
+      status: "revert_closed",
+      revert_outcome: "opened",
+      revert_pr_number: REVERT_PR,
+    });
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+
     // A stale branch: the tip moved between the crash and the retry.
     await reset();
     await enforceMode();
@@ -744,6 +827,74 @@ describe("guard revert: enforce", () => {
     expect(api.state.branches.get(`graft-revert/${id}`)).toBe(e.revert_commit_sha);
     expect(api.find("DELETE", new RegExp(`/git/refs/heads/graft-revert/${id}$`))).toHaveLength(1);
     expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+  });
+
+  it("I-REV-10b a run failing outside the write steps: retried while it can, then settled error with a comment on the last attempt; the job row is kept one hour; a late event is skipped stale unless its writes began", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    const real = t.deps.github;
+    let failures = 0;
+    t.deps.github = {
+      ...real,
+      forInstallation: async (...args: Parameters<typeof real.forInstallation>) => {
+        if (failures > 0) {
+          failures--;
+          throw Object.assign(new Error("token service down"), { status: 500 });
+        }
+        return real.forInstallation(...args);
+      },
+    };
+    // Not the last attempt: the error goes back to the queue, the event is untouched.
+    failures = 1;
+    await expect(guardRevertJob.handle(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    expect(await eventById(id)).toMatchObject({ revert_outcome: null, comment_id: null });
+    // The last attempt: error with its class, and the comment is tried once (it succeeds here).
+    failures = 1;
+    await expect(guardRevertJob.handle(data, ctx(ENFORCE, LAST_ATTEMPT))).rejects.toThrow();
+    const e = await eventById(id);
+    expect(e.revert_outcome).toBe("error");
+    expect(e.revert_reason).toMatch(/^github_/);
+    expect(e.comment_id).not.toBeNull();
+    expect(routes()).toEqual([R("POST", "/issues/{n}/comments")]);
+    expect(commentLines().at(-3)).toBe(
+      `Graft could not open the revert (${e.revert_reason}). An operator can see the event with \`graft guard list\`.`,
+    );
+    // A failed run can be sent again an hour later (D1's singleton id lives with the job row).
+    expect(resolveJobOptions(guardRevertJob as never).deleteAfterSeconds).toBe(3600);
+    t.deps.github = real;
+
+    // A culprit confirmed longer ago than GRAFT_GUARD_REVERT_MAX_AGE_HOURS: skipped stale.
+    await reset();
+    await enforceMode();
+    const late = await culprit(ENFORCE);
+    advance(25 * 3600);
+    await runReverts(ENFORCE);
+    expect(await eventById(late)).toMatchObject({
+      revert_outcome: "skipped",
+      revert_reason: "stale",
+    });
+    expect(routes()).toEqual([R("POST", "/issues/{n}/comments")]);
+    expect(commentLines().at(-3)).toBe(
+      "Graft did not open a revert: the failure was confirmed too long ago for an automatic revert.",
+    );
+    // An event whose writes began is resumed whatever its age.
+    await reset();
+    await enforceMode();
+    const begun = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [d2] = await takeReverts();
+    if (!d2) throw new Error("no job");
+    await expect(runRevert(d2, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    advance(25 * 3600);
+    await runRevert(d2, ctx(ENFORCE, RETRYING));
+    expect(await eventById(begun)).toMatchObject({
+      revert_outcome: "opened",
+      revert_pr_number: REVERT_PR,
+    });
   });
 
   it("I-REV-11 redelivery: a replayed check_run, a second observe and a second guard.revert write nothing; a later event with the same culprit is skipped already_opened", async () => {
@@ -851,6 +1002,30 @@ describe("guard revert: enforce", () => {
     });
   });
 
+  it("I-REV-12b the cap counts a claim with no outcome: two reverts open and one claimed in progress, a new culprit is skipped cap_reached", async () => {
+    await enforceMode();
+    for (const n of [901, 902]) {
+      await insertEvent({
+        failingSha: fakeSha(0xf000 + n),
+        status: "revert_opened",
+        revert: { revert_pr_number: n, revert_outcome: "opened" },
+      });
+    }
+    await insertEvent({
+      failingSha: fakeSha(0xf903),
+      status: "culprit_found",
+      revert: { revert_claimed_at: now },
+    });
+    const id = await culprit(ENFORCE);
+    await runReverts(ENFORCE);
+    expect(await eventById(id)).toMatchObject({
+      revert_outcome: "skipped",
+      revert_reason: "cap_reached",
+    });
+    expect(api.find("POST", /\/git\//)).toEqual([]);
+    expect(api.find("POST", /\/pulls$/)).toEqual([]);
+  });
+
   it("I-REV-13 auto-merge: listed at the baseline, a logic card: the constant mutation with the PR's client mutation id; enabled", async () => {
     await enforceMode();
     history(3);
@@ -891,6 +1066,58 @@ describe("guard revert: enforce", () => {
     );
     expect(api.requests.filter((r) => r.method === "PUT")).toEqual([]);
     expect(gateCalls.filter((c) => c.feature === "guard")).toHaveLength(6);
+  });
+
+  it("I-REV-13b D15: GitHub's answer for another pull request or repository is error auto_merge_mismatch; 'already enabled' counts as enabled", async () => {
+    const setup = async () => {
+      await reset();
+      await enforceMode();
+      history(3);
+      mergedPull(7, C(2));
+      mergedPull(8, C(3));
+      putContent(api, C(1), "version: 1\nguard:\n  auto_merge_reverts: [logic]\n");
+      api.state.repository.allow_auto_merge = true;
+      await track(C(3), null);
+      await addCard(t.db, {
+        changeId: await prId(7),
+        headSha: fakeSha(0xd007),
+        risk: "logic",
+        createdAt: now,
+      });
+    };
+    for (const answer of [{ number: REVERT_PR + 1 }, { nameWithOwner: "other/repo" }]) {
+      await setup();
+      api.state.graphqlAnswer = answer;
+      const id = await culprit(ENFORCE);
+      await runReverts(ENFORCE, RETRYING);
+      const label = JSON.stringify(answer);
+      expect(await eventById(id), label).toMatchObject({
+        revert_outcome: "error",
+        revert_reason: "auto_merge_mismatch",
+        revert_pr_number: REVERT_PR,
+        auto_merge_state: null,
+      });
+      // Permanent: no retry, one GraphQL request.
+      expect(api.find("POST", /^\/graphql$/), label).toHaveLength(1);
+      expect(commentLines().at(-3), label).toBe(
+        `Graft opened #${REVERT_PR} to revert this merge but could not finish (auto_merge_mismatch). An operator can see the event with \`graft guard list\`.`,
+      );
+    }
+    await setup();
+    api.state.graphqlErrors.push({
+      type: "UNPROCESSABLE",
+      message: "Pull request auto merge is already enabled",
+    });
+    const id = await culprit(ENFORCE);
+    await runReverts(ENFORCE);
+    expect(await eventById(id)).toMatchObject({
+      revert_outcome: "opened",
+      auto_merge_state: "enabled",
+      auto_merge_reason: null,
+    });
+    expect(commentLines().at(-3)).toBe(
+      `Graft opened #${REVERT_PR} to revert this merge. Auto-merge: on.`,
+    );
   });
 
   it("I-REV-14 auto-merge refused: break-glass, a sensitive card, no card, the key only in the culprit's own graft.yaml, the repository setting, a GitHub error", async () => {
@@ -941,6 +1168,21 @@ describe("guard revert: enforce", () => {
       {
         name: "no card",
         setup: async () => {},
+        state: "not_eligible",
+        reason: "card_missing",
+        graphql: 0,
+      },
+      {
+        // Step 5 review 1, finding 8: a logic card at an earlier head is not the merged head's.
+        name: "card at an earlier head",
+        setup: async (change) => {
+          await addCard(t.db, {
+            changeId: change,
+            headSha: fakeSha(0xd006),
+            risk: "logic",
+            createdAt: now,
+          });
+        },
         state: "not_eligible",
         reason: "card_missing",
         graphql: 0,
@@ -1129,6 +1371,94 @@ describe("guard revert: enforce", () => {
     );
   });
 
+  it("I-REV-17b a rollback between runs: a PR opened but not stored is adopted, a branch with no PR, or an opened revert's label left, all end error mode_changed, never planned; another refusal is not mode_changed", async () => {
+    const rollback = () => t.db.updateTable("repositories").set({ guard_mode: "report" }).execute();
+    // The PR was opened, the answer lost; the retry reads report.
+    await enforceMode();
+    let id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/pulls$/, async () => {
+      throw new Error("worker crashed");
+    });
+    let [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    await rollback();
+    let before = writes().length;
+    await runRevert(data, ctx(ENFORCE, RETRYING));
+    expect(await eventById(id)).toMatchObject({
+      status: "revert_opened",
+      revert_outcome: "error",
+      revert_reason: "mode_changed",
+      revert_pr_number: REVERT_PR,
+    });
+    expect(routes().slice(before)).toEqual([R("POST", "/issues/{n}/comments")]);
+    expect(refused).toEqual([]);
+    expect(commentLines().at(-3)).toBe(
+      `Graft opened #${REVERT_PR} to revert this merge but could not finish (mode_changed). An operator can see the event with \`graft guard list\`.`,
+    );
+
+    // The commit was written, the ref answer lost: no PR exists.
+    await reset();
+    await enforceMode();
+    id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      throw new Error("worker crashed");
+    });
+    [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    await rollback();
+    before = writes().length;
+    await runRevert(data, ctx(ENFORCE, RETRYING));
+    expect(await eventById(id)).toMatchObject({
+      status: "culprit_found",
+      revert_outcome: "error",
+      revert_reason: "mode_changed",
+      revert_pr_number: null,
+    });
+    expect(routes().slice(before)).toEqual([R("POST", "/issues/{n}/comments")]);
+    expect(commentLines().at(-3)).toBe(
+      "Graft could not open the revert (mode_changed). An operator can see the event with `graft guard list`.",
+    );
+
+    // An opened revert whose label answer was lost, resumed in report mode.
+    await reset();
+    await enforceMode();
+    id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/labels$/, async () => {
+      throw new Error("worker crashed");
+    });
+    [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    expect(await eventById(id)).toMatchObject({ revert_outcome: "opened", revert_labelled: false });
+    await rollback();
+    before = writes().length;
+    await runRevert(data, ctx(ENFORCE, RETRYING));
+    expect(await eventById(id)).toMatchObject({
+      status: "revert_opened",
+      revert_outcome: "error",
+      revert_reason: "mode_changed",
+      revert_pr_number: REVERT_PR,
+    });
+    expect(routes().slice(before)).toEqual([R("POST", "/issues/{n}/comments")]);
+    expect(refused).toEqual([]);
+
+    // Finding 5: the repository deactivated mid-job is a refusal, but not a rollback.
+    await reset();
+    await enforceMode();
+    id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      await t.db.updateTable("repositories").set({ removed_at: now }).execute();
+    });
+    await runReverts(ENFORCE, RETRYING);
+    expect(await eventById(id)).toMatchObject({
+      revert_outcome: "error",
+      revert_reason: "refused_repository_unknown",
+    });
+    expect(refused.map((r) => r.refusal)).toEqual(["repository_unknown"]);
+  });
+
   it("I-REV-18 lifecycle: merged gives reverted, closed gives revert_closed, an unknown graft-revert PR gives nothing, a missed webhook is caught by the next push", async () => {
     const closed = (number: number, ref: string) => {
       const p = loadFixture("pull_request.closed.revert").payload as {
@@ -1185,6 +1515,21 @@ describe("guard revert: enforce", () => {
     sent = await deliver(closed(REVERT_PR, `graft-revert/${id}`));
     expect(await revertClosed(sent[0]?.data as never, ctx(ENFORCE))).toBe("revert_closed");
     expect((await eventById(id)).status).toBe("revert_closed");
+
+    // Step 5 review 1, finding 8: a late webhook for a revert already settled changes nothing,
+    // and asks the API nothing.
+    const reads = api.find("GET", /\/pulls\/\d+$/).length;
+    await t.db
+      .updateTable("guard_events")
+      .set({ status: "reverted", reverted_at: new Date("2026-10-14T13:00:00Z") })
+      .where("id", "=", id)
+      .execute();
+    expect(await revertClosed(sent[0]?.data as never, ctx(ENFORCE))).toBe("settled");
+    expect(await eventById(id)).toMatchObject({
+      status: "reverted",
+      reverted_at: new Date("2026-10-14T13:00:00Z"),
+    });
+    expect(api.find("GET", /\/pulls\/\d+$/)).toHaveLength(reads);
 
     // A graft-revert PR the database does not know, and a PR from another branch.
     expect(await revertClosed({ repositoryId: REPO_ID, prNumber: 4242 }, ctx(ENFORCE))).toBe(
@@ -1358,6 +1703,7 @@ describe("guard revert: enforce", () => {
       checks.filter((c) => c.id.startsWith("guard_revert")).map((c) => [c.id, c.status, c.detail]),
     ).toEqual([
       ["guard_reverts_open", "WARN", "1 revert PRs open for more than 72 hours"],
+      ["guard_revert_claims", "OK", "no revert claim older than an hour without an outcome"],
       [
         "guard_revert_errors",
         "WARN",
@@ -1376,6 +1722,10 @@ describe("guard revert: enforce", () => {
     const without = await ops(["pilot", "doctor", "--installation", String(INSTALLATION_ID)]);
     expect(without.out).toContain("OK    guard_reverts_open");
     expect(without.out).toContain("OK    guard_revert_errors");
+    // Step 5 review 1, finding 4: #456's claim (4 days old) now has no outcome.
+    expect(without.out).toContain(
+      "WARN  guard_revert_claims: 1 guard events claimed for a revert more than an hour ago with no outcome",
+    );
     expect(doctor.code).toBe(without.code);
     expect(
       checks.filter((c) => c.id.startsWith("guard_revert")).every((c) => c.status !== "FAIL"),

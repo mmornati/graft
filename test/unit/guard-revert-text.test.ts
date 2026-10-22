@@ -147,6 +147,10 @@ describe("revert text: the commit and the pull request (§8)", () => {
       mergedBy: { login: "deploy-bot", type: "Bot" },
     });
     expect(atsOutsideCode(botNoMerger)).toEqual([]);
+    // Step 5 review 1, nit 12: a Bot whose login is a valid mention is still a code span.
+    const validBot = revertBody({ ...BODY, author: { login: "ci-helper", type: "Bot" } });
+    expect(validBot).toContain("- Author: `ci-helper`, merged by @bob");
+    expect(atsOutsideCode(validBot).map((a) => a.split(" ")[0])).toEqual(["@bob"]);
     const invalid = revertBody({ ...BODY, author: { login: "-not@valid--", type: "User" } });
     expect(invalid).toContain("- Author: `-not@valid--`");
     expect(atsOutsideCode(invalid)).toEqual([]);

@@ -197,6 +197,11 @@ export function createFakeGitHubApi(
     autoMerge: new Map<number, { mergeMethod: string }>(),
     /** Phase 1 step 5: the next GraphQL mutations answer these errors, oldest first. */
     graphqlErrors: [] as { type: string; message: string }[],
+    /**
+     * Step 5 review 1, finding 3: the pull request a successful `enablePullRequestAutoMerge`
+     * answers with, in place of the one it was asked about (another number or repository).
+     */
+    graphqlAnswer: null as { number?: number; nameWithOwner?: string } | null,
     /** Phase 1 step 5: numbers given to pull requests created through the API. */
     nextPullNumber: 500,
     /** Phase 1 step 4: the commit graph `GET /commits?sha=` walks (first parents only). */
@@ -327,7 +332,10 @@ export function createFakeGitHubApi(
       data: {
         enablePullRequestAutoMerge: {
           clientMutationId: vars.clientMutationId ?? null,
-          pullRequest: { number: pull.number, repository: { nameWithOwner: fullName() } },
+          pullRequest: {
+            number: state.graphqlAnswer?.number ?? pull.number,
+            repository: { nameWithOwner: state.graphqlAnswer?.nameWithOwner ?? fullName() },
+          },
         },
       },
     });
@@ -541,7 +549,7 @@ export function createFakeGitHubApi(
       if (base !== null && !state.git.trees.has(base))
         return json(422, { message: "Invalid tree" });
       try {
-        const sha = state.git.applyEntries(
+        const sha = state.git.writeTree(
           base,
           entries.map((e) => ({ path: e.path, mode: e.mode, type: e.type, sha: e.sha ?? null })),
         );
