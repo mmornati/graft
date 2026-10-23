@@ -475,6 +475,57 @@ async function findPr(
     : null;
 }
 
+/**
+ * Phase 1 step 7 (D4, step 5 review 2, finding A): the last attempt of a run failed after its
+ * writes began (`revert_branch` or `revert_commit_sha` stored) and before the PR number was stored.
+ * What GitHub holds is never settled `error`: a PR found by head with the default client is
+ * adopted (`revert_opened`, outcome `opened`), so the next `guard.revert` resumes its label and
+ * auto-merge; otherwise (no PR, or the lookup fails) no outcome is written, and the next observe
+ * re-sends `guard.revert` once the job row expires, which resumes from the stored steps (the
+ * `stale` rule exempts an event whose writes began). Both keep exactly one revert per event.
+ * Returns null when the event's writes had not begun (the caller settles as before).
+ */
+async function settleBegunWrites(
+  ctx: JobContext,
+  data: RevertData,
+  octokit: GitHubClient | null,
+): Promise<"adopted" | "resumable" | null> {
+  const e = await getEvent(ctx.db, data.eventId);
+  if (
+    e === undefined ||
+    e.culprit_change_id === null ||
+    e.revert_outcome !== null ||
+    e.revert_pr_number !== null ||
+    (e.revert_branch === null && e.revert_commit_sha === null)
+  ) {
+    return null;
+  }
+  try {
+    const gh = octokit ?? (await ctx.github.forInstallation(data.installationId));
+    const found = await findPr(gh, { data, eventId: e.id });
+    if (found) {
+      await storePr(
+        ctx,
+        { eventId: e.id, changeId: e.culprit_change_id },
+        found,
+        revertBranch(e.id),
+      );
+      ctx.log.info(
+        { eventId: e.id, prNumber: found.number },
+        "guard revert adopted after its last attempt",
+      );
+      return "adopted";
+    }
+  } catch (err) {
+    ctx.log.warn(
+      { eventId: e.id, errorClass: errorClass(err) },
+      "guard revert lookup failed after its last attempt",
+    );
+  }
+  ctx.log.info({ eventId: e.id }, "guard revert left resumable after its last attempt");
+  return "resumable";
+}
+
 async function sameCommit(
   reader: ApiTreeReader,
   sha: string,
@@ -858,6 +909,9 @@ export async function runRevert(
       return comment();
     }
     if (isRetryable(err) && canRetry(ctx)) throw err;
+    // D4: writes began; adopt the PR or leave the event resumable. No comment: a written
+    // comment would stop the resumed run (it writes the comment as its last step).
+    if ((await settleBegunWrites(ctx, data, octokit)) !== null) return "stopped";
     await settle("error", errorClass(err));
     return comment();
   };
@@ -1172,6 +1226,8 @@ export async function settleFailedRun(
     ) {
       return;
     }
+    // D4: a run whose writes began is adopted or left resumable, never settled `error`.
+    if ((await settleBegunWrites(ctx, data, null)) !== null) return;
     if (e.revert_outcome === null) {
       await updateEvent(
         ctx.db,
