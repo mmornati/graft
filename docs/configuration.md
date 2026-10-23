@@ -62,6 +62,12 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_GUARD_REVERT_MAX_PATHS` | `300` | Integer 1 to 1000. A culprit whose tree diff has more changed paths than this is `needs_human` / `too_large`. |
 | `GRAFT_GUARD_REVERT_MAX_TREE_READS` | `200` | Integer 10 to 1000. Tree objects one revert plan may read (`GET …/git/trees/{sha}`); a plan that needs more is `needs_human` / `too_large`. |
 | `GRAFT_GUARD_REVERT_MAX_AGE_HOURS` | `24` | Integer 1 to 168. A culprit confirmed more than this many hours ago is `skipped` / `stale` before any write, so a `guard.revert` sent again late (after a failed run) never opens a revert days after the failure. A revert whose writes already began is resumed whatever its age. |
+| `GRAFT_MCP` | `on` | `on` or `off`. Phase 1 step 6: the MCP endpoint `/mcp` on the server. `off` does not register the route (`404`); `pnpm graft mcp-token` still manages tokens. With no token created, `on` exposes only a `401`. See [MCP server](features/mcp.md). |
+| `GRAFT_MCP_ALLOWED_ORIGINS` | empty | Comma-separated origins (`https://host[:port]`, no path) a browser may call `/mcp` from. A request with any other `Origin` header gets `403`. Empty refuses every browser; agents send no `Origin`. |
+| `GRAFT_MCP_RATE_LIMIT_PER_MINUTE` | `60` | Integer 1 to 600. Requests per MCP token per minute, per server process (`429` with `Retry-After`). |
+| `GRAFT_MCP_AUTH_FAILURES_PER_MINUTE` | `20` | Integer 1 to 600. Failed MCP authentications per client IP per minute, per server process; past it the IP gets `429` for the rest of the minute, before any database lookup. The IP is the connection's peer (no `trustProxy` is configured). |
+| `GRAFT_MCP_OPEN_CHANGE_PER_HOUR` | `10` | Integer 1 to 100. PRs `open_change` may open per repository in any rolling hour, counted in the database across processes. |
+| `GRAFT_MCP_MAX_TOKENS_PER_REPO` | `10` | Integer 1 to 50. Active MCP tokens per repository (`pnpm graft mcp-token create` refuses past it). |
 | `GRAFT_POLICY_CARD_WAIT_SECONDS` | `600` | Integer 0 to 3600. In enforce mode, how long `graft/policy` stays `in_progress` after a head is first evaluated while its intent card is still being written; after that it concludes on the conservative pending-card rules. `0` never waits. Report mode never waits (it still schedules the re-evaluation). See [Policy](features/policy.md#enforce-mode). |
 
 ## Deploying with federation

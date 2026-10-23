@@ -43,10 +43,10 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, all twenty-five tables exist", async () => {
+  it("I-DB-1 after migration, all twenty-seven tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(25);
+    expect(TABLE_NAMES).toHaveLength(27);
     expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
   });
@@ -92,6 +92,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -421,6 +422,24 @@ describe("database", () => {
         observed_at: now,
       })
       .execute();
+    // Phase 1 step 6: a token hash (never a token) and a PR opened through MCP.
+    const token = await db
+      .insertInto("mcp_tokens")
+      .values({
+        repository_id: 2,
+        name: "ci",
+        token_hash: "f".repeat(64),
+        token_prefix: "abcdEFGH",
+        created_by: "tester",
+        created_at: now,
+        expires_at: new Date(now.getTime() + 86_400_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await db
+      .insertInto("mcp_changes")
+      .values({ repository_id: 2, token_id: token.id, pr_number: 5, head_sha: SHA })
+      .execute();
 
     for (const t of TABLE_NAMES) {
       const rows = await db.selectFrom(t).selectAll().execute();
@@ -573,6 +592,7 @@ describe("database", () => {
     );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -622,6 +642,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -633,6 +654,7 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -682,6 +704,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
@@ -732,6 +755,7 @@ describe("database", () => {
       );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -805,6 +829,7 @@ describe("database", () => {
 
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -853,6 +878,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     expect(await policyColumns()).toEqual(upColumns);
@@ -880,6 +906,7 @@ describe("database", () => {
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -912,6 +939,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
@@ -949,6 +977,7 @@ describe("database", () => {
       .executeTakeFirstOrThrow();
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0014_mcp");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe("0013_guard_revert");
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0012_audit_label_event",
@@ -976,6 +1005,7 @@ describe("database", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     const rows = await sql<{ user_id: number; verified: boolean }>`

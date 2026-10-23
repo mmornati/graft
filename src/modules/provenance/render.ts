@@ -5,6 +5,8 @@ import { type GraftField, TRAILER_KEYS } from "./fields.js";
 export interface RenderOptions {
   headSha: string;
   authorLogin: string;
+  /** Phase 1 step 6 (§8): an MCP report for this head, shown as unverified. */
+  mcp?: { agent: string; model: string | null; task: string | null; agrees: boolean };
 }
 
 const AUTHORED_BY: Record<ProvenanceResult["authorKindReason"], string> = {
@@ -67,6 +69,17 @@ function warningItem(w: ProvenanceResult["warnings"][number]): string {
   return `- ${where}: ${subject} (${w.code})`;
 }
 
+/** Phase 1 step 6 (§8): the values are code spans, as for trailers (they passed the same rules). */
+function mcpLine(m: NonNullable<RenderOptions["mcp"]>): string {
+  const parts = [`agent ${code(m.agent)}`];
+  if (m.model !== null) parts.push(`model ${code(m.model)}`);
+  if (m.task !== null) parts.push(`task ${code(m.task)}`);
+  const verdict = m.agrees
+    ? "agrees with trailers"
+    : "differs from trailers: the policy treats the author as unknown";
+  return `Reported through MCP (unverified): ${parts.join(", ")} · ${verdict}`;
+}
+
 export function renderProvenanceSection(r: ProvenanceResult, o: RenderOptions): string {
   const lines = [
     "### Provenance",
@@ -80,6 +93,7 @@ export function renderProvenanceSection(r: ProvenanceResult, o: RenderOptions): 
   ];
   if (r.fields.session) lines.push(`| **Session** | ${valueCell(r, "session")} |`);
   lines.push(`| **Opened by** | ${code(o.authorLogin)} |`, "", footer(r, o));
+  if (o.mcp) lines.push("", mcpLine(o.mcp));
 
   if (r.warnings.length > 0) {
     const n = r.warnings.length;

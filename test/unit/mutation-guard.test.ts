@@ -6,6 +6,7 @@ import {
   guardBodyAllowed,
   type MutationGate,
   MutationRefusedError,
+  mcpBodyAllowed,
 } from "../../src/github/mutation-guard.js";
 import { PermanentJobError } from "../../src/queue/errors.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
@@ -933,5 +934,155 @@ describe("mutation guard: the guard's revert writes (Phase 1 step 5, §12)", () 
     );
     expect(merge.refusal).toBe("unknown_route");
     expect(sentCount(api)).toBe(0);
+  });
+});
+
+describe("mutation guard: the mcp feature's one write (Phase 1 step 6, §9)", () => {
+  type Client = Awaited<ReturnType<ReturnType<typeof fakeGitHubFactory>["forInstallation"]>>;
+  const GOOD = {
+    title: "Add x",
+    body: "Adds x.\n\nGraft-Agent: codex",
+    head: "feat/x",
+    base: "main",
+    draft: false,
+    maintainer_can_modify: false,
+  };
+  const open = (c: Client, body: Record<string, unknown>) =>
+    c.request("POST /repos/{owner}/{repo}/pulls", { owner: OWNER, repo: REPO, ...body } as never);
+  const setup = (verdict: Awaited<ReturnType<MutationGate>>) => {
+    const api = createFakeGitHubApi();
+    api.state.branches.set("feat/x", SHA);
+    const asked: unknown[] = [];
+    const factory = fakeGitHubFactory(api, async (q) => {
+      asked.push(q);
+      return verdict;
+    });
+    const sent = () =>
+      api.requests.filter((r) => r.method !== "GET" && !r.path.endsWith("/access_tokens"));
+    return { api, asked, factory, sent };
+  };
+
+  it("U-MG-MCP-1 POST …/pulls from an mcp client with a valid body: sent when the gate allows, mode_off when it does not; a bad body never asks the gate", async () => {
+    const allowed = setup({ allowed: true });
+    const mcp = await allowed.factory.forInstallation(1, { feature: "mcp" });
+    await open(mcp, GOOD);
+    expect(allowed.sent().map((r) => `${r.method} ${r.path}`)).toEqual([
+      `POST /repos/${OWNER}/${REPO}/pulls`,
+    ]);
+    expect(allowed.asked).toEqual([
+      { installationId: 1, owner: OWNER, repo: REPO, feature: "mcp" },
+    ]);
+    // Every key is optional but head and base; `maintainer_can_modify` absent is fine.
+    const { maintainer_can_modify: _m, draft: _d, body: _b, ...minimal } = GOOD;
+    await open(mcp, { ...minimal, head: "feat/x" }).catch(() => undefined);
+    expect(allowed.asked).toHaveLength(2);
+
+    const denied = setup({ allowed: false, reason: "mode_off" });
+    const off = await denied.factory.forInstallation(1, { feature: "mcp" });
+    expect((await refusal(open(off, GOOD))).refusal).toBe("mode_off");
+    expect(denied.sent()).toEqual([]);
+    expect(denied.asked).toHaveLength(1);
+    expect((await refusal(open(off, { ...GOOD, issue: 5 }))).refusal).toBe("feature_not_allowed");
+    expect(denied.asked).toHaveLength(1);
+  });
+
+  it("U-MG-MCP-2 refused feature_not_allowed: an issue key, maintainer_can_modify true, an owner: head, a graft-revert/ head, an extra key, a body that is not a plain object", async () => {
+    const s = setup({ allowed: true });
+    const mcp = await s.factory.forInstallation(1, { feature: "mcp" });
+    const bad: Record<string, unknown>[] = [
+      { ...GOOD, issue: 5 },
+      { ...GOOD, maintainer_can_modify: true },
+      { ...GOOD, maintainer_can_modify: "false" },
+      { ...GOOD, head: `${OWNER}:feat/x` },
+      { ...GOOD, head: `graft-revert/${EVENT}` },
+      { ...GOOD, base: "other:main" },
+      { ...GOOD, head: "../x" },
+      { ...GOOD, labels: ["x"] },
+      { ...GOOD, head: undefined },
+      { ...GOOD, base: 7 },
+    ];
+    for (const body of bad) {
+      const e = await refusal(open(mcp, body));
+      expect([e.refusal, e.route], JSON.stringify(body)).toEqual([
+        "feature_not_allowed",
+        "/repos/{owner}/{repo}/pulls (body)",
+      ]);
+    }
+    // A raw string body (`data`) is not a plain object.
+    const raw = await refusal(
+      mcp.request("POST /repos/{owner}/{repo}/pulls", {
+        owner: OWNER,
+        repo: REPO,
+        data: JSON.stringify(GOOD),
+      } as never),
+    );
+    expect(raw.refusal).toBe("feature_not_allowed");
+    expect(mcpBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls`, [GOOD])).toBe(false);
+    expect(mcpBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls`, null)).toBe(false);
+    expect(mcpBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls`, GOOD)).toBe(true);
+    expect(mcpBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls#x`, GOOD)).toBe(false);
+    expect(s.sent()).toEqual([]);
+    expect(s.asked).toEqual([]);
+  });
+
+  it("U-MG-MCP-3 the guard body rule is unchanged; a guard client cannot send the mcp body, nor an mcp client the guard's", async () => {
+    const s = setup({ allowed: true });
+    const guard = await s.factory.forInstallation(1, { feature: "guard" });
+    const mcp = await s.factory.forInstallation(1, { feature: "mcp" });
+    expect((await refusal(open(guard, GOOD))).refusal).toBe("feature_not_allowed");
+    const revert = { head: `graft-revert/${EVENT}`, base: "main", title: "Revert #5" };
+    expect((await refusal(open(mcp, revert))).refusal).toBe("feature_not_allowed");
+    expect(s.asked).toEqual([]);
+    expect(guardBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls`, revert)).toBe(true);
+    expect(guardBodyAllowed("POST", `/repos/${OWNER}/${REPO}/pulls`, GOOD)).toBe(false);
+    await open(guard, revert).catch(() => undefined);
+    expect(s.asked).toEqual([{ installationId: 1, owner: OWNER, repo: REPO, feature: "guard" }]);
+  });
+
+  it("U-MG-MCP-4 an mcp client sending POST …/git/refs, …/labels, a comment, a check run or /graphql → feature_not_allowed or unknown_route; no other route exists for mcp", async () => {
+    const s = setup({ allowed: true });
+    const mcp = await s.factory.forInstallation(1, { feature: "mcp" });
+    const refs = await refusal(
+      mcp.rest.git.createRef({ owner: OWNER, repo: REPO, ref: "refs/heads/feat/y", sha: SHA }),
+    );
+    expect(refs.refusal).toBe("feature_not_allowed");
+    const labels = await refusal(
+      mcp.rest.issues.addLabels({ owner: OWNER, repo: REPO, issue_number: 5, labels: ["x"] }),
+    );
+    expect(labels.refusal).toBe("feature_not_allowed");
+    const graphql = await refusal(mcp.graphql("mutation { x }"));
+    expect(graphql.refusal).toBe("unknown_route");
+    const merge = await refusal(
+      mcp.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+        owner: OWNER,
+        repo: REPO,
+        pull_number: 5,
+      }),
+    );
+    expect(merge.refusal).toBe("unknown_route");
+    const check = await refusal(
+      mcp.rest.checks.create({
+        owner: OWNER,
+        repo: REPO,
+        name: "graft/policy",
+        head_sha: SHA,
+        status: "completed",
+        conclusion: "success",
+      }),
+    );
+    expect(check.refusal).toBe("feature_not_allowed");
+    expect(s.sent()).toEqual([]);
+    expect(s.asked).toEqual([]);
+    // In the route table, mcp appears on POST …/pulls only.
+    for (const [method, path] of [
+      ["POST", "/repos/o/r/git/refs"],
+      ["POST", "/repos/o/r/git/trees"],
+      ["POST", "/repos/o/r/git/commits"],
+      ["POST", "/repos/o/r/issues/3/labels"],
+      ["DELETE", `/repos/o/r/git/refs/heads/graft-revert/${EVENT}`],
+    ] as const) {
+      const c = classifyWrite(method, path);
+      expect(c.kind === "phase1" && c.features, path).toEqual(["guard"]);
+    }
   });
 });

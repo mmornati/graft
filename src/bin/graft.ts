@@ -27,6 +27,7 @@ const USAGE = `usage:
   graft mode show|set|history|refresh-permissions ...   (see docs/features/modes.md)
   graft audit list --repo <owner/repo> ...   (see docs/features/policy.md, "Break-glass")
   graft guard list --repo <owner/repo> ...   (see docs/features/guard.md)
+  graft mcp-token create|list|revoke ...   (see docs/features/mcp.md)
   graft e2e setup|run|verify|report|cleanup ...   (see docs/e2e/runbook.md)
 `;
 
@@ -39,6 +40,7 @@ const OPS_GROUPS = new Set([
   "mode",
   "audit",
   "guard",
+  "mcp-token",
 ]);
 
 const DEFAULT_SCHEMA_PATH = fileURLToPath(

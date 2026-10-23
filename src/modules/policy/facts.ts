@@ -93,7 +93,12 @@ export function buildFacts(o: {
   files: readonly ListedFile[];
   complete: boolean;
   card: Pick<IntentCardRow, "head_sha" | "status" | "risk_class"> | undefined;
-  provenance: Pick<ChangeProvenanceRow, "head_sha" | "author_kind" | "agent"> | undefined;
+  provenance:
+    | (Pick<ChangeProvenanceRow, "head_sha" | "author_kind" | "agent"> & {
+        /** Phase 1 step 6 (D13); absent on rows read before 0014, which means `none`. */
+        mcp_report?: ChangeProvenanceRow["mcp_report"];
+      })
+    | undefined;
   configSensitivePaths: readonly string[];
   policySensitivePaths: readonly string[];
 }): PolicyFacts {
@@ -134,8 +139,10 @@ export function buildFacts(o: {
     risk = { value: maxRisk(floor, "logic"), final: false, source: "card_pending" };
   }
 
+  // Phase 1 step 6 (D13): an MCP report that disagrees with the trailers makes the author
+  // unknown, the strictest fact the engine has. A report never replaces a trailer value.
   const author: PolicyFacts["author"] =
-    o.provenance && o.provenance.head_sha === headSha
+    o.provenance && o.provenance.head_sha === headSha && o.provenance.mcp_report !== "disagrees"
       ? { kind: o.provenance.author_kind, agent: o.provenance.agent }
       : { kind: "unknown", agent: null };
 
@@ -147,4 +154,45 @@ export function buildFacts(o: {
     author,
     labels: (pull.labels ?? []).map((l) => l.name),
   };
+}
+
+/** D19: at most this many commits are read; more means "cannot tell who wrote it". */
+export const MAX_COMMIT_LOGINS = 250;
+const COMMIT_PAGE = 100;
+
+/**
+ * Phase 1 step 6 (D19): the lowercased author and committer logins of a PR's commits, for a PR
+ * opened through MCP, or null when Graft cannot tell who they are (more than 250 commits, or a
+ * commit with no author login). GitHub's web committer `web-flow` is not a person and is skipped.
+ * Logins only: no message, no SHA, nothing stored.
+ */
+export async function listCommitLogins(
+  octokit: GitHubClient,
+  o: { owner: string; repo: string; prNumber: number; commits: number },
+): Promise<string[] | null> {
+  if (o.commits > MAX_COMMIT_LOGINS) return null;
+  const logins = new Set<string>();
+  let seen = 0;
+  for (let page = 1; page <= Math.ceil(MAX_COMMIT_LOGINS / COMMIT_PAGE); page++) {
+    const res = await octokit.rest.pulls.listCommits({
+      owner: o.owner,
+      repo: o.repo,
+      pull_number: o.prNumber,
+      per_page: COMMIT_PAGE,
+      page,
+    });
+    for (const c of res.data) {
+      seen++;
+      const author = c.author?.login;
+      if (typeof author !== "string" || author === "") return null;
+      logins.add(author.toLowerCase());
+      const committer = c.committer?.login;
+      if (typeof committer === "string" && committer !== "" && committer !== "web-flow") {
+        logins.add(committer.toLowerCase());
+      }
+    }
+    if (res.data.length < COMMIT_PAGE) break;
+  }
+  if (seen > MAX_COMMIT_LOGINS) return null;
+  return [...logins].sort();
 }

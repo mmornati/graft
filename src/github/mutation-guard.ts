@@ -18,8 +18,14 @@
  * `pullRequestId` must be the node id of pull request `<n>` of that repository, as this client
  * created or read it (step 5 review 1, finding 7).
  *
+ * Phase 1 step 6 (§9): an `mcp` client's only route is `POST …/pulls`, and its body must be the
+ * `open_change` body: keys among `title`, `body`, `head`, `base`, `draft`, `maintainer_can_modify`,
+ * plain branch names for `head` and `base` (no `owner:` form, never `graft-revert/`), and
+ * `maintainer_can_modify` absent or `false`.
+ *
  * This file imports no database and no module code: the mode lookup arrives as a `MutationGate`.
  */
+import { validBranchName } from "../mcp/schemas.js";
 import { PermanentJobError } from "../queue/errors.js";
 import type { GitHubClient } from "./client-factory.js";
 
@@ -312,6 +318,31 @@ export function guardBodyAllowed(method: string, path: string, body: unknown): b
   return GUARD_BODILESS.some((r) => r.method === m && r.re.test(p));
 }
 
+const MCP_PULL_KEYS = new Set(["title", "body", "head", "base", "draft", "maintainer_can_modify"]);
+
+/**
+ * Phase 1 step 6 (§9): whether the body of an `mcp` write is one `open_change` may send. Fails
+ * closed: the only route is `POST …/pulls`; anything else, or any other body, is refused.
+ */
+export function mcpBodyAllowed(method: string, path: string, body: unknown): boolean {
+  const p = normalisedPath(path);
+  if (p === null || method.toUpperCase() !== "POST") return false;
+  if (!new RegExp(`${OWNER_REPO}/pulls$`).test(p)) return false;
+  const b = plainObject(body);
+  if (b === null) return false;
+  if (Object.keys(b).some((k) => !MCP_PULL_KEYS.has(k))) return false;
+  const head = ownValue(b, "head");
+  const base = ownValue(b, "base");
+  const mcm = ownValue(b, "maintainer_can_modify");
+  return (
+    typeof head === "string" &&
+    validBranchName(head) &&
+    typeof base === "string" &&
+    validBranchName(base) &&
+    (mcm === undefined || mcm === false)
+  );
+}
+
 /**
  * §12: a GraphQL body the guard may send, with the repository and pull request number its client
  * mutation id names and the node id it targets; null for anything else (which is an unknown
@@ -534,10 +565,12 @@ export function installMutationGuard(
         if (o.installationId === null) throw refusal("app_client");
         if (o.feature === undefined) throw refusal("no_feature");
         if (!cls.features.includes(o.feature)) throw refusal("feature_not_allowed");
-        // §12: the body rules of the guard's routes (the `mcp` feature's pulls are step 6's).
+        // §12: the body rules of the guard's routes; step 6 §9: the `mcp` feature's pulls. Read
+        // before the gate, so a bad body never queries the database.
+        const writePath = parsed.url.slice(base.length);
         if (
-          o.feature === "guard" &&
-          !guardBodyAllowed(method, parsed.url.slice(base.length), parsed.body)
+          (o.feature === "guard" && !guardBodyAllowed(method, writePath, parsed.body)) ||
+          (o.feature === "mcp" && !mcpBodyAllowed(method, writePath, parsed.body))
         ) {
           throw refusal("feature_not_allowed", " (body)");
         }

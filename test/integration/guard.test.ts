@@ -203,6 +203,7 @@ const event = (name: string, payload: unknown) =>
 describe("guard: schema", () => {
   it("I-GRD-1 migration 0011 up, down, up; down restores the old status check and fails on a new status", async () => {
     // Step 3 review 1's migration and step 5's sit on top of 0011.
+    expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
@@ -226,19 +227,26 @@ describe("guard: schema", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     // A row with a new status blocks the rollback.
     await sql`insert into guard_events (repository_id, branch, failing_sha, status)
       values (${REPO_ID}, 'main', ${C(1)}, 'flaky')`.execute(t.db);
+    expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     try {
       await expect(migrateDownOne(t.db)).rejects.toThrow();
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event", "0013_guard_revert"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0012_audit_label_event",
+        "0013_guard_revert",
+        "0014_mcp",
+      ]);
     }
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
@@ -246,6 +254,7 @@ describe("guard: schema", () => {
       "0011_guard",
       "0012_audit_label_event",
       "0013_guard_revert",
+      "0014_mcp",
     ]);
     const def = await sql<{ def: string }>`
       select pg_get_constraintdef(oid) as def from pg_constraint

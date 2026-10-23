@@ -401,6 +401,73 @@ export function evaluatePolicy(
   };
 }
 
+const OUTCOME_RANK: Record<PolicyVerdict["outcome"], number> = {
+  would_approve: 0,
+  would_require: 1,
+  would_block: 2,
+};
+
+function mergeConstraints(a: readonly Constraint[], b: readonly Constraint[]): Constraint[] {
+  const byTeams = new Map<string, Constraint>();
+  for (const c of [...a, ...b]) {
+    const k = teamKey(c.teams);
+    const existing = byTeams.get(k);
+    if (existing) {
+      existing.humans = Math.max(existing.humans, c.humans);
+      existing.rules = [...new Set([...existing.rules, ...c.rules])].sort((x, y) => x - y);
+    } else byTeams.set(k, { humans: c.humans, teams: [...c.teams], rules: [...c.rules] });
+  }
+  const all = [...byTeams.values()];
+  return [...all.filter((c) => c.teams.length > 0), ...all.filter((c) => c.teams.length === 0)];
+}
+
+/**
+ * Phase 1 step 6 (D13, §8): the stricter of two verdicts for the same PR. A higher outcome wins
+ * (`would_approve < would_require < would_block`); two `would_require` verdicts merge, so the
+ * result requires everything either one requires (the same constraint merge as one evaluation).
+ */
+export function stricterVerdict(a: PolicyVerdict, b: PolicyVerdict): PolicyVerdict {
+  if (OUTCOME_RANK[a.outcome] !== OUTCOME_RANK[b.outcome]) {
+    return OUTCOME_RANK[a.outcome] > OUTCOME_RANK[b.outcome] ? a : b;
+  }
+  if (a.outcome !== "would_require" || b.outcome !== "would_require") return a;
+  const indices = new Set(a.matched.map((m) => m.index));
+  const limits = [...new Set([...(a.limits ?? []), ...(b.limits ?? [])])];
+  const constraints = mergeConstraints(a.constraints, b.constraints);
+  return {
+    ...a,
+    matched: [...a.matched, ...b.matched.filter((m) => !indices.has(m.index))].sort(
+      (x, y) => x.index - y.index,
+    ),
+    humans: Math.max(...constraints.map((c) => c.humans)),
+    constraints,
+    usedDefault: a.usedDefault || b.usedDefault,
+    builtIn: a.builtIn ?? b.builtIn,
+    ...(limits.length > 0 ? { limits } : {}),
+  };
+}
+
+/**
+ * Phase 1 step 6 (D13): the verdict once an MCP report disagreed with the trailers. `facts` carry
+ * the unknown author (`buildFacts`); `trailerAuthor` is what the trailers said. An unknown author
+ * matches every tightening `author` and `agent` rule, but a matched require rule replaces the
+ * policy's default, which can ask for less (another team, fewer humans). Evaluating both and
+ * keeping the stricter is what makes "a report never loosens" hold for every policy.
+ */
+export function evaluateWithReport(
+  policy: Policy,
+  facts: PolicyFacts,
+  trailerAuthor: PolicyFacts["author"] | null,
+  opts: EvaluateOptions = {},
+): PolicyVerdict {
+  const withReport = evaluatePolicy(policy, facts, opts);
+  if (trailerAuthor === null) return withReport;
+  return stricterVerdict(
+    withReport,
+    evaluatePolicy(policy, { ...facts, author: trailerAuthor }, opts),
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Approvals (D13)
 // ---------------------------------------------------------------------------------------------
@@ -429,13 +496,28 @@ const COUNTED = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
 
 export function countApprovals(
   reviews: readonly ReviewLike[],
-  o: { headSha: string; prAuthorLogin: string; truncated: boolean },
+  o: {
+    headSha: string;
+    prAuthorLogin: string;
+    truncated: boolean;
+    /**
+     * Phase 1 step 6 (D19): logins skipped like the PR author (case-insensitive), for a PR opened
+     * through MCP: the authors and committers of its commits. `"everyone"` when Graft cannot tell
+     * who they are: no approval counts, and the count is marked truncated.
+     */
+    excludedLogins?: readonly string[] | "everyone";
+  },
 ): ApprovalCount {
+  const excludeAll = o.excludedLogins === "everyone";
+  const excluded = new Set(
+    Array.isArray(o.excludedLogins) ? o.excludedLogins.map((l) => l.toLowerCase()) : [],
+  );
   const latest = new Map<number, { review: ReviewLike; at: number; order: number }>();
   reviews.forEach((review, order) => {
     const u = review.user;
     if (!u || u.type === "Bot") return;
     if (u.login.toLowerCase() === o.prAuthorLogin.toLowerCase()) return;
+    if (excludeAll || excluded.has(u.login.toLowerCase())) return;
     if (!COUNTED.has(review.state)) return;
     const at = review.submitted_at ? Date.parse(review.submitted_at) : Number.NEGATIVE_INFINITY;
     const prev = latest.get(u.id);
@@ -466,7 +548,7 @@ export function countApprovals(
     current,
     stale,
     users: approvers.slice(0, 10).map((u) => u.login),
-    truncated: o.truncated,
+    truncated: o.truncated || excludeAll,
     currentApprovers: approvers,
     changesRequested,
   };

@@ -152,6 +152,8 @@ export interface ChangeProvenanceTable {
   commits_truncated: Generated<boolean>;
   check_run_id: number | null;
   computed_at: Date;
+  /** Phase 1 step 6 (0014, D13): how an MCP provenance report for this head compares. */
+  mcp_report: Generated<"none" | "agrees" | "disagrees">;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -538,6 +540,35 @@ export interface PilotPurgesTable {
   purged_at: Date;
 }
 
+/**
+ * Phase 1 step 6 (0014): per-repository MCP tokens. The token itself is never stored: only the
+ * SHA-256 hex of the whole token string and the first 8 characters after `graft_mcp_`.
+ */
+export interface McpTokensTable {
+  id: Generated<string>;
+  repository_id: number;
+  name: string;
+  token_hash: string;
+  token_prefix: string;
+  created_by: string;
+  created_at: Timestamp;
+  expires_at: Date;
+  last_used_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+  revoked_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+  revoked_by: ColumnType<string | null, string | null | undefined, string | null>;
+  revoke_reason: ColumnType<string | null, string | null | undefined, string | null>;
+}
+
+/** Phase 1 step 6 (0014, D18): a PR `open_change` opened. Numbers and SHAs only. */
+export interface McpChangesTable {
+  id: Generated<string>;
+  repository_id: number;
+  token_id: string;
+  pr_number: number;
+  head_sha: string;
+  created_at: Timestamp;
+}
+
 export interface Database {
   installations: InstallationsTable;
   repositories: RepositoriesTable;
@@ -564,6 +595,8 @@ export interface Database {
   audit_log: AuditLogTable;
   main_commits: MainCommitsTable;
   ci_results: CiResultsTable;
+  mcp_tokens: McpTokensTable;
+  mcp_changes: McpChangesTable;
 }
 
 export const TABLE_NAMES = [
@@ -592,4 +625,6 @@ export const TABLE_NAMES = [
   "audit_log",
   "main_commits",
   "ci_results",
+  "mcp_tokens",
+  "mcp_changes",
 ] as const satisfies readonly (keyof Database)[];

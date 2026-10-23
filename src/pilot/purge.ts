@@ -63,6 +63,9 @@ export const OWNED_ROWS: Record<PurgedTable, (installationId: number) => RawBuil
   main_commits: (i) =>
     sql`select count(*) as n from main_commits where repository_id in ${repos(i)}`,
   ci_results: (i) => sql`select count(*) as n from ci_results where repository_id in ${repos(i)}`,
+  // Phase 1 step 6: MCP token hashes and the PRs `open_change` opened, through `repositories`.
+  mcp_tokens: (i) => sql`select count(*) as n from mcp_tokens where repository_id in ${repos(i)}`,
+  mcp_changes: (i) => sql`select count(*) as n from mcp_changes where repository_id in ${repos(i)}`,
 };
 
 export class PurgeRefused extends Error {

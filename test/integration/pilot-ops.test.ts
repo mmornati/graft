@@ -193,6 +193,8 @@ describe("pilot doctor", () => {
       ["OK", "guard_reverts_open"],
       ["OK", "guard_revert_claims"],
       ["OK", "guard_revert_errors"],
+      ["OK", "mcp_tokens_expiring"],
+      ["OK", "mcp_tokens_unused"],
     ]);
     expect(res.out).toContain("graft-sandbox/api");
     const json = JSON.parse(
@@ -202,7 +204,7 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(19);
+    expect(json.checks).toHaveLength(21);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
   });
 
@@ -294,12 +296,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(19);
+    expect(checks).toHaveLength(21);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(19);
+    expect(JSON.parse(missing.out).checks).toHaveLength(21);
     expect(missing.err).toBe("");
   });
 
@@ -415,6 +417,13 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
     values (${o.repo}, ${head}, null, 1, 'direct', now())`.execute(t.db);
   await sql`insert into ci_results (repository_id, sha, key, name, source, class, observed_at)
     values (${o.repo}, ${head}, 'run:1:test', 'test', 'check_run', 'red', now())`.execute(t.db);
+  // Phase 1 step 6: an MCP token (its hash) and a PR it opened.
+  const token = await sql<{ id: string }>`insert into mcp_tokens
+      (repository_id, name, token_hash, token_prefix, created_by, expires_at)
+    values (${o.repo}, 'ci', ${String(o.seq).repeat(64).slice(0, 64)}, 'abcdEFGH', 'tester', now() + interval '30 days')
+    returning id`.execute(t.db);
+  await sql`insert into mcp_changes (repository_id, token_id, pr_number, head_sha)
+    values (${o.repo}, ${token.rows[0]?.id}, 7, ${head})`.execute(t.db);
   await addDelivery(t.db, {
     id: `dl-inst-${o.seq}`,
     installationId: o.id,
@@ -528,6 +537,8 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
       sql`select count(*) as n from main_commits where repository_id = ${repo}`,
     ),
     ci_results: await n(sql`select count(*) as n from ci_results where repository_id = ${repo}`),
+    mcp_tokens: await n(sql`select count(*) as n from mcp_tokens where repository_id = ${repo}`),
+    mcp_changes: await n(sql`select count(*) as n from mcp_changes where repository_id = ${repo}`),
     pgboss_jobs: await n(
       sql`select count(*) as n from pgboss.job where data->>'installationId' = ${String(id)} or data->'payload'->'installation'->>'id' = ${String(id)}`,
     ),
@@ -946,13 +957,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0013_guard_revert"]);
+    expect(down).toEqual(["0014_mcp"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0013_guard_revert"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0014_mcp"]);
     }
   });
 });

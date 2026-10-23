@@ -103,6 +103,7 @@ describe("modes: schema", () => {
   it("I-MODE-1 migration 0008 down removes exactly what it added, then up restores it", async () => {
     await truncateAll(t.db);
     // Steps 2 to 5's migrations (and step 3 review 1's) sit on top of 0008.
+    expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
@@ -126,6 +127,7 @@ describe("modes: schema", () => {
         "0011_guard",
         "0012_audit_label_event",
         "0013_guard_revert",
+        "0014_mcp",
       ]);
     }
     await seedWorld(t.db);
@@ -345,6 +347,8 @@ describe("modes: the operator CLI", () => {
     // Phase 1 step 4: no statuses:read.
     "  note: guard reads check runs only (no statuses:read)",
     "  pending    1 change not yet applied by the worker",
+    // Phase 1 step 6 (§10).
+    "  mcp tokens  0 active",
     "",
   ].join("\n");
 

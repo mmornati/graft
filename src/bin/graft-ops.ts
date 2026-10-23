@@ -1,6 +1,7 @@
 /**
  * The operations half of `pnpm graft` (step 6, T9): `pilot`, `baseline`, `gate`, `incident`,
- * `metrics`, from Phase 1 step 1 `mode`, from step 3 `audit` and from step 4 `guard`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
+ * `metrics`, from Phase 1 step 1 `mode`, from step 3 `audit`, from step 4 `guard` and from step 6
+ * `mcp-token`. `graft.ts` loads this file with a dynamic import so that `graft policy check` keeps
  * running with an empty environment and without `db`, `config` or `modules` (U-CLI-6).
  *
  * Every command loads `.env` and the configuration (a ConfigError prints its message only and
@@ -49,6 +50,19 @@ import {
   renderGuardList,
 } from "../modules/guard/index.js";
 import { listChangesToPoll, pollReactions } from "../modules/intent/index.js";
+import {
+  DEFAULT_EXPIRY_DAYS,
+  issueToken,
+  MAX_EXPIRY_DAYS,
+  MCP_OFF_NOTE,
+  renderTokenList,
+  repositoryTokens,
+  revokeToken,
+  tokenListJson,
+  tokenShowLine,
+  validRevokeReason,
+  validTokenName,
+} from "../modules/mcp/cli.js";
 import {
   notEffectiveNotes,
   type RepositoryView,
@@ -157,6 +171,9 @@ const USAGE = `usage:
   graft audit list --repo <owner/repo> [--since <ISO date>] [--kind applied|ignored|stale|removed]
                    [--limit <1..500, default 50>] [--json]
   graft guard list --repo <owner/repo> [--status <status>] [--limit <1..200>] [--json]
+  graft mcp-token create --repo <owner/repo> --name "<text>" [--expires-in <1..365 days>] [--actor <name>]
+  graft mcp-token list --repo <owner/repo> [--all] [--json]
+  graft mcp-token revoke --id <uuid> --reason "<text>" [--actor <name>]
 `;
 
 class UsageError extends Error {
@@ -665,13 +682,20 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     }
     const ceiling = await resolveCeiling(r.db, r.config);
     const views = [];
-    for (const row of rows) views.push(await viewRepository(r.db, row, ceiling));
+    // Phase 1 step 6 (§10): each repository's MCP tokens, and whether this shell has MCP off.
+    const extraLines = new Map<number, string[]>();
+    for (const row of rows) {
+      views.push(await viewRepository(r.db, row, ceiling));
+      const tokens = await tokenShowLine(r.db, row.repositoryId, r.deps.now());
+      extraLines.set(row.repositoryId, r.config.mcp ? [tokens] : [tokens, MCP_OFF_NOTE]);
+    }
     r.out(
       v.json
         ? `${JSON.stringify(showJson(views, ceiling))}\n`
         : renderShow(views, ceiling, {
             guardDetection: r.config.guardDetection,
             guardRevert: r.config.guardRevert,
+            extraLines,
           }),
     );
     return 0;
@@ -904,6 +928,89 @@ async function guard(sub: string | undefined, rest: string[], r: Run): Promise<n
   return 0;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The `mcp-token` group (Phase 1 step 6, §10, D11). Reads and writes the database only; it needs
+ * neither the worker nor GitHub. `create` prints the token once, to stdout, and only on success.
+ */
+async function mcpToken(sub: string | undefined, rest: string[], r: Run): Promise<number> {
+  if (sub === "create") {
+    const v = args(rest, {
+      repo: { type: "string" },
+      name: { type: "string" },
+      "expires-in": { type: "string" },
+      actor: { type: "string" },
+    });
+    const repo = parseRepo(str(v.repo));
+    const name = str(v.name);
+    if (name === undefined || !validTokenName(name)) {
+      throw new UsageError("--name is required: 1 to 64 printable characters");
+    }
+    const days = parsePositiveInt("--expires-in", str(v["expires-in"]), DEFAULT_EXPIRY_DAYS);
+    if (days > MAX_EXPIRY_DAYS) {
+      throw new UsageError(`--expires-in must be 1 to ${MAX_EXPIRY_DAYS} days`);
+    }
+    const actor = str(v.actor) ?? userInfo().username;
+    if (!validActor(actor)) throw new UsageError("--actor must match ^[A-Za-z0-9._@-]{1,64}$");
+    const issued = await issueToken(r.db, {
+      repo,
+      name,
+      expiresInDays: days,
+      actor,
+      now: r.deps.now(),
+      maxActive: r.config.mcpMaxTokensPerRepo,
+    });
+    if (!issued.ok) {
+      r.err(`${issued.message}; nothing created\n`);
+      return 1;
+    }
+    r.out(`${issued.token}\n`);
+    r.out(
+      `id ${issued.id}  expires ${issued.expiresAt.toISOString().slice(0, 10)}  shown once; store it now\n`,
+    );
+    return 0;
+  }
+  if (sub === "list") {
+    const v = args(rest, {
+      repo: { type: "string" },
+      all: { type: "boolean" },
+      json: { type: "boolean" },
+    });
+    const repo = parseRepo(str(v.repo));
+    const rows = await repositoryTokens(r.db, repo, { all: v.all === true, now: r.deps.now() });
+    if (rows === null) {
+      r.err("unknown or removed repository\n");
+      return 1;
+    }
+    r.out(v.json ? `${JSON.stringify(tokenListJson(rows))}\n` : renderTokenList(rows));
+    return 0;
+  }
+  if (sub === "revoke") {
+    const v = args(rest, {
+      id: { type: "string" },
+      reason: { type: "string" },
+      actor: { type: "string" },
+    });
+    const id = str(v.id);
+    if (id === undefined || !UUID.test(id)) throw new UsageError("--id must be a token id (uuid)");
+    const reason = str(v.reason);
+    if (reason === undefined || !validRevokeReason(reason)) {
+      throw new UsageError("--reason is required: 1 to 200 printable characters on one line");
+    }
+    const actor = str(v.actor) ?? userInfo().username;
+    if (!validActor(actor)) throw new UsageError("--actor must match ^[A-Za-z0-9._@-]{1,64}$");
+    const outcome = await revokeToken(r.db, { id, actor, reason, now: r.deps.now() });
+    if (outcome === "unknown") {
+      r.err("unknown token id\n");
+      return 1;
+    }
+    r.out(outcome === "revoked" ? `revoked ${id}\n` : `already revoked ${id}\n`);
+    return 0;
+  }
+  throw new UsageError();
+}
+
 export async function main(
   argv: string[],
   io: CliIo,
@@ -913,9 +1020,17 @@ export async function main(
   const err = (s: string) => io.err(toTerminalSafe(s));
   const [group, sub, ...rest] = argv;
   if (
-    !["pilot", "baseline", "gate", "incident", "metrics", "mode", "audit", "guard"].includes(
-      group ?? "",
-    )
+    ![
+      "pilot",
+      "baseline",
+      "gate",
+      "incident",
+      "metrics",
+      "mode",
+      "audit",
+      "guard",
+      "mcp-token",
+    ].includes(group ?? "")
   ) {
     err(USAGE);
     return 2;
@@ -950,6 +1065,7 @@ export async function main(
     if (group === "mode") return await mode(sub, rest, run);
     if (group === "audit") return await audit(sub, rest, run);
     if (group === "guard") return await guard(sub, rest, run);
+    if (group === "mcp-token") return await mcpToken(sub, rest, run);
     return await incident(sub, rest, run);
   } catch (e) {
     if (e instanceof UsageError) {

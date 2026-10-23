@@ -28,6 +28,8 @@ export interface ShowOptions {
   guardDetection?: boolean;
   /** `GRAFT_GUARD_REVERT` of this shell; omitted means on. */
   guardRevert?: boolean;
+  /** Phase 1 step 6 (§10): lines appended to a repository's block (its MCP tokens), by id. */
+  extraLines?: ReadonlyMap<number, readonly string[]>;
 }
 
 import { CEILING_STATE_KEY } from "./ceiling.js";
@@ -141,6 +143,7 @@ export function renderRepository(
       `  ${"pending".padEnd(11)}${v.pending} ${v.pending === 1 ? "change" : "changes"} not yet applied by the worker`,
     );
   }
+  for (const extra of opts.extraLines?.get(row.repositoryId) ?? []) lines.push(`  ${extra}`);
   return lines.join("\n");
 }
 

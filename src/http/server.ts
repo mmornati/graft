@@ -2,6 +2,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import Fastify, { type FastifyInstance, LogController } from "fastify";
 import type { AppDeps } from "../core/context.js";
 import type { Logger } from "../core/logger.js";
+import { mcpRoutes } from "../modules/mcp/index.js";
 import { sanitizeError } from "../queue/errors.js";
 import { webhookReceiver } from "../webhooks/receiver.js";
 import { healthRoutes } from "./health.js";
@@ -38,5 +39,18 @@ export async function buildServer(deps: AppDeps): Promise<AppServer> {
       log: deps.log,
     }),
   );
+  // Phase 1 step 6 (D22): off means the route is not registered (the not-found handler answers).
+  if (deps.config.mcp) {
+    await app.register(
+      mcpRoutes({
+        db: deps.db,
+        config: deps.config,
+        github: deps.github,
+        queue: deps.queue,
+        clock: deps.clock,
+        log: deps.log,
+      }),
+    );
+  }
   return app;
 }

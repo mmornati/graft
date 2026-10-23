@@ -8,10 +8,10 @@ import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import { ensureRepository, getActiveInstallation } from "../installations/index.js";
-import { computeProvenance } from "./compute.js";
+import { computeProvenance, mcpAgreement } from "./compute.js";
 import { fetchPrCommits } from "./fetch.js";
 import { renderCheckRunOutput, renderProvenanceSection } from "./render.js";
-import { getChangeProvenance, persistProvenance, setCheckRunId } from "./store.js";
+import { getChangeProvenance, getMcpReport, persistProvenance, setCheckRunId } from "./store.js";
 
 export const PROVENANCE_REFRESH_JOB = "provenance.refresh";
 export const PROVENANCE_CHECK_NAME = "graft/provenance";
@@ -23,6 +23,8 @@ export const TRIGGERS = [
   "edited",
   "closed",
   "rerequested",
+  // Phase 1 step 6 (D15): an MCP `report_provenance` was stored for the head.
+  "mcp_report",
 ] as const;
 
 const NAME_PART = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -161,10 +163,6 @@ export async function refreshProvenance(data: RefreshData, ctx: JobContext): Pro
     agentLogins: config.agentLogins,
     agentCoauthorEmails: config.agentCoauthorEmails,
   });
-  const render = {
-    headSha: pull.head.sha,
-    authorLogin: pull.user?.login ?? "ghost",
-  };
 
   // 8
   const outcome = await withChangeLock(ctx.db, change.id, async (tx) => {
@@ -180,6 +178,30 @@ export async function refreshProvenance(data: RefreshData, ctx: JobContext): Pro
       return "stale" as const;
     }
     const previous = await getChangeProvenance(tx, change.id);
+    // Phase 1 step 6 (D13): the MCP report for this head, compared with what the trailers say.
+    const report = await getMcpReport(tx, change.id, pull.head.sha);
+    const mcpReport = mcpAgreement(
+      {
+        headSha: pull.head.sha,
+        authorKind: result.authorKind,
+        agent: result.fields.agent?.value ?? null,
+      },
+      report?.agent ? { headSha: pull.head.sha, agent: report.agent } : null,
+    );
+    const render = {
+      headSha: pull.head.sha,
+      authorLogin: pull.user?.login ?? "ghost",
+      ...(report?.agent && mcpReport !== "none"
+        ? {
+            mcp: {
+              agent: report.agent,
+              model: report.model,
+              task: report.task_external_id,
+              agrees: mcpReport === "agrees",
+            },
+          }
+        : {}),
+    };
     await persistProvenance(tx, {
       change: current,
       repositoryId: data.repositoryId,
@@ -187,6 +209,7 @@ export async function refreshProvenance(data: RefreshData, ctx: JobContext): Pro
       headSha: pull.head.sha,
       result,
       now,
+      mcpReport,
     });
 
     try {
