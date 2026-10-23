@@ -13,7 +13,7 @@ import { defineJob } from "../../queue/job.js";
 import { defineWebhookHandler } from "../../webhooks/handler.js";
 import { parsePayload } from "../../webhooks/payload.js";
 import { getActiveInstallation, getActiveRepository } from "../installations/index.js";
-import { eventByRevertPr, updateEvent } from "./store.js";
+import { eventByRevertPr } from "./store.js";
 
 export const REVERT_CLOSED_JOB = "guard.revert_closed";
 
@@ -64,14 +64,24 @@ export async function revertClosed(
   if (pull.state !== "closed") return "open";
   const now = ctx.clock.now();
   const merged = pull.merged === true || pull.merged_at !== null;
-  await updateEvent(
-    ctx.db,
-    event.id,
-    merged
-      ? { status: "reverted", revertedAt: pull.merged_at ? new Date(pull.merged_at) : now }
-      : { status: "revert_closed" },
-    now,
-  );
+  // Step 5 review 1, finding 8: conditional, as `markReverted` is, so this job and `guard.track`
+  // cannot overwrite each other. A revert PR reopened later stays `revert_closed` and is never
+  // counted by the cap again (recorded in decisions.md).
+  const res = await ctx.db
+    .updateTable("guard_events")
+    .set(
+      merged
+        ? {
+            status: "reverted",
+            reverted_at: pull.merged_at ? new Date(pull.merged_at) : now,
+            updated_at: now,
+          }
+        : { status: "revert_closed", updated_at: now },
+    )
+    .where("id", "=", event.id)
+    .where("status", "=", "revert_opened")
+    .executeTakeFirst();
+  if (Number(res.numUpdatedRows ?? 0) === 0) return "settled";
   ctx.log.info({ eventId: event.id, merged }, "guard revert PR closed");
   return merged ? "reverted" : "revert_closed";
 }

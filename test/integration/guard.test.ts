@@ -1343,6 +1343,7 @@ describe("guard: retention, purge and the CLI", () => {
       ["guard_statuses", "WARN"],
       ["guard_confirming", "WARN"],
       ["guard_reverts_open", "OK"],
+      ["guard_revert_claims", "OK"],
       ["guard_revert_errors", "OK"],
     ]);
     expect(guardChecks.find((c) => c.id === "guard_confirming")?.detail).toBe(
@@ -1355,6 +1356,7 @@ describe("guard: retention, purge and the CLI", () => {
     await t.db.deleteFrom("guard_events").where("failing_sha", "=", C(9)).execute();
     const healthy = await runDoctor(t.db, testConfig(), { installationId: INSTALLATION_ID, now });
     expect(healthy.filter((c) => c.id.startsWith("guard_")).map((c) => c.status)).toEqual([
+      "OK",
       "OK",
       "OK",
       "OK",

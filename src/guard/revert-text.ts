@@ -211,7 +211,8 @@ export type SkipReason =
   | "already_opened"
   | "cap_reached"
   | "filtered_at_baseline"
-  | "revert_off";
+  | "revert_off"
+  | "stale";
 
 export type RevertSection =
   /** D19 (`GRAFT_GUARD_REVERT=off`): the step 4 comment, report wording. */
@@ -264,6 +265,7 @@ const SKIPPED: Record<SkipReason, string> = {
   cap_reached: "the limit of open revert pull requests for this repository is reached",
   filtered_at_baseline: "the failing checks are not in `guard.checks` at the last green commit",
   revert_off: "revert pull requests are switched off on this Graft server",
+  stale: "the failure was confirmed too long ago for an automatic revert",
 };
 
 function pathList(paths: readonly string[]): string {

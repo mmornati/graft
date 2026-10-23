@@ -85,12 +85,14 @@ describe("incident link parsing", () => {
 });
 
 describe("queue retention (github.webhook)", () => {
-  it("U-Q-6 only the webhook queue keeps completed jobs for 1 hour; every other job keeps 7 days", () => {
+  it("U-Q-6 the webhook queue and guard.revert keep completed jobs for 1 hour; every other job keeps 7 days", () => {
     const registry = buildAppRegistry();
     expect(WEBHOOK_JOB_RETENTION_SECONDS).toBe(3600);
     for (const job of registry.jobs) {
       const o = resolveJobOptions(job);
-      if (job.name === "github.webhook") expect(o.deleteAfterSeconds, job.name).toBe(3600);
+      // guard.revert: step 5 review 1, finding 4 (a failed run can be sent again an hour later).
+      if (job.name === "github.webhook" || job.name === "guard.revert")
+        expect(o.deleteAfterSeconds, job.name).toBe(3600);
       else expect(o.deleteAfterSeconds, job.name).toBe(JOB_DEFAULTS.deleteAfterSeconds);
     }
     expect(JOB_DEFAULTS.deleteAfterSeconds).toBe(7 * 24 * 3600);

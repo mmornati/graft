@@ -61,6 +61,7 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_GUARD_MAX_OPEN_REVERTS` | `3` | Integer 1 to 10. At most this many guard events per repository in `revert_opened`; a confirmed culprit beyond it is `skipped` / `cap_reached`. A revert PR merged or closed releases its slot. |
 | `GRAFT_GUARD_REVERT_MAX_PATHS` | `300` | Integer 1 to 1000. A culprit whose tree diff has more changed paths than this is `needs_human` / `too_large`. |
 | `GRAFT_GUARD_REVERT_MAX_TREE_READS` | `200` | Integer 10 to 1000. Tree objects one revert plan may read (`GET …/git/trees/{sha}`); a plan that needs more is `needs_human` / `too_large`. |
+| `GRAFT_GUARD_REVERT_MAX_AGE_HOURS` | `24` | Integer 1 to 168. A culprit confirmed more than this many hours ago is `skipped` / `stale` before any write, so a `guard.revert` sent again late (after a failed run) never opens a revert days after the failure. A revert whose writes already began is resumed whatever its age. |
 | `GRAFT_POLICY_CARD_WAIT_SECONDS` | `600` | Integer 0 to 3600. In enforce mode, how long `graft/policy` stays `in_progress` after a head is first evaluated while its intent card is still being written; after that it concludes on the conservative pending-card rules. `0` never waits. Report mode never waits (it still schedules the re-evaluation). See [Policy](features/policy.md#enforce-mode). |
 
 ## Deploying with federation

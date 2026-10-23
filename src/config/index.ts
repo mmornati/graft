@@ -198,6 +198,7 @@ const EnvSchema = z.object({
   GRAFT_GUARD_MAX_OPEN_REVERTS: withDefault(intString(1, 10), "3"),
   GRAFT_GUARD_REVERT_MAX_PATHS: withDefault(intString(1, 1000), "300"),
   GRAFT_GUARD_REVERT_MAX_TREE_READS: withDefault(intString(10, 1000), "200"),
+  GRAFT_GUARD_REVERT_MAX_AGE_HOURS: withDefault(intString(1, 168), "24"),
 });
 
 export interface Config {
@@ -287,6 +288,11 @@ export interface Config {
   readonly guardRevertMaxPaths: number;
   /** Phase 1 step 5 (D8): tree reads one revert plan may make. */
   readonly guardRevertMaxTreeReads: number;
+  /**
+   * Step 5 review 1, finding 4: a culprit confirmed longer ago than this is `skipped` / `stale`
+   * before any write, so a job sent again late never opens a revert days after the failure.
+   */
+  readonly guardRevertMaxAgeHours: number;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -408,5 +414,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     guardMaxOpenReverts: d.GRAFT_GUARD_MAX_OPEN_REVERTS,
     guardRevertMaxPaths: d.GRAFT_GUARD_REVERT_MAX_PATHS,
     guardRevertMaxTreeReads: d.GRAFT_GUARD_REVERT_MAX_TREE_READS,
+    guardRevertMaxAgeHours: d.GRAFT_GUARD_REVERT_MAX_AGE_HOURS,
   });
 }

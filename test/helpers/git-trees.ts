@@ -38,6 +38,13 @@ export function createGitStore() {
   const commits = new Map<string, { tree: string; parents: string[]; message: string }>();
   /** Trees served with `truncated: true`. */
   const truncated = new Set<string>();
+  /**
+   * Step 5 review 1, finding 2: how `POST …/git/trees` may differ from the documented API.
+   * `keepNullTrees`: a `sha: null` entry of `type: "tree"` is ignored (the directory stays), as
+   * GitHub might do. `extra`: entries written after the request's own, as if GitHub changed a path
+   * the request did not name.
+   */
+  const quirks = { keepNullTrees: false, extra: [] as NewTreeEntry[] };
 
   function putTree(entries: Map<string, GitEntry>): string {
     const sorted = [...entries.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -121,6 +128,14 @@ export function createGitStore() {
     return tree ?? putTree(new Map());
   }
 
+  /** `POST …/git/trees` as the fake API serves it: `applyEntries` with the `quirks`. */
+  function writeTree(baseTree: string | null, entries: readonly NewTreeEntry[]): string {
+    return applyEntries(baseTree, [
+      ...entries.filter((e) => !(quirks.keepNullTrees && e.sha === null && e.type === "tree")),
+      ...quirks.extra,
+    ]);
+  }
+
   /** Every leaf (non-tree entry) under a tree, by path. */
   function flatten(treeSha: string, prefix = ""): Map<string, GitEntry> {
     const out = new Map<string, GitEntry>();
@@ -179,10 +194,12 @@ export function createGitStore() {
     trees,
     commits,
     truncated,
+    quirks,
     putTree,
     treeOf,
     getTree,
     applyEntries,
+    writeTree,
     flatten,
     entryAt,
     commit,
