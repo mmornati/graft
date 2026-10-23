@@ -20,6 +20,7 @@ import { scheduleObserve } from "./observe.js";
 import { NAME_PART, SHA } from "./schemas.js";
 import {
   insertMainCommits,
+  markReverted,
   type NewMainCommit,
   storedShas,
   withRepositoryGuardLock,
@@ -262,7 +263,14 @@ export async function trackDefaultBranch(
       committedAt: c.committedAt,
       ...(mapped.get(c.sha) ?? { prSource: "unresolved", changeId: null, prNumber: null }),
     }));
-    return insertMainCommits(tx, data.repositoryId, rows, ctx.clock.now());
+    const n = await insertMainCommits(tx, data.repositoryId, rows, ctx.clock.now());
+    // Step 5 (D18): a default-branch commit that maps to a revert PR means it was merged, even
+    // when its `pull_request.closed` webhook was missed. The mapping came from the API.
+    const merged = rows.flatMap((r) => (r.prNumber === null ? [] : [r.prNumber]));
+    const reverted = await markReverted(tx, data.repositoryId, merged, ctx.clock.now());
+    if (reverted > 0)
+      ctx.log.info({ repositoryId: data.repositoryId, reverted }, "guard revert merged");
+    return n;
   });
   ctx.log.info(
     { repositoryId: data.repositoryId, walked: fresh.length, inserted, lookups },

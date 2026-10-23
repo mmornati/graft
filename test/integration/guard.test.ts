@@ -7,8 +7,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
 import type { JobContext } from "../../src/core/context.js";
 import { migrateDownOne, migrateToLatest } from "../../src/db/migrator.js";
+import { ENFORCE_LINE } from "../../src/guard/revert-text.js";
 import { upsertChangeFromPull } from "../../src/modules/changes/index.js";
-import { ENFORCE_LINE, REPORT_LINE } from "../../src/modules/guard/comment.js";
+import { REPORT_LINE } from "../../src/modules/guard/comment.js";
 import {
   guardCheckRun,
   guardCheckSuite,
@@ -20,8 +21,11 @@ import {
   guardPruneJob,
   observeCommit,
   publishGuardComment,
+  type RevertData,
+  runRevert,
   trackDefaultBranch,
 } from "../../src/modules/guard/index.js";
+import { mutationGate } from "../../src/modules/modes/index.js";
 import { runDoctor } from "../../src/pilot/doctor.js";
 import { purgeInstallation } from "../../src/pilot/purge.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
@@ -73,11 +77,12 @@ beforeEach(async () => {
   t.deps.github = fakeGitHubFactory(api);
 });
 
-/** C1 (root) <- C2 <- ... <- Cn. */
+/** C1 (root) <- C2 <- ... <- Cn; `main` points at Cn (step 5's revert plan reads the tip). */
 function history(n: number, from = 1): void {
   for (let k = from; k <= n; k++) {
     api.state.history.set(C(k), { parents: k === 1 ? [] : [C(k - 1)] });
   }
+  api.state.branches.set("main", C(n));
 }
 
 function run(
@@ -128,8 +133,27 @@ const track = (
     { ...IDS, branch: o.branch ?? "main", after, before, forced: o.forced ?? false },
     ctx(o.config),
   );
-const observe = (sha: string, config?: Record<string, string>) =>
-  observeCommit({ ...IDS, sha }, ctx(config));
+/**
+ * Step 5 (D1): an event that reaches `culprit_found` is handed to `guard.revert`, which writes the
+ * comment. No worker runs here, so the queued jobs are taken from pg-boss and run inline.
+ */
+const runReverts = async (config?: Record<string, string>) => {
+  const rows = (
+    await sql<{ data: RevertData }>`
+      delete from pgboss.job where name = 'guard.revert' returning data`.execute(t.db)
+  ).rows;
+  for (const r of rows) await runRevert(r.data, ctx(config));
+};
+const observe = async (sha: string, config?: Record<string, string>) => {
+  const outcome = await observeCommit({ ...IDS, sha }, ctx(config));
+  await runReverts(config);
+  return outcome;
+};
+const confirm = async (data: { eventId: string; attempt?: number }): Promise<string> => {
+  const outcome = await confirmEvent(data, ctx());
+  await runReverts();
+  return outcome;
+};
 const events = () => t.db.selectFrom("guard_events").selectAll().orderBy("created_at").execute();
 const comments = () => api.find("POST", /\/issues\/\d+\/comments$/);
 const writes = () => api.requests.filter((r) => r.method !== "GET");
@@ -178,7 +202,8 @@ const event = (name: string, payload: unknown) =>
 
 describe("guard: schema", () => {
   it("I-GRD-1 migration 0011 up, down, up; down restores the old status check and fails on a new status", async () => {
-    // Step 3 review 1's migration sits on top of 0011.
+    // Step 3 review 1's migration and step 5's sit on top of 0011.
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     try {
@@ -197,21 +222,31 @@ describe("guard: schema", () => {
           values (${REPO_ID}, 'main', ${C(1)}, 'confirming')`.execute(t.db),
       ).rejects.toThrow(/check constraint/);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0011_guard",
+        "0012_audit_label_event",
+        "0013_guard_revert",
+      ]);
     }
     // A row with a new status blocks the rollback.
     await sql`insert into guard_events (repository_id, branch, failing_sha, status)
       values (${REPO_ID}, 'main', ${C(1)}, 'flaky')`.execute(t.db);
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     try {
       await expect(migrateDownOne(t.db)).rejects.toThrow();
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event", "0013_guard_revert"]);
     }
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
-    expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
+    expect(await migrateToLatest(t.db)).toEqual([
+      "0011_guard",
+      "0012_audit_label_event",
+      "0013_guard_revert",
+    ]);
     const def = await sql<{ def: string }>`
       select pg_get_constraintdef(oid) as def from pg_constraint
       where conname = 'guard_events_status_check'`.execute(t.db);
@@ -515,7 +550,7 @@ describe("guard: detection and confirmation", () => {
     expect(comments()).toEqual([]);
     // Nothing more happens later.
     advance(7200);
-    await confirmEvent({ eventId: e?.id as string }, ctx());
+    await confirm({ eventId: e?.id as string });
     expect((await events())[0]?.status).toBe("flaky");
     expect(comments()).toEqual([]);
     // Green again: plain `flaky` in the list.
@@ -543,10 +578,10 @@ describe("guard: detection and confirmation", () => {
     expect(delay).toBeLessThanOrEqual(7260 * 1000);
     // Before the deadline it waits.
     advance(3600);
-    await confirmEvent({ eventId: id }, ctx());
+    await confirm({ eventId: id });
     expect((await events())[0]?.status).toBe("confirming");
     advance(3600);
-    await confirmEvent({ eventId: id }, ctx());
+    await confirm({ eventId: id });
     const [e] = await events();
     expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
     expect(comments()).toHaveLength(1);
@@ -557,7 +592,7 @@ describe("guard: detection and confirmation", () => {
     const id = await confirming();
     // The worker's clock is a second behind the deadline.
     advance(7199);
-    await confirmEvent({ eventId: id }, ctx());
+    await confirm({ eventId: id });
     expect((await events())[0]?.status).toBe("confirming");
     const queued = await jobs("guard.confirm");
     expect(queued.map((j) => [j.data, j.singleton_key]).sort()).toEqual(
@@ -567,7 +602,7 @@ describe("guard: detection and confirmation", () => {
       ].sort(),
     );
     advance(7200);
-    await confirmEvent({ eventId: id, attempt: 1 }, ctx());
+    await confirm({ eventId: id, attempt: 1 });
     const [e] = await events();
     expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
     expect(comments()).toHaveLength(1);
@@ -583,14 +618,14 @@ describe("guard: detection and confirmation", () => {
     await observe(C(2));
     for (const attempt of [0, 1]) {
       advance(7260);
-      await confirmEvent(attempt === 0 ? { eventId: id } : { eventId: id, attempt }, ctx());
+      await confirm(attempt === 0 ? { eventId: id } : { eventId: id, attempt });
       expect((await events())[0]?.status).toBe("confirming");
     }
     expect((await jobs("guard.confirm")).map((j) => j.singleton_key).sort()).toEqual(
       [`guard:confirm:${id}`, `guard:confirm:${id}:1`, `guard:confirm:${id}:2`].sort(),
     );
     advance(7200);
-    await confirmEvent({ eventId: id, attempt: 2 }, ctx());
+    await confirm({ eventId: id, attempt: 2 });
     const [e] = await events();
     expect(e).toMatchObject({ status: "flaky", confirm_reason: null });
     expect(e?.confirmed_at).toEqual(now);
@@ -610,7 +645,7 @@ describe("guard: detection and confirmation", () => {
     await observe(C(2));
     for (const attempt of [0, 1]) {
       advance(7260);
-      await confirmEvent(attempt === 0 ? { eventId: id } : { eventId: id, attempt }, ctx());
+      await confirm(attempt === 0 ? { eventId: id } : { eventId: id, attempt });
       expect((await events())[0]?.status).toBe("confirming");
     }
     // After the second re-send, a fresh re-run on C2 ends red again. The worker that observes it
@@ -623,7 +658,7 @@ describe("guard: detection and confirmation", () => {
     await observeCommit({ ...IDS, sha: C(2) }, { ...ctx(), clock: { now: () => behind } });
     expect((await events())[0]?.status).toBe("confirming");
     advance(7200);
-    await confirmEvent({ eventId: id, attempt: 2 }, ctx());
+    await confirm({ eventId: id, attempt: 2 });
     const [e] = await events();
     expect(e).toMatchObject({ status: "culprit_found", confirm_reason: "window" });
     expect(comments()).toHaveLength(1);
@@ -1056,8 +1091,9 @@ describe("guard: detection and confirmation", () => {
     expect((await events())[0]).toMatchObject({ status: "flaky", confirm_reason: "flaky_rerun" });
   });
 
-  it("I-GRD-13 guard_mode enforce with the ceiling and contents:write: same event, one comment with the enforce line, no other write", async () => {
+  it("I-GRD-13 guard_mode enforce with the ceiling and contents:write: same event, a revert PR (step 5) and one comment with the enforce line", async () => {
     const enforce = { GRAFT_MODE_CEILING: "enforce" };
+    t.deps.github = fakeGitHubFactory(api, mutationGate(t.db, testConfig(enforce)));
     await t.db.updateTable("repositories").set({ guard_mode: "enforce" }).execute();
     await t.db
       .updateTable("installations")
@@ -1071,14 +1107,26 @@ describe("guard: detection and confirmation", () => {
     run(C(3), "test", "failure");
     await observe(C(3), enforce);
     const [e] = await events();
-    expect(e).toMatchObject({ status: "culprit_found", guard_mode: "enforce" });
+    expect(e).toMatchObject({
+      status: "revert_opened",
+      confirm_reason: "next_commit",
+      guard_mode: "enforce",
+    });
     expect(comments()).toHaveLength(1);
     expect(String(comments()[0]?.body?.body).split("\n").at(-1)).toBe(ENFORCE_LINE);
     expect(
       writes()
         .filter((w) => !w.path.endsWith("/access_tokens"))
-        .map((w) => `${w.method} ${w.path}`),
-    ).toEqual([`POST /repos/${FULL_NAME}/issues/7/comments`]);
+        .map((w) => `${w.method} ${w.path.replace(/\/\d+\//, "/{n}/")}`),
+    ).toEqual([
+      `POST /repos/${FULL_NAME}/git/trees`,
+      `POST /repos/${FULL_NAME}/git/commits`,
+      `POST /repos/${FULL_NAME}/git/refs`,
+      `POST /repos/${FULL_NAME}/pulls`,
+      `POST /repos/${FULL_NAME}/issues/{n}/labels`,
+      `POST /repos/${FULL_NAME}/issues/{n}/comments`,
+    ]);
+    expect(e).toMatchObject({ revert_outcome: "opened", revert_labelled: true });
   });
 
   it("I-GRD-14 GRAFT_GUARD_DETECTION=off: handlers enqueue nothing, jobs and crons idle", async () => {
@@ -1231,8 +1279,9 @@ describe("guard: retention, purge and the CLI", () => {
     await confirming({ GRAFT_GUARD_CONFIRM: "off" });
     const text = await ops(["guard", "list", "--repo", FULL_NAME]);
     expect(text.code).toBe(0);
+    // Step 5: an unconfirmed culprit is never reverted (D3); the list says why.
     expect(text.out).toBe(
-      `2026-10-14T12:01:00Z  culprit_found  ${C(2).slice(0, 7)}  test  culprit #7\n`,
+      `2026-10-14T12:01:00Z  culprit_found  ${C(2).slice(0, 7)}  test  culprit #7  skipped: confirmation off\n`,
     );
     const json = await ops(["guard", "list", "--repo", FULL_NAME, "--json", "--limit", "5"]);
     const parsed = JSON.parse(json.out) as { events: Record<string, unknown>[] };
@@ -1250,6 +1299,7 @@ describe("guard: retention, purge and the CLI", () => {
         "guardMode",
         "id",
         "lastGreenSha",
+        "revert",
         "status",
         "unresolvedCommits",
       ].sort(),
@@ -1292,6 +1342,8 @@ describe("guard: retention, purge and the CLI", () => {
     expect(guardChecks.map((c) => [c.id, c.status])).toEqual([
       ["guard_statuses", "WARN"],
       ["guard_confirming", "WARN"],
+      ["guard_reverts_open", "OK"],
+      ["guard_revert_errors", "OK"],
     ]);
     expect(guardChecks.find((c) => c.id === "guard_confirming")?.detail).toBe(
       "1 guard events stuck in confirming past twice the window",
@@ -1303,6 +1355,8 @@ describe("guard: retention, purge and the CLI", () => {
     await t.db.deleteFrom("guard_events").where("failing_sha", "=", C(9)).execute();
     const healthy = await runDoctor(t.db, testConfig(), { installationId: INSTALLATION_ID, now });
     expect(healthy.filter((c) => c.id.startsWith("guard_")).map((c) => c.status)).toEqual([
+      "OK",
+      "OK",
       "OK",
       "OK",
     ]);

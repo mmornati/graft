@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ENFORCE_LINE } from "../../src/guard/revert-text.js";
 import {
-  ENFORCE_LINE,
   type GuardCommentInput,
   githubWebBase,
   guardMarker,
@@ -25,7 +25,6 @@ const SAMPLE: GuardCommentInput = {
     { name: "lint (node 24)", htmlUrl: null },
   ],
   confirmation: { reason: "next_commit", nextSha: NEXT },
-  mode: "report",
 };
 
 /** The §8 sample, with the "Confirmed by" alternative of the input. */
@@ -82,7 +81,7 @@ function atsOutsideCode(md: string): number {
 }
 
 describe("guard comment", () => {
-  it("U-GCM-1 the §8 sample, literally, for report mode; enforce changes only the last line", () => {
+  it("U-GCM-1 the §8 sample, literally, for report mode; a step 5 revert section changes only the paragraph and the last line", () => {
     const report = renderGuardComment(SAMPLE);
     expect(report).toBe(expected("the next commit `def5678` is also red", REPORT_LINE));
     expect(REPORT_LINE).toBe("Graft mode: report. Graft opens nothing; this is what it would do.");
@@ -92,14 +91,17 @@ describe("guard comment", () => {
     });
     expect(windowed).toBe(expected("still red after 2 hours", REPORT_LINE));
 
-    const enforce = renderGuardComment({ ...SAMPLE, mode: "enforce" });
-    expect(ENFORCE_LINE).toBe(
-      "Graft mode: enforce. Revert PRs are not available in this version; nothing was opened.",
-    );
+    // Step 5 (§10): the step 4 enforce line ("Revert PRs are not available…") is gone.
+    const paragraph = "Graft opened #456 to revert this merge. Auto-merge: on.";
+    const enforce = renderGuardComment({
+      ...SAMPLE,
+      revert: { paragraph, modeLine: ENFORCE_LINE },
+    });
+    expect(ENFORCE_LINE).toBe("Graft mode: enforce.");
     const a = report.split("\n");
     const b = enforce.split("\n");
-    expect(b.slice(0, -1)).toEqual(a.slice(0, -1));
-    expect(b.at(-1)).toBe(ENFORCE_LINE);
+    expect(b.slice(0, -3)).toEqual(a.slice(0, -3));
+    expect(b.slice(-3)).toEqual([paragraph, "", ENFORCE_LINE]);
   });
 
   it("U-GCM-2 a hostile check name is rendered safely: no @ outside code spans, one marker", () => {

@@ -631,6 +631,79 @@ Findings from `docs/phase-1/reviews/step-4-review-2.md`, PR #30. Report mode is 
 
 **Mutation checks** (each applied alone, the guard tests run, the file restored): F2b (I-GRD-10f), F2c (I-GRD-10d), F2d (I-GRD-10e), F4f (I-GRD-8d), `filter: "latest"` (I-GRD-17), the old `cli.ts` (I-GRD-8c, I-GRD-16), no truncation handling (I-GRD-17b).
 
+## Phase 1 step 5: revert PRs
+
+Spec: [phase-1/step-5-revert-prs.md](phase-1/step-5-revert-prs.md). Decisions D1 to D21 are in the spec; what follows is the API check (T1), what the spec left open, and where the build differs from it (also listed in the spec's §19). User page: [features/guard.md](features/guard.md#revert-pull-requests).
+
+**T1: API verification** (offline, from GitHub's REST, GraphQL and webhook documentation as known at build time; the fakes in `test/helpers/fake-github-api.ts` and `test/helpers/git-trees.ts` follow these shapes; every item is re-checked on real GitHub in [HUMAN-TODO](phase-1/HUMAN-TODO.md#step-5-revert-prs)).
+
+- **(a) `GET …/git/trees/{sha}`** without `recursive` answers `{ sha, url, tree: [{ path, mode, type, sha, size?, url }], truncated }`, where `path` is the entry's **name** (one level), `mode` one of `100644`, `100755`, `040000`, `160000`, `120000` and `type` one of `blob`, `tree`, `commit` (a submodule). `truncated: true` means the entry limit (documented as 100,000 entries or 7 MB, for the recursive form; Graft never asks for it) was hit. Graft treats a truncated tree as `too_large`, and refuses an entry name with a `/`, `.` or `..` (also `too_large`).
+- **(b) `POST …/git/trees` with `base_tree`.** Documented: "If both `tree.sha` and `content` are null, the file will be deleted." The documentation speaks of files only. Whether `sha: null` on a `type: tree` entry deletes the directory could not be verified offline. **Decision:** no expansion into files is built. The D9 check after the write reads the new tree back and compares every changed path with the plan, so a directory GitHub did not delete ends as `error` / `tree_mismatch` before any commit exists; the fake deletes any entry, and HUMAN-TODO checks the real behaviour. If GitHub refuses it, the expansion of the spec's T1 (b) is the follow-up.
+- **(c) The `workflows` permission.** GitHub refuses to let a GitHub App create or update a ref to a commit that adds or changes a file under `.github/workflows/` without the `workflows` permission ("refusing to allow a GitHub App to create or update workflow … without `workflows` permission"). Graft does not request it, so such a revert is `needs_human` / `workflow_files` before any write (D8), including a directory change that contains `.github/workflows`.
+- **(d) `POST …/issues/{n}/labels`** works on a pull request (every PR is an issue) with `issues: write` **or** `pull_requests: write`; Graft has the latter. It answers the issue's labels. GitHub creates a label that does not exist yet (default colour, no description); HUMAN-TODO still asks the repo admin to create `graft:revert` with a description.
+- **(e) `enablePullRequestAutoMerge`** takes `{ pullRequestId: ID!, mergeMethod, commitHeadline, commitBody, authorEmail, expectedHeadOid, clientMutationId }` and answers `{ actor, clientMutationId, pullRequest }`. Errors come back as GraphQL errors (HTTP 200 with `errors`, Octokit's `GraphqlResponseError`): `UNPROCESSABLE` "Auto merge is not allowed for this repository" and "Pull request is in clean status" (the PR can be merged now, for example no required checks). For a PR whose auto-merge is already enabled the documentation is silent: Graft treats a GraphQL error whose message says "already enabled" as `enabled`, any other GraphQL error as `unavailable` (its `type` logged), and an HTTP error like any other GitHub error. `clientMutationId` is echoed (Relay convention); Graft checks the answer's `pullRequest { number repository { nameWithOwner } }` instead, which is what D15 asks.
+- **(f) Workflows on a Graft PR.** Events caused by the repository's `GITHUB_TOKEN` do not start workflows, but events caused by a GitHub App installation token do: a revert PR opened by Graft runs the repository's `pull_request` workflows, so its required checks run.
+- **(g) `GET …/pulls?head=<owner>:<branch>&state=all`** filters by the head's owner and branch and, with `state=all`, includes closed and merged PRs, which is what D17 c/d need to adopt a PR opened before a crash.
+
+**Choices where the spec is silent**
+
+- **Where the markdown helpers live.** `src/guard/revert-text.ts` is pure and the definition of done forbids imports from `src/github` there, but it needs `codeSpan` (step 4 §8). The helpers moved to `src/core/markdown.ts` (unchanged); `src/github/markdown.ts` re-exports them, so no other import changed.
+- **`needs_human` is set in both modes.** In report mode too the event's revert story ends there (the plan says a human is needed); `skipped` and `error` keep `culprit_found` (§14). The guard comment, `eventsAwaitingComment` and `publishGuardComment` accept `culprit_found`, `needs_human`, `revert_opened`, `reverted` and `revert_closed`.
+- **Report mode stores** `planned`, `revert_plan_paths`, `auto_merge_state = 'would'` and `auto_merge_reason` (null when it would be enabled); eligibility is computed as if the PR were opened. A `needs_human` or `skipped` plan stores no auto-merge state.
+- **`already_reverted` is checked before conflicts.** Every tip entry equal to `before` is also unequal to `after`, so D7's conflict test would fire first; the plan checks "all back to `before`" first. A culprit whose diff is empty counts as already reverted.
+- **D8's order** is `workflow_files`, `submodule`, `type_change`; the first reason that any change hits wins. The plan keeps the offending paths, but only `touched_later` lists paths in the comment (the other reasons are one fixed sentence, §10).
+- **The tree read budget** (`GRAFT_GUARD_REVERT_MAX_TREE_READS`) counts distinct tree objects the plan reads, which are the plan's requests (the reader is cached per job). The API reader has its own ceiling of twice the budget plus 10 for the whole job: the D9 check reads the new tree along the changed paths after the plan.
+- **The culprit's card** is the newest `intent_cards` row of the change at the merged head (`pulls.get` → `head.sha`), whatever its prompt version; provenance (task, session) is used only when `change_provenance.head_sha` is that head.
+- **`policyPaths`** is `["graft.yaml"]`, the one file the policy loader reads; a change on a directory that holds it counts too.
+- **The cap** counts events in `revert_opened` plus events claimed by a run that has no outcome yet, so two runs cannot both pass at the last free slot. The claim checks, in §7's order, the cap, then one revert per culprit (an opened or in-progress revert of the same change), then D21. A run that resumes after its claim skips the first two.
+- **D21** looks at tracked commits with a higher `seq` than the failing commit's, and needs every remaining failing key `green` on one of them.
+- **A merge method** is the first of squash, merge, rebase that `repos.get` allows; a repository that allows none counts as `repo_setting_off`.
+- **Wording.** A bot author is shown as `` `renovate[bot]`, merged by @bob ``; a login that fails D11's rule is a code span. A task matching `#\d{1,9}` is a live reference, anything else a code span. The session URL (validated by step 2) is checked again for shape (https, plain host, no parentheses, spaces or `@`). The PR body's auto-merge line is the eligibility decision; the guard comment shows the final state, including `off: GitHub did not enable it` for `unavailable`. An `error` after the PR was opened (a rollback before the label or auto-merge) reads "Graft opened #456 to revert this merge but could not finish (mode_changed)." The commit message names the branch only when it is plain (`[A-Za-z0-9._/-]`), otherwise "the default branch".
+- **`GRAFT_GUARD_REVERT=off`** writes step 4's comment verbatim (its paragraph and the report line), as D19 says, also in enforce mode. §10's `revert_off` sentence is kept in the text module; `graft guard list` shows `skipped: revert off`.
+- **A run resumed in report mode** for a revert that was opened but not labelled or not given auto-merge records `error` / `mode_changed` (those writes would be refused) and comments.
+- **An adopted PR** that is already closed gets `reverted` or `revert_closed` from its state, not `revert_opened`.
+- **The branch deletion** uses the literal path `DELETE /repos/{owner}/{repo}/git/refs/heads/graft-revert/<eventId>`: Octokit percent-encodes the slashes of a `{ref}` parameter, and the mutation guard refuses any path with `%`.
+- **GraphQL on GitHub Enterprise Server** goes to `/api/graphql` (Octokit rewrites `…/api/v3`); the mutation guard recognises that URL as the GraphQL endpoint of the configured base.
+- **Job options.** `guard.revert` and `guard.revert_closed` retry 3 times; a transient GitHub error retries, and the last attempt records `error` / `github_<status>`. `guard.revert_closed` is keyed `guard:revert_closed:<repo>:<pr>`.
+- **`reverted_at`** is the PR's `merged_at` from the API, or the time `guard.track` mapped the merge commit. **The doctor's 72 hours** run from `revert_claimed_at` (there is no "opened at" column).
+- **`guard.auto_merge_reverts` parsing.** A repeated item counts once (as every list of `graft.yaml`); three items are `too_many_items` before deduplication; an empty list or a scalar is `wrong_type`. Zod 4 also runs a list's length rule on a string value (it reads the string's length), which reported `too_many_items` next to `wrong_type` for `auto_merge_reverts: logic`; `structuralIssues` now drops a length issue at a path whose value failed the "array" type check. No existing code changes.
+- **The fake GitHub API** gives every `history` commit without an explicit git object a synthesised one: its parent's tree plus one file named after it, so every tracked commit has a tree and a merge changes one path. Tests that need exact trees set them (`files()` in `guard-revert.test.ts`).
+
+**Deviations from the spec**
+
+- **I-REV-20 allows `GET …/contents/graft.yaml`.** The spec's list forbids `/contents/`, but D16 reads `guard.auto_merge_reverts` and `guard.checks` through the existing policy loader, which reads `graft.yaml` with `repos.getContent`. That is Graft's own configuration, read since Phase 0 step 5; the test allows that one path and nothing else under `/contents/`. The DoD grep is unaffected (the loader is in `src/policy`).
+- **`autoMergeEligibility` returns the risk class** with `eligible: true` (the PR body needs it); the spec's type has `{ eligible: true }` only.
+- **N-1 and N-1g are restated for `max` too**, not only N-8: with every mode at its maximum the guard now opens a revert, so "every write is Phase 0" and "the guard's only write is the comment" no longer hold there. N-1 [max] accepts a `phase1` route only when it is a guard route; N-1g [max] expects the comment's "Graft opened #N" paragraph and `Graft mode: enforce.`. N-2b [max] accepts `guard` gate questions next to `policy` ones. N-5 creates a `graft-revert/<uuid>` ref (the §12 body rule refuses `graft-revert/n5` with `feature_not_allowed`) and counts only its own ref.
+- **The existing guard tests run `guard.revert` inline.** `guard.test.ts` takes the queued jobs out of pg-boss after each observe and confirm (no worker runs there), its `history()` points `main` at the newest commit (the plan reads the tip), and **I-GRD-13** now expects the revert's writes and `Graft mode: enforce.`: the step 4 enforce line ("Revert PRs are not available in this version…") is gone (§10). I-GRD-16's list line gains `skipped: confirmation off` and its JSON the `revert` key; its doctor block has four guard checks.
+
+**Other test changes**: the migration step-down tests (I-DB-2, I-DB-7 to I-DB-12, I-MODE-1, I-ENF-1, I-BG-1, I-BG-24, the pilot-ops "one migration behind" test, I-GRD-1) step through `0013_guard_revert`; I-DOC-1 and I-DOC-3 count eighteen doctor checks; U-GCM-1 checks that a revert section changes only the paragraph and the mode line; U-PGD-2 no longer expects `auto_merge_reverts` to be an unknown key; U-MG-5, U-MG-6 and U-MG-8 create a `graft-revert/<uuid>` ref; the fixtures test lists `pull_request.closed.revert`; U-MAN-1 expects `contents: write`. The fake GitHub API gains `GET`/`POST …/git/trees`, the tree and parents of `GET …/git/commits/{sha}`, `POST …/git/commits`, `POST …/git/refs`, `DELETE …/git/refs/heads/…`, `POST …/pulls`, `GET …/pulls?head=`, `POST …/issues/{n}/labels`, `POST /graphql` (`enablePullRequestAutoMerge`), the merge settings of `GET /repos/{o}/{r}`, and records each request's `accept` header.
+
+**Mutation checks (§18), run by the developer.** Each mutation was applied alone after a commit, the named test files run against a scratch database, then the file restored. All were caught:
+
+| Mutation (as applied) | Failing tests |
+| --- | --- |
+| Revert opened for `flaky` with a null `confirm_reason` (status and reason gates removed) | I-REV-7 |
+| `confirmation_off` ignored | I-REV-8 |
+| D7 skipped (no conflict from the tip) | U-RVP-6, I-REV-6 |
+| Added file restored instead of deleted (the `after` SHA in place of `sha: null`) | U-RVP-2, U-RVP-11, I-REV-5 (and ten more) |
+| Old mode not restored (the `after` mode) | U-RVP-2, U-RVP-11 |
+| Workflow files reverted (the D8 rule removed) | U-RVP-8 |
+| Report mode goes on to the guard client and its writes | I-REV-2, I-REV-4, N-1g, N-2, N-3, N-8 |
+| GraphQL body rule removed (any query with a valid id) | U-MG-19 |
+| Ref body rule removed | U-MG-20 |
+| No lookup by head (`findPr` never finds) | I-REV-10 |
+| One-per-culprit check removed (the index still refuses the store) | I-REV-11 |
+| Cap ignored | I-REV-12 |
+| Break-glass not checked for auto-merge | I-REV-14 |
+| `auto_merge_reverts` read at the failing commit instead of the baseline | I-REV-13, I-REV-14, I-REV-15, I-REV-17 |
+| Narrowed baseline's `guard.checks` not applied | I-REV-15 |
+| Revert-of-revert check removed (the database test; the job never reads a branch name or trailer, so "by branch name" has no code to mutate) | I-REV-9 |
+| `reverted` taken from the payload (the API's open state and `merged` ignored) | I-REV-12, I-REV-18 |
+
+**Verification.** `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm graft policy schema --check` and `pnpm eval:ci` (exit 0, `matchBaseline: 1`) pass; `pnpm test` passes (101 files, 1,178 tests); `pnpm graft e2e run --only-offline` passes 12 of 12 scenarios. The DoD greps of §18 find nothing (the only `feature: "guard"` is in `src/modules/guard/revert.ts`), and 70 test lines carry the §16 IDs.
+
+**Not run:** the manual smoke test of §18 (a dev server, a worker and `pnpm webhook:send`); it is listed in [HUMAN-TODO](phase-1/HUMAN-TODO.md#step-5-revert-prs). `pnpm db:up` was not run: the shared `scionhub-postgres-1` container on port 55432 was reused, the tests ran against `TEST_DATABASE_URL=…/graft_test_s5` (mutation checks against `graft_test_s5m`), and the migrate, status, rollback, status and migrate sequence against a scratch database `graft_s5_dod` (applied `0001`..`0013`, rolled back only `0013_guard_revert`, re-applied it), dropped afterwards.
+
 ## Verifier file context and the unverifiable verdict (intent-v2)
 
 The verifier saw only GitHub's patches, which carry three lines of context per hunk. A card that said "scrolling does nothing during a journal replay" was marked unsupported because the diff added `if (state.replaying) return;` but not the unchanged lines that set the flag, so the card showed "the verifier disagrees" and the risk was raised to `logic` for a correct card.

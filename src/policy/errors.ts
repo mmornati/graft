@@ -37,6 +37,7 @@ export const POLICY_ERROR_CODES = [
   "glob_invalid",
   "approve_untrusted_key",
   "approve_any_path",
+  "auto_merge_sensitive",
   "too_many_errors",
 ] as const;
 export type PolicyErrorCode = (typeof POLICY_ERROR_CODES)[number];
@@ -122,6 +123,7 @@ const MESSAGES: Record<
     "approve: auto cannot use author, agent or labels: the pull request author controls them. Use them in require or block rules.",
   approve_any_path:
     "approve: auto cannot use paths, which matches when any file matches. Use only_paths.",
+  auto_merge_sensitive: "Reverts of sensitive changes are never auto-merged; remove sensitive.",
   too_many_errors: "More than 50 errors; fix these first.",
 };
 

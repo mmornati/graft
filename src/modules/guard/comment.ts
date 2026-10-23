@@ -1,7 +1,8 @@
 /**
- * The guard comment (Phase 1 step 4, §8, D10, D11, D16): one new comment on the culprit PR per
- * `culprit_found` event, and the only GitHub write of this step. It goes through the default
- * installation client (`POST …/issues/{n}/comments` is a `phase0` route), never a feature client.
+ * The guard comment (Phase 1 step 4, §8, D10, D11; Phase 1 step 5, §10): one new comment on the
+ * culprit PR per guard event. It goes through the default installation client
+ * (`POST …/issues/{n}/comments` is a `phase0` route), never a feature client. Since step 5 it is
+ * written by `guard.revert` as its last step, in every mode, with the revert section (§10).
  *
  * The first line is a hidden marker with the event id. Before writing, the PR's comments are
  * listed (at most 10 pages) and an App-authored comment that starts with the marker is adopted
@@ -10,13 +11,26 @@
  */
 import type { JobContext } from "../../core/context.js";
 import { withChangeLock } from "../../db/locks.js";
+import type { GuardEventStatus } from "../../db/schema.js";
 import type { GitHubClient } from "../../github/client-factory.js";
 import { toJobError } from "../../github/errors.js";
 import { codeSpan } from "../../github/markdown.js";
+import {
+  type Confirmation,
+  duration,
+  REPORT_LINE,
+  type RevertSection,
+  revertModeLine,
+  revertParagraph,
+  STEP4_PARAGRAPH,
+} from "../../guard/revert-text.js";
+import type { ModeState } from "../../modes/index.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { getChange } from "../changes/index.js";
 import { getEffectiveModes } from "../modes/index.js";
 import { childOf, getEvent, getEventForUpdate, resultsAt, updateEvent } from "./store.js";
+
+export { duration, REPORT_LINE };
 
 export const MAX_GUARD_COMMENT_CHARS = 4_000;
 const MAX_NAMES = 5;
@@ -25,9 +39,14 @@ const MAX_LIST_PAGES = 10;
 
 export const guardMarker = (eventId: string): string => `<!-- graft:guard-event ${eventId} -->`;
 
-export const REPORT_LINE = "Graft mode: report. Graft opens nothing; this is what it would do.";
-export const ENFORCE_LINE =
-  "Graft mode: enforce. Revert PRs are not available in this version; nothing was opened.";
+/** The statuses whose event gets a guard comment: a culprit, whatever its revert became. */
+export const COMMENTED_STATUSES: readonly GuardEventStatus[] = [
+  "culprit_found",
+  "needs_human",
+  "revert_opened",
+  "reverted",
+  "revert_closed",
+];
 
 export interface GuardCommentInput {
   eventId: string;
@@ -39,22 +58,15 @@ export interface GuardCommentInput {
   /** Failing checks in event order; `htmlUrl` already passed `safeHtmlUrl`. */
   checks: readonly { name: string; htmlUrl: string | null }[];
   /** null: confirmation is off, and the line is omitted. */
-  confirmation:
-    | { reason: "next_commit"; nextSha: string }
-    | { reason: "window"; windowSeconds: number }
-    | null;
-  mode: "report" | "enforce";
+  confirmation: Confirmation | null;
+  /**
+   * Step 5 (§10): the paragraph and mode line that replace step 4's. Absent: step 4's paragraph
+   * and the report line (the `GRAFT_GUARD_REVERT=off` comment).
+   */
+  revert?: { paragraph: string; modeLine: string } | undefined;
 }
 
 const short = (sha: string): string => `\`${sha.slice(0, 7)}\``;
-
-/** "2 hours", "1 hour", "90 minutes", "45 seconds". */
-export function duration(seconds: number): string {
-  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  if (seconds % 3600 === 0) return unit(seconds / 3600, "hour");
-  if (seconds % 60 === 0) return unit(seconds / 60, "minute");
-  return unit(seconds, "second");
-}
 
 /** The GitHub web root that check and status links must start with. */
 export function githubWebBase(apiUrl: string): string {
@@ -114,12 +126,7 @@ export function renderGuardComment(i: GuardCommentInput): string {
         : `- Confirmed by: still red after ${duration(i.confirmation.windowSeconds)}`,
     );
   }
-  lines.push(
-    "",
-    "Graft would open a pull request reverting this merge. Fix forward or revert to clear it.",
-    "",
-    i.mode === "enforce" ? ENFORCE_LINE : REPORT_LINE,
-  );
+  lines.push("", i.revert?.paragraph ?? STEP4_PARAGRAPH, "", i.revert?.modeLine ?? REPORT_LINE);
   const body = lines.join("\n");
   if (body.length > MAX_GUARD_COMMENT_CHARS) {
     throw new PermanentJobError("guard comment would exceed 4,000 characters", "invalid_output");
@@ -153,18 +160,25 @@ export function isOurGuardComment(
 export type PublishOutcome = "skipped" | "created" | "adopted" | "already";
 
 /**
- * D10/D11: renders and writes the comment for one `culprit_found` event. Everything slow (modes,
- * results, rendering, the installation token) happens before the change lock; inside it the event
- * is re-read, the PR's comments are searched for the marker, and the comment id is stored.
+ * D10/D11 (step 4), §10 (step 5): renders and writes the comment for one event whose culprit is
+ * known. Everything slow (modes, results, rendering, the installation token) happens before the
+ * change lock; inside it the event is re-read, the PR's comments are searched for the marker, and
+ * the comment id is stored. `section` is the revert outcome; `mode` is the guard mode the revert
+ * job read (both default to what step 4 wrote: its paragraph, the mode read now).
  */
 export async function publishGuardComment(
   eventId: string,
   ctx: JobContext,
-  o: { octokit?: GitHubClient } = {},
+  o: {
+    octokit?: GitHubClient;
+    section?: RevertSection;
+    mode?: ModeState<"report" | "enforce">;
+  } = {},
 ): Promise<PublishOutcome> {
   const event = await getEvent(ctx.db, eventId);
   if (
-    event?.status !== "culprit_found" ||
+    event === undefined ||
+    !COMMENTED_STATUSES.includes(event.status) ||
     event.comment_id !== null ||
     event.culprit_change_id === null
   ) {
@@ -182,9 +196,9 @@ export async function publishGuardComment(
   if (!repo) return "skipped";
   const [owner = "", name = ""] = repo.full_name.split("/");
 
-  // D16: the mode is read when the comment is written, and stored on the event.
-  const modes = await getEffectiveModes(ctx.db, event.repository_id, ctx.config);
-  const mode = modes.guard.effective;
+  const guardMode =
+    o.mode ?? (await getEffectiveModes(ctx.db, event.repository_id, ctx.config)).guard;
+  const mode = guardMode.effective;
   const keys = event.failing_checks.map((c) => c.key);
   const results = new Map(
     (await resultsAt(ctx.db, event.repository_id, [event.failing_sha], keys)).map(
@@ -204,6 +218,7 @@ export async function publishGuardComment(
   } else if (event.confirm_reason === "window") {
     confirmation = { reason: "window", windowSeconds: ctx.config.guardConfirmSeconds };
   }
+  const section = o.section ?? { kind: "step4" };
   const body = renderGuardComment({
     eventId: event.id,
     branch: event.branch,
@@ -216,7 +231,10 @@ export async function publishGuardComment(
       htmlUrl: results.get(c.key)?.html_url ?? null,
     })),
     confirmation,
-    mode,
+    revert: {
+      paragraph: revertParagraph(section, mode),
+      modeLine: section.kind === "step4" ? REPORT_LINE : revertModeLine(guardMode),
+    },
   });
 
   let octokit: GitHubClient;
@@ -232,7 +250,7 @@ export async function publishGuardComment(
   };
   return withChangeLock(ctx.db, changeId, async (tx) => {
     const locked = await getEventForUpdate(tx, eventId);
-    if (locked?.status !== "culprit_found") return "skipped";
+    if (locked === undefined || !COMMENTED_STATUSES.includes(locked.status)) return "skipped";
     if (locked.comment_id !== null) return "already";
     let found: number | null = null;
     try {

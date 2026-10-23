@@ -36,7 +36,7 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 | Permission / event | Level | Phase 0 use |
 | --- | --- | --- |
 | `metadata` | read | Mandatory for every App; repository listing. |
-| `contents` | read | Read `graft.yaml` from the base branch (step 5, now used) and commit data for trailers (step 2); `git.getCommit` for the head commit when a PR has more than 250 commits. |
+| `contents` | write (full manifest), read (report manifest) | Read `graft.yaml` from the base branch (step 5, now used) and commit data for trailers (step 2); `git.getCommit` for the head commit when a PR has more than 250 commits. Phase 1 step 5: in `guard_mode: enforce` only, create the revert's tree, commit and `graft-revert/<event id>` branch (`POST …/git/trees`, `…/git/commits`, `…/git/refs`) and delete that branch on crash recovery; read trees and commits (`GET …/git/trees/{sha}`, `…/git/commits/{sha}`) for the plan in every mode. Without `write`, `guard_mode` is effectively `report` and the guard comment says why. |
 | `issues` | read | Read the linked issue for the intent writer (now used, step 3). No write: comments go through `pull_requests: write`. |
 | `pull_requests` | write | Read PRs, files, diffs, commits and reviews (steps 2, 3, 6); list PR commits (step 2); list PR files and patches (step 3); list comment reactions (step 3). Write is only for creating and updating the pinned card comment, since the issue-comments API accepts `pull_requests: write`. |
 | `checks` | write | Create `graft/provenance` (step 2), `graft/intent` with Accurate/Wrong buttons (`requested_action`, step 3) and `graft/policy` check runs (step 5). |
@@ -52,9 +52,11 @@ The human steps (sandbox org, test repositories, smee channel, registration, ins
 
 **Deferred** (not requested in Phase 0):
 
-- `contents: write` (revert branches and PRs, Phase 1).
-- `statuses: read` and `actions: read`, plus the `status`, `workflow_run` and `check_suite` events (post-merge guard, Phase 1).
+- `actions: read` and the `workflow_run` event: not needed (the guard reads CI through check runs and statuses).
+- `workflows`: never. A revert of a change under `.github/workflows/` would need it; Graft leaves those to a human (`needs_human` / `workflow_files`).
 - `administration`: never.
+
+**Phase 1 step 5: `contents: write` (full manifest only).** The revert pull request needs `contents: write` (trees, commits, a branch) and the already granted `pull_requests: write` (the pull request, its `graft:revert` label, and `enablePullRequestAutoMerge`). The report manifest keeps `contents: read`, so an evaluation-only deployment can never open a revert (U-MAN-6). There is still no `workflows` permission, in either manifest. An organization owner accepts the new permission on each installation that will enforce the guard, then the operator runs `pnpm graft mode refresh-permissions --installation <id>`; until then `guard_mode: enforce` is effectively `report` (`permission_missing contents:write`).
 
 **Phase 1 step 4: `statuses: read` and two events.** As for step 2, an organization owner accepts the new permission and the `check_suite` and `status` events on each installation, then the operator runs `pnpm graft mode refresh-permissions --installation <id>`. Until then `pnpm graft mode show` notes that the guard reads check runs only.
 

@@ -171,7 +171,8 @@ const event = (fixture: string, deliveryId: string) =>
 describe("approvals Graft can enforce (integration)", () => {
   it("I-ENF-1 migration 0009 down then up; down needs no pending row", async () => {
     await truncateAll(t.db);
-    // Steps 3 and 4's migrations (and step 3 review 1's) sit on top of 0009.
+    // Steps 3 to 5's migrations (and step 3 review 1's) sit on top of 0009.
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
@@ -191,6 +192,7 @@ describe("approvals Graft can enforce (integration)", () => {
         "0010_audit_log",
         "0011_guard",
         "0012_audit_label_event",
+        "0013_guard_revert",
       ]);
     }
     const cols = await sql<{ column_name: string }>`

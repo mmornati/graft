@@ -192,7 +192,8 @@ const changeId = async () => (await getChangeByNumber(t.db, 2000001, PR_NUMBER))
 describe("break-glass and audit log (integration)", () => {
   it("I-BG-1 migration 0010 down then up; down refuses while a break_glass verdict exists", async () => {
     await truncateAll(t.db);
-    // Step 4's migration and review 1's (I-BG-24) sit on top of 0010.
+    // Steps 4 and 5's migrations and review 1's (I-BG-24) sit on top of 0010.
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     expect(await migrateDownOne(t.db)).toEqual(["0010_audit_log"]);
@@ -213,6 +214,7 @@ describe("break-glass and audit log (integration)", () => {
         "0010_audit_log",
         "0011_guard",
         "0012_audit_label_event",
+        "0013_guard_revert",
       ]);
     }
     expect(await reasonCheck()).toContain("break_glass");
@@ -234,6 +236,7 @@ describe("break-glass and audit log (integration)", () => {
     label(MAYA);
     expect(await runLabeled()).toBe("published");
     expect((await lastVerdict())?.enforced_reason).toBe("break_glass");
+    expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
     expect(await migrateDownOne(t.db)).toEqual(["0011_guard"]);
     try {
@@ -241,7 +244,11 @@ describe("break-glass and audit log (integration)", () => {
       expect(await auditRows()).toHaveLength(1);
       expect(await reasonCheck()).toContain("break_glass");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0011_guard", "0012_audit_label_event"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0011_guard",
+        "0012_audit_label_event",
+        "0013_guard_revert",
+      ]);
     }
 
     // The CHECKs: a reason iff ignored or stale; a 40-hex head; known kinds and roles.
@@ -974,12 +981,16 @@ describe("break-glass and audit log (integration)", () => {
           await sql<{ def: string }>`select indexdef as def from pg_indexes
             where indexname = 'audit_log_ignored_once'`.execute(t.db)
         ).rows[0]?.def ?? "";
+      expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
       expect(await migrateDownOne(t.db)).toEqual(["0012_audit_label_event"]);
       try {
         expect(await column()).toBe(0);
         expect(await indexDef()).not.toContain("NULLS NOT DISTINCT");
       } finally {
-        expect(await migrateToLatest(t.db)).toEqual(["0012_audit_label_event"]);
+        expect(await migrateToLatest(t.db)).toEqual([
+          "0012_audit_label_event",
+          "0013_guard_revert",
+        ]);
       }
       expect(await column()).toBe(1);
       expect(await indexDef()).toContain("NULLS NOT DISTINCT");

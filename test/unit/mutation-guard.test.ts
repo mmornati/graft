@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createGitHubClientFactory } from "../../src/github/client-factory.js";
 import {
   classifyWrite,
+  ENABLE_AUTO_MERGE_MUTATION,
   type MutationGate,
   MutationRefusedError,
 } from "../../src/github/mutation-guard.js";
@@ -12,6 +13,8 @@ import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
 import { OWNER, REPO } from "../helpers/github-builders.js";
 
 const SHA = "a".repeat(40);
+/** Phase 1 step 5 (§12): a ref the guard may create is `graft-revert/<event uuid>`. */
+const EVENT = "3f0c1a52-b6d8-4e0f-8a7d-2c4b1e5f6a30";
 
 describe("mutation guard: classification", () => {
   it("U-MG-1 each route of the table classifies as listed; trailing slash, query string and case are handled", () => {
@@ -147,7 +150,12 @@ describe("mutation guard: the hook", () => {
   const createRef = (
     c: Awaited<ReturnType<ReturnType<typeof fakeGitHubFactory>["forInstallation"]>>,
   ) =>
-    c.rest.git.createRef({ owner: OWNER, repo: REPO, ref: "refs/heads/graft-revert/x", sha: SHA });
+    c.rest.git.createRef({
+      owner: OWNER,
+      repo: REPO,
+      ref: `refs/heads/graft-revert/${EVENT}`,
+      sha: SHA,
+    });
 
   it("U-MG-5 a GHE base URL (…/api/v3) is stripped before the path is matched", async () => {
     const api = createFakeGitHubApi();
@@ -544,5 +552,228 @@ describe("mutation guard: check-run bodies (Phase 1 step 2, D11)", () => {
     );
     expect(odd.refusal).toBe("unknown_route");
     expect(odd.message).not.toContain("conclusion=failure");
+  });
+});
+
+describe("mutation guard: the guard's revert writes (Phase 1 step 5, §12)", () => {
+  type Client = Awaited<ReturnType<ReturnType<typeof fakeGitHubFactory>["forInstallation"]>>;
+  const BRANCH = `graft-revert/${EVENT}`;
+  const ID = `graft-guard:${OWNER}/${REPO}#501`;
+  const writes: [string, (c: Client) => Promise<unknown>][] = [
+    [
+      "POST git/trees",
+      (c) =>
+        c.rest.git.createTree({
+          owner: OWNER,
+          repo: REPO,
+          tree: [{ path: "a", mode: "100644", type: "blob", sha: SHA }],
+        }),
+    ],
+    [
+      "POST git/commits",
+      (c) =>
+        c.rest.git.createCommit({
+          owner: OWNER,
+          repo: REPO,
+          message: "m",
+          tree: SHA,
+          parents: [SHA],
+        }),
+    ],
+    [
+      "POST git/refs",
+      (c) =>
+        c.rest.git.createRef({ owner: OWNER, repo: REPO, ref: `refs/heads/${BRANCH}`, sha: SHA }),
+    ],
+    [
+      "DELETE git/refs",
+      (c) =>
+        c.request(`DELETE /repos/{owner}/{repo}/git/refs/heads/${BRANCH}`, {
+          owner: OWNER,
+          repo: REPO,
+        }),
+    ],
+    [
+      "POST pulls",
+      (c) =>
+        c.rest.pulls.create({ owner: OWNER, repo: REPO, head: BRANCH, base: "main", title: "t" }),
+    ],
+    [
+      "POST labels",
+      (c) =>
+        c.rest.issues.addLabels({
+          owner: OWNER,
+          repo: REPO,
+          issue_number: 501,
+          labels: ["graft:revert"],
+        }),
+    ],
+    [
+      "POST graphql",
+      (c) =>
+        c.graphql(ENABLE_AUTO_MERGE_MUTATION, {
+          pullRequestId: "PR_x",
+          mergeMethod: "SQUASH",
+          clientMutationId: ID,
+        }),
+    ],
+  ];
+  const sentCount = (api: ReturnType<typeof createFakeGitHubApi>) =>
+    api.requests.filter((r) => r.method !== "GET" && !r.path.endsWith("/access_tokens")).length;
+
+  it("U-MG-18 every revert write: sent with a guard client in enforce; mode_report in report; no_feature without a feature; feature_not_allowed for policy", async () => {
+    for (const [name, call] of writes) {
+      const api = createFakeGitHubApi();
+      let allowed = true;
+      const asked: unknown[] = [];
+      const gate: MutationGate = async (q) => {
+        asked.push(q);
+        return allowed ? { allowed: true } : { allowed: false, reason: "mode_report" };
+      };
+      const factory = fakeGitHubFactory(api, gate);
+      const guard = await factory.forInstallation(1, { feature: "guard" });
+      const sent = await call(guard).catch((e: unknown) => e);
+      expect(sent, name).not.toBeInstanceOf(MutationRefusedError);
+      expect(sentCount(api), name).toBe(1);
+      expect(asked, name).toEqual([
+        { installationId: 1, owner: OWNER, repo: REPO, feature: "guard" },
+      ]);
+      allowed = false;
+      expect((await refusal(call(guard))).refusal, name).toBe("mode_report");
+      const plain = await factory.forInstallation(1);
+      expect((await refusal(call(plain))).refusal, name).toBe("no_feature");
+      const policy = await factory.forInstallation(1, { feature: "policy" });
+      expect((await refusal(call(policy))).refusal, name).toBe("feature_not_allowed");
+      // The `mcp` feature: refused on every guard-only route (its pulls are step 6's).
+      if (name !== "POST pulls") {
+        const mcp = await factory.forInstallation(1, { feature: "mcp" });
+        expect((await refusal(call(mcp))).refusal, name).toBe("feature_not_allowed");
+      }
+      expect(sentCount(api), name).toBe(1);
+      expect(asked, name).toHaveLength(2);
+    }
+  });
+
+  it("U-MG-19 GraphQL: only the constant document with a graft-guard id for the repository it names", async () => {
+    const api = createFakeGitHubApi();
+    const asked: { owner: string; repo: string }[] = [];
+    const gate: MutationGate = async (q) => {
+      asked.push({ owner: q.owner, repo: q.repo });
+      return { allowed: true };
+    };
+    const guard = await fakeGitHubFactory(api, gate).forInstallation(1, { feature: "guard" });
+    const vars = { pullRequestId: "PR_x", mergeMethod: "SQUASH", clientMutationId: ID };
+    const unknown = [
+      () => guard.graphql("query { viewer { login } }"),
+      () => guard.graphql(`${ENABLE_AUTO_MERGE_MUTATION} `, vars),
+      () =>
+        guard.graphql(
+          ENABLE_AUTO_MERGE_MUTATION.replace("SQUASH", "MERGE").replace("enable", "disable"),
+          vars,
+        ),
+      () =>
+        guard.graphql(ENABLE_AUTO_MERGE_MUTATION, { ...vars, clientMutationId: "graft-guard:o/r" }),
+      () => guard.graphql(ENABLE_AUTO_MERGE_MUTATION, { ...vars, clientMutationId: "other:o/r#1" }),
+      () =>
+        guard.graphql(ENABLE_AUTO_MERGE_MUTATION, {
+          ...vars,
+          clientMutationId: undefined as never,
+        }),
+      () =>
+        guard.request("POST /graphql", {
+          data: { query: ENABLE_AUTO_MERGE_MUTATION, variables: vars, operationName: "x" },
+        } as never),
+      () =>
+        guard.request("POST /graphql", {
+          data: { query: [ENABLE_AUTO_MERGE_MUTATION], variables: vars },
+        } as never),
+    ];
+    for (const call of unknown) expect((await refusal(call())).refusal).toBe("unknown_route");
+    expect(asked).toEqual([]);
+    expect(sentCount(api)).toBe(0);
+    // The repository of the gate is the one the client mutation id names (the fake then answers
+    // with a GraphQL error: no such pull request).
+    const answered = await guard
+      .graphql(ENABLE_AUTO_MERGE_MUTATION, { ...vars, clientMutationId: "graft-guard:acme/app#12" })
+      .catch((e: unknown) => e);
+    expect(answered).not.toBeInstanceOf(MutationRefusedError);
+    expect(asked).toEqual([{ owner: "acme", repo: "app" }]);
+    // GitHub Enterprise Server: …/api/v3 sends GraphQL to …/api/graphql.
+    const ghe = await createGitHubClientFactory({
+      appId: 12345,
+      privateKey: TEST_PRIVATE_KEY,
+      baseUrl: "https://ghe.example/api/v3",
+      gate,
+      fetch: api.fetch,
+    }).forInstallation(1, { feature: "mcp" });
+    expect((await refusal(ghe.graphql(ENABLE_AUTO_MERGE_MUTATION, vars))).refusal).toBe(
+      "feature_not_allowed",
+    );
+    expect((await refusal(ghe.graphql("query { viewer { login } }"))).refusal).toBe(
+      "unknown_route",
+    );
+  });
+
+  it("U-MG-20 bodies: a ref outside graft-revert/<uuid>, a PR head outside it, a label other than graft:revert; merge and ref updates stay unknown", async () => {
+    const api = createFakeGitHubApi();
+    const guard = await fakeGitHubFactory(api, async () => ({ allowed: true })).forInstallation(1, {
+      feature: "guard",
+    });
+    for (const ref of [
+      "refs/heads/main",
+      "refs/heads/graft-revert/x",
+      `refs/heads/graft-revert/${EVENT}/x`,
+      `refs/tags/graft-revert/${EVENT}`,
+      `refs/heads/graft-revert/${EVENT.toUpperCase()}`,
+      `refs/heads/feature/graft-revert/${EVENT}`,
+    ]) {
+      const e = await refusal(
+        guard.rest.git.createRef({ owner: OWNER, repo: REPO, ref, sha: SHA }),
+      );
+      expect(e.refusal, ref).toBe("feature_not_allowed");
+      expect(e.message).not.toContain(ref);
+    }
+    for (const head of ["main", "graft-revert/x", `other:${BRANCH}`, `${BRANCH}x`]) {
+      const e = await refusal(
+        guard.rest.pulls.create({ owner: OWNER, repo: REPO, head, base: "main", title: "t" }),
+      );
+      expect(e.refusal, head).toBe("feature_not_allowed");
+    }
+    for (const body of [
+      { labels: ["bug"] },
+      { labels: ["graft:revert", "bug"] },
+      { labels: ["GRAFT:REVERT"] },
+      { labels: [] },
+      { labels: ["graft:revert"], extra: 1 },
+      { labels: "graft:revert" },
+    ]) {
+      const e = await refusal(
+        guard.request("POST /repos/{owner}/{repo}/issues/{n}/labels", {
+          owner: OWNER,
+          repo: REPO,
+          n: 3,
+          data: body,
+        } as never),
+      );
+      expect(e.refusal, JSON.stringify(body)).toBe("feature_not_allowed");
+    }
+    for (const [method, path] of [
+      ["PUT", "/repos/o/r/pulls/1/merge"],
+      ["PATCH", "/repos/o/r/git/refs/heads/main"],
+      ["PATCH", `/repos/o/r/git/refs/heads/graft-revert/${EVENT}`],
+      ["PATCH", "/repos/o/r/pulls/1"],
+      ["POST", "/repos/o/r/git/blobs"],
+    ] as const) {
+      expect(classifyWrite(method, path), `${method} ${path}`).toEqual({ kind: "unknown" });
+    }
+    const merge = await refusal(
+      guard.request("PUT /repos/{owner}/{repo}/pulls/{n}/merge", {
+        owner: OWNER,
+        repo: REPO,
+        n: 1,
+      }),
+    );
+    expect(merge.refusal).toBe("unknown_route");
+    expect(sentCount(api)).toBe(0);
   });
 });

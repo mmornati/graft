@@ -85,8 +85,9 @@ rules:
 | `approve` | `auto` | Anything else: `approve_invalid`. |
 | `block` | `true` | Anything else, `false` included: `block_invalid`. |
 
-| `guard` | mapping | Optional (Phase 1 step 4). Only `checks` is allowed (`unknown_key`). The policy engine ignores it. |
+| `guard` | mapping | Optional (Phase 1 step 4). Only `checks` and `auto_merge_reverts` are allowed (`unknown_key`). The policy engine ignores it. |
 | `guard.checks` | list of strings | Optional, 1 to 50 exact check names or status contexts, 1 to 200 characters each, no control characters, case-sensitive. When present, only these checks can open a [post-merge guard](features/guard.md) event. It is read from the last green commit before the candidates, never from the commit that went red. An empty list, a long name or a control character: `wrong_type`; more than 50: `too_many_items`. |
+| `guard.auto_merge_reverts` | list | Optional (Phase 1 step 5), 1 or 2 of `trivial` and `logic` (a repeated item counts once). When the culprit's intent card has one of these risk classes, Graft enables GitHub auto-merge on its [revert pull request](features/guard.md#revert-pull-requests), so branch protection and required checks still decide. Read from the last green commit before the culprit, never from the culprit's own commit. `sensitive`: `auto_merge_sensitive` ("Reverts of sensitive changes are never auto-merged; remove sensitive."); another item: `risk_invalid`; an empty list or a scalar: `wrong_type`; three items: `too_many_items`. |
 
 Unknown keys at any level are errors (`unknown_key`).
 
@@ -151,6 +152,7 @@ The file must be one YAML 1.2 document in valid UTF-8, and a regular file (not a
 | `match_missing`, `action_missing`, `action_conflict`, `approve_invalid`, `block_invalid`, `require_empty`, `default_invalid` | Rules and actions. |
 | `humans_invalid`, `team_invalid`, `risk_invalid`, `author_invalid`, `agent_invalid`, `label_invalid`, `size_invalid`, `name_invalid`, `name_duplicate`, `glob_invalid` | Values. |
 | `approve_untrusted_key`, `approve_any_path` | `approve: auto` using a key it may not use. |
+| `auto_merge_sensitive` | `guard.auto_merge_reverts` lists `sensitive` (Phase 1 step 5). |
 
 Messages never repeat text from your file, except the name of an unknown key.
 

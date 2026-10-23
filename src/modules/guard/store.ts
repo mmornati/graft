@@ -6,6 +6,7 @@
 import { type Selectable, sql, type Transaction } from "kysely";
 import type { Db } from "../../db/client.js";
 import type {
+  AutoMergeState,
   CiResultsTable,
   Database,
   GuardCandidate,
@@ -13,6 +14,7 @@ import type {
   GuardEventsTable,
   GuardFailingCheck,
   MainCommitsTable,
+  RevertOutcome,
 } from "../../db/schema.js";
 import type { ChainCommit, CommitPr } from "../../guard/detect.js";
 
@@ -321,7 +323,10 @@ export async function openEvents(ex: Executor, repositoryId: number): Promise<Gu
     .execute();
 }
 
-/** `culprit_found` events whose comment is not written yet (a crashed or retried publish). */
+/**
+ * Events with a culprit whose comment is not written yet (a crashed or retried job). Step 5 hands
+ * them to `guard.revert`, which writes the comment as its last step.
+ */
 export async function eventsAwaitingComment(
   ex: Executor,
   repositoryId: number,
@@ -330,7 +335,7 @@ export async function eventsAwaitingComment(
     .selectFrom("guard_events")
     .selectAll()
     .where("repository_id", "=", repositoryId)
-    .where("status", "=", "culprit_found")
+    .where("status", "in", ["culprit_found", "needs_human", "revert_opened"])
     .where("comment_id", "is", null)
     .where("culprit_change_id", "is not", null)
     .orderBy("detected_at")
@@ -377,7 +382,7 @@ export async function insertEvent(tx: Transaction<Database>, e: NewEvent): Promi
 }
 
 export async function updateEvent(
-  tx: Transaction<Database>,
+  tx: Executor,
   id: string,
   set: Partial<{
     failingSha: string;
@@ -391,6 +396,19 @@ export async function updateEvent(
     confirmReason: GuardEventsTable["confirm_reason"];
     commentId: number;
     guardMode: "report" | "enforce";
+    /** Phase 1 step 5. */
+    revertOutcome: RevertOutcome | null;
+    revertReason: string | null;
+    revertClaimedAt: Date | null;
+    revertPlanPaths: number | null;
+    revertConflicts: number | null;
+    revertCommitSha: string | null;
+    revertBranch: string | null;
+    revertPrNumber: number | null;
+    revertLabelled: boolean;
+    autoMergeState: AutoMergeState | null;
+    autoMergeReason: string | null;
+    revertedAt: Date | null;
   }>,
   now: Date,
 ): Promise<void> {
@@ -411,9 +429,111 @@ export async function updateEvent(
       ...(set.confirmReason !== undefined ? { confirm_reason: set.confirmReason } : {}),
       ...(set.commentId !== undefined ? { comment_id: set.commentId } : {}),
       ...(set.guardMode !== undefined ? { guard_mode: set.guardMode } : {}),
+      ...(set.revertOutcome !== undefined ? { revert_outcome: set.revertOutcome } : {}),
+      ...(set.revertReason !== undefined ? { revert_reason: set.revertReason } : {}),
+      ...(set.revertClaimedAt !== undefined ? { revert_claimed_at: set.revertClaimedAt } : {}),
+      ...(set.revertPlanPaths !== undefined ? { revert_plan_paths: set.revertPlanPaths } : {}),
+      ...(set.revertConflicts !== undefined ? { revert_conflicts: set.revertConflicts } : {}),
+      ...(set.revertCommitSha !== undefined ? { revert_commit_sha: set.revertCommitSha } : {}),
+      ...(set.revertBranch !== undefined ? { revert_branch: set.revertBranch } : {}),
+      ...(set.revertPrNumber !== undefined ? { revert_pr_number: set.revertPrNumber } : {}),
+      ...(set.revertLabelled !== undefined ? { revert_labelled: set.revertLabelled } : {}),
+      ...(set.autoMergeState !== undefined ? { auto_merge_state: set.autoMergeState } : {}),
+      ...(set.autoMergeReason !== undefined ? { auto_merge_reason: set.autoMergeReason } : {}),
+      ...(set.revertedAt !== undefined ? { reverted_at: set.revertedAt } : {}),
     })
     .where("id", "=", id)
     .execute();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 1 step 5: reverts
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * D13: events of the repository holding a revert slot: `revert_opened`, or claimed by a run that
+ * has not finished (no outcome yet). `except` is the event asking.
+ */
+export async function countOpenReverts(
+  ex: Executor,
+  repositoryId: number,
+  except: string,
+): Promise<number> {
+  const row = await ex
+    .selectFrom("guard_events")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .where("repository_id", "=", repositoryId)
+    .where("id", "<>", except)
+    .where((eb) =>
+      eb.or([
+        eb("status", "=", "revert_opened"),
+        eb.and([
+          eb("status", "=", "culprit_found"),
+          eb("revert_claimed_at", "is not", null),
+          eb("revert_outcome", "is", null),
+        ]),
+      ]),
+    )
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
+}
+
+/** D17 e: another event of the repository that opened (or is opening) a revert of this culprit. */
+export async function otherRevertOfCulprit(
+  ex: Executor,
+  repositoryId: number,
+  culpritChangeId: string,
+  except: string,
+): Promise<boolean> {
+  const row = await ex
+    .selectFrom("guard_events")
+    .select("id")
+    .where("repository_id", "=", repositoryId)
+    .where("culprit_change_id", "=", culpritChangeId)
+    .where("id", "<>", except)
+    .where((eb) =>
+      eb.or([
+        eb("revert_pr_number", "is not", null),
+        eb.and([eb("revert_claimed_at", "is not", null), eb("revert_outcome", "is", null)]),
+      ]),
+    )
+    .executeTakeFirst();
+  return row !== undefined;
+}
+
+/** D4 and D18: the event whose revert PR has this number, if any. */
+export async function eventByRevertPr(
+  ex: Executor,
+  repositoryId: number,
+  prNumber: number,
+): Promise<GuardEventRow | undefined> {
+  return ex
+    .selectFrom("guard_events")
+    .selectAll()
+    .where("repository_id", "=", repositoryId)
+    .where("revert_pr_number", "=", prNumber)
+    .executeTakeFirst();
+}
+
+/**
+ * D18: marks the events whose revert PR is one of `prNumbers` as `reverted` (from `revert_opened`
+ * only). Returns how many changed.
+ */
+export async function markReverted(
+  ex: Executor,
+  repositoryId: number,
+  prNumbers: readonly number[],
+  now: Date,
+): Promise<number> {
+  if (prNumbers.length === 0) return 0;
+  const res = await ex
+    .updateTable("guard_events")
+    .set({ status: "reverted", reverted_at: now, updated_at: now })
+    .where("repository_id", "=", repositoryId)
+    .where("status", "=", "revert_opened")
+    .where("revert_pr_number", "in", [...prNumbers])
+    .executeTakeFirst();
+  return Number(res.numUpdatedRows ?? 0);
 }
 
 /** `graft guard list`: newest first. */

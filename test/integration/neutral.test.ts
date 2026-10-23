@@ -1,5 +1,5 @@
 /**
- * The neutral regression suite (Phase 1 step 1, T10; Phase 1 step 2, T11; Phase 1 step 4, T12).
+ * The neutral regression suite (Phase 1 step 1, T10; step 2, T11; step 4, T12; step 5, T13).
  *
  * Every Phase 1 step adds its feature to this suite in report mode. A failure here means Graft
  * would change outcomes for a team that has not opted in.
@@ -8,7 +8,8 @@
  * GitHub, once with default modes and once with every mode at its maximum, and asserts that the
  * writes to GitHub are exactly the Phase 0 set. With default modes every check is `neutral`; with
  * every mode at its maximum, only `graft/policy` may conclude otherwise, and only through the
- * `policy` feature client (step 2).
+ * `policy` feature client (step 2), and the guard opens exactly one revert pull request through
+ * the `guard` feature client (step 5).
  */
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -19,7 +20,7 @@ import {
   type MutationRefusedError,
 } from "../../src/github/mutation-guard.js";
 import { buildServer } from "../../src/http/server.js";
-import { confirmEvent } from "../../src/modules/guard/index.js";
+import { confirmEvent, runRevert } from "../../src/modules/guard/index.js";
 import { modesApplyJob, mutationGate } from "../../src/modules/modes/index.js";
 import { fanoutTeamChange } from "../../src/modules/policy/team-fanout.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
@@ -128,6 +129,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     gateFeatures: [] as string[],
     writesBeforeReplay: 0,
     writesAfterReplay: 0,
+    writesAfterRerun: 0,
   };
   // default: enforce, then back to report. max: it starts at enforce, so report (a rollback) first.
   const FIRST = profile.name === "max" ? "report" : "enforce";
@@ -461,6 +463,19 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       run.check_suite.head_sha = MERGE_SHA;
     });
     guard.writesAfterReplay = writes().length;
+    // N-13 (step 5): a re-run of guard.revert for the same event writes nothing either.
+    const ev = await t.db.selectFrom("guard_events").select("id").executeTakeFirstOrThrow();
+    await runRevert(
+      {
+        installationId: INSTALLATION_ID,
+        repositoryId: REPO_ID,
+        owner: OWNER,
+        repo: REPO,
+        eventId: ev.id,
+      },
+      jobContext(t),
+    );
+    guard.writesAfterRerun = writes().length;
   }, 240_000);
 
   afterAll(async () => {
@@ -468,12 +483,16 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     await t.close();
   });
 
-  it(`N-1 [${profile.name}] every non-GET request matches a phase 0 or auth row of the route table`, () => {
+  it(`N-1 [${profile.name}] every non-GET request matches a phase 0 or auth row of the route table (max: or a guard revert route)`, () => {
     const all = writes();
     expect(all.length).toBeGreaterThan(5);
     for (const r of all) {
-      const kind = classifyWrite(r.method, r.path).kind;
-      expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(kind);
+      const c = classifyWrite(r.method, r.path);
+      if (profile.name === "max" && c.kind === "phase1") {
+        expect(c.features, `${r.method} ${r.path}`).toContain("guard");
+        continue;
+      }
+      expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(c.kind);
     }
     const paths = new Set(all.map((r) => `${r.method} ${r.path.replace(/\d+$/, "{n}")}`));
     expect(paths).toContain(`POST /repos/${FULL_NAME}/check-runs`);
@@ -555,9 +574,11 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
         expect(run.conclusion, `${run.name} ${run.id}`).toBe("neutral");
       }
       // The gate is asked only for feature-client writes: one allowed `policy` answer per
-      // non-neutral check write that reached GitHub.
-      expect(gateCalls.every((c) => c.feature === "policy")).toBe(true);
-      expect(gateCalls.filter((c) => c.allowed)).toHaveLength(enforcing.length);
+      // non-neutral check write that reached GitHub (the `guard` answers are the revert, N-12).
+      expect(gateCalls.every((c) => c.feature === "policy" || c.feature === "guard")).toBe(true);
+      expect(gateCalls.filter((c) => c.feature === "policy" && c.allowed)).toHaveLength(
+        enforcing.length,
+      );
     });
 
     it("N-6 [max] every verdict row stores what enforce would conclude; report rows were published neutral", async () => {
@@ -570,10 +591,15 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     });
   }
 
-  it(`N-1g [${profile.name}] the guard's only write is one comment on the culprit PR, with the marker`, async () => {
+  it(`N-1g [${profile.name}] one comment on the culprit PR, with the marker (default: the would-open plan; max: the revert it opened)`, async () => {
     const rows = await t.db.selectFrom("guard_events").selectAll().execute();
-    expect(rows.map((r) => [r.failing_sha, r.status, r.confirm_reason])).toEqual([
-      [MERGE_SHA, "culprit_found", "next_commit"],
+    expect(rows.map((r) => [r.failing_sha, r.status, r.confirm_reason, r.revert_outcome])).toEqual([
+      [
+        MERGE_SHA,
+        profile.name === "max" ? "revert_opened" : "culprit_found",
+        "next_commit",
+        profile.name === "max" ? "opened" : "planned",
+      ],
     ]);
     const guardComments = api.state.comments.filter((c) =>
       c.body.startsWith("<!-- graft:guard-event "),
@@ -581,23 +607,72 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     expect(guardComments).toHaveLength(1);
     expect(guardComments[0]?.issue_number).toBe(GUARD_PR);
     expect(guardComments[0]?.body.split("\n")[0]).toBe(`<!-- graft:guard-event ${rows[0]?.id} -->`);
-    // Report mode in the default profile; enforce (effective) in max, which only changes the line.
-    expect(guardComments[0]?.body.split("\n").at(-1)).toBe(
+    // Report mode in the default profile (the plan, GETs only); enforce in max (the revert PR).
+    const lines = guardComments[0]?.body.split("\n") ?? [];
+    expect(lines.at(-1)).toBe(
       profile.name === "max"
-        ? "Graft mode: enforce. Revert PRs are not available in this version; nothing was opened."
+        ? "Graft mode: enforce."
         : "Graft mode: report. Graft opens nothing; this is what it would do.",
+    );
+    expect(lines.at(-3)).toBe(
+      profile.name === "max"
+        ? `Graft opened #${rows[0]?.revert_pr_number} to revert this merge. Auto-merge: off: \`guard.auto_merge_reverts\` is not set in graft.yaml at the last green commit.`
+        : `Graft would open a pull request reverting this merge (1 path restored to \`${B2.slice(0, 7)}\`) and would not enable auto-merge: \`guard.auto_merge_reverts\` is not set in graft.yaml at the last green commit.`,
     );
     expect(rows[0]?.guard_mode).toBe(profile.name === "max" ? "enforce" : "report");
   });
 
-  it(`N-8 [${profile.name}] no request used a phase1 route or a guard feature client`, () => {
-    const upTo = api.requests.slice(0, guard.requestsAtEnd);
-    for (const r of upTo) {
-      if (r.method === "GET" || r.method === "HEAD") continue;
-      expect(classifyWrite(r.method, r.path).kind, `${r.method} ${r.path}`).not.toBe("phase1");
-    }
-    expect(guard.featureClients).not.toContain("guard");
-    expect(guard.gateFeatures).not.toContain("guard");
+  if (profile.name === "default") {
+    it("N-8 [default] no request used a phase1 route or a guard feature client", () => {
+      const upTo = api.requests.slice(0, guard.requestsAtEnd);
+      for (const r of upTo) {
+        if (r.method === "GET" || r.method === "HEAD") continue;
+        expect(classifyWrite(r.method, r.path).kind, `${r.method} ${r.path}`).not.toBe("phase1");
+        expect(r.path, `${r.method} ${r.path}`).not.toBe("/graphql");
+      }
+      expect(guard.featureClients).not.toContain("guard");
+      expect(guard.gateFeatures).not.toContain("guard");
+    });
+  } else {
+    it("N-8 [max] every phase1 request came from a guard client and was allowed", () => {
+      const upTo = api.requests.slice(0, guard.requestsAtEnd);
+      const phase1 = upTo.filter(
+        (r) => r.method !== "GET" && classifyWrite(r.method, r.path).kind === "phase1",
+      );
+      expect(phase1.length).toBeGreaterThan(0);
+      // A phase1 request reaches GitHub only after the gate allowed it for its feature.
+      const guardAllowed = gateCalls.filter((c) => c.feature === "guard" && c.allowed);
+      expect(guardAllowed).toHaveLength(phase1.length);
+      expect(gateCalls.filter((c) => c.feature === "guard" && !c.allowed)).toEqual([]);
+      expect(guard.featureClients).toContain("guard");
+    });
+
+    it("N-12 [max] the guard opens exactly one revert: one tree, commit, ref, pull request and label, plus the one comment", () => {
+      const upTo = api.requests.slice(0, guard.requestsAtEnd);
+      const count = (method: string, re: RegExp) =>
+        upTo.filter((r) => r.method === method && re.test(r.path)).length;
+      const repo = `/repos/${FULL_NAME}`;
+      expect(count("POST", new RegExp(`^${repo}/git/trees$`))).toBe(1);
+      expect(count("POST", new RegExp(`^${repo}/git/commits$`))).toBe(1);
+      expect(count("POST", new RegExp(`^${repo}/git/refs$`))).toBe(1);
+      expect(count("POST", new RegExp(`^${repo}/pulls$`))).toBe(1);
+      expect(count("POST", new RegExp(`^${repo}/issues/\\d+/labels$`))).toBe(1);
+      expect(count("PUT", /\/merge$/)).toBe(0);
+      expect(count("PATCH", /\/git\/refs\//)).toBe(0);
+      expect(count("DELETE", /\/git\/refs\//)).toBe(0);
+      expect(count("POST", /^\/graphql$/)).toBe(0);
+      const revert = [...api.state.pulls.values()].find((p) =>
+        p.head.ref?.startsWith("graft-revert/"),
+      );
+      expect(revert?.title).toBe(`Revert #${GUARD_PR} (Graft guard)`);
+      expect(revert?.labels).toEqual([{ name: "graft:revert" }]);
+      expect(revert?.body?.split("\n\n").at(-1)).toBe("Graft-Agent: graft-guard");
+      expect(gateCalls.filter((c) => c.feature === "guard")).toHaveLength(5);
+    });
+  }
+
+  it(`N-13 [${profile.name}] a replayed check_run.completed, a second observe and a re-run of guard.revert for the same event add no write`, () => {
+    expect(guard.writesAfterRerun).toBe(guard.writesBeforeReplay);
   });
 
   it(`N-9 [${profile.name}] a second observe after confirmation and a replayed check_run.completed add no write`, () => {
@@ -676,7 +751,7 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       c.rest.git.createRef({
         owner: OWNER,
         repo: REPO,
-        ref: "refs/heads/graft-revert/n5",
+        ref: "refs/heads/graft-revert/00000000-0000-4000-8000-000000000005",
         sha: HEAD_2,
       });
     const reason = async (p: Promise<unknown>): Promise<string> => {
@@ -690,8 +765,14 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
     const feature = await t.deps.github.forInstallation(INSTALLATION_ID, { feature: "guard" });
     const plain = await t.deps.github.forInstallation(INSTALLATION_ID);
     const before = refused.length;
+    // Only this test's ref (the max profile's revert created its own branch earlier).
     const sent = () =>
-      api.requests.filter((r) => r.method === "POST" && r.path.endsWith("/git/refs"));
+      api.requests.filter(
+        (r) =>
+          r.method === "POST" &&
+          r.path.endsWith("/git/refs") &&
+          r.body?.ref === "refs/heads/graft-revert/00000000-0000-4000-8000-000000000005",
+      );
 
     if (profile.name === "default") {
       expect(await reason(createRef(feature))).toBe("mode_report");

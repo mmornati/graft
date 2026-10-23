@@ -19,11 +19,15 @@ export const TEAMS_NOTE =
 /** Phase 1 step 4 (§10). */
 export const GUARD_STATUSES_NOTE = "note: guard reads check runs only (no statuses:read)";
 export const GUARD_OFF_NOTE = "note: guard detection is off on this shell's config";
+/** Phase 1 step 5 (§13). */
+export const GUARD_REVERT_OFF_NOTE = "note: guard reverts are off on this shell's config";
 
-/** What `show` needs from this shell's configuration (Phase 1 step 4). */
+/** What `show` needs from this shell's configuration (Phase 1 steps 4 and 5). */
 export interface ShowOptions {
   /** `GRAFT_GUARD_DETECTION` of this shell; omitted means on. */
   guardDetection?: boolean;
+  /** `GRAFT_GUARD_REVERT` of this shell; omitted means on. */
+  guardRevert?: boolean;
 }
 
 import { CEILING_STATE_KEY } from "./ceiling.js";
@@ -131,6 +135,7 @@ export function renderRepository(
   // Phase 1 step 4 (§10, D2): without statuses:read the guard works on check runs alone.
   if (!hasStatusesRead(row.permissions)) lines.push(`  ${GUARD_STATUSES_NOTE}`);
   if (opts.guardDetection === false) lines.push(`  ${GUARD_OFF_NOTE}`);
+  if (opts.guardRevert === false) lines.push(`  ${GUARD_REVERT_OFF_NOTE}`);
   if (v.pending > 0) {
     lines.push(
       `  ${"pending".padEnd(11)}${v.pending} ${v.pending === 1 ? "change" : "changes"} not yet applied by the worker`,
