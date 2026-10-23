@@ -15,7 +15,7 @@ import { type AppServer, buildServer } from "../../src/http/server.js";
 import { hashToken } from "../../src/mcp/tokens.js";
 import { upsertRepositories } from "../../src/modules/installations/store.js";
 import { authorizeToken } from "../../src/modules/mcp/auth.js";
-import { insertMcpChange } from "../../src/modules/mcp/store.js";
+import { claimOpenSlot, insertMcpChange, opensInLastHour } from "../../src/modules/mcp/store.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { evaluatePolicyJobRun } from "../../src/modules/policy/job.js";
 import { refreshProvenance } from "../../src/modules/provenance/job.js";
@@ -322,7 +322,7 @@ async function seedPr(cfg: Record<string, string> = {}): Promise<string> {
 }
 
 describe("MCP server (Phase 1 step 6)", () => {
-  it("I-MCP-1 migration 0014 up, down, up: down removes both tables and the column, and the mcp provenance rows", async () => {
+  it("I-MCP-1 migrations 0014 and 0015 up, down, up: down removes both tables and the column, and the mcp provenance rows; 0015 allows claim rows and its down drops them", async () => {
     const tables = async () =>
       (
         await sql<{ t: string }>`select table_name as t from information_schema.tables
@@ -342,6 +342,20 @@ describe("MCP server (Phase 1 step 6)", () => {
       .insertInto("provenance")
       .values({ change_id: change.id, source: "mcp", commit_sha: HEAD_SHA, agent: "codex" })
       .execute();
+    // 0015 (review 1, finding 7): a claim row has neither a PR number nor a head; down drops claims.
+    const { id: tokenId } = await token();
+    await t.db
+      .insertInto("mcp_changes")
+      .values({ repository_id: REPO_ID, token_id: tokenId, pr_number: null, head_sha: null })
+      .execute();
+    await expect(
+      t.db
+        .insertInto("mcp_changes")
+        .values({ repository_id: REPO_ID, token_id: tokenId, pr_number: 5, head_sha: null })
+        .execute(),
+    ).rejects.toThrow(/check constraint/);
+    expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
+    expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     try {
       expect(await tables()).toEqual([]);
@@ -353,7 +367,7 @@ describe("MCP server (Phase 1 step 6)", () => {
         .execute();
       expect(mcpRows).toEqual([]);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0014_mcp"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0014_mcp", "0015_mcp_open_claims"]);
     }
     expect(await tables()).toEqual(["mcp_changes", "mcp_tokens"]);
     // The CHECKs: a hex hash, an 8-character prefix, expiry after creation, revoked iff by.
@@ -1136,6 +1150,86 @@ describe("MCP server (Phase 1 step 6)", () => {
       .set({ created_at: new Date(Date.now() - 2 * 3600_000) })
       .execute();
     expect((await open(c, { head: "feat/11" })).out.existing).toBe(false);
+  });
+
+  it("I-MCP-12b the hourly cap under concurrent calls: with 9 opens in the hour, a call held at its create keeps the last slot and a concurrent call is rate_limited; a failed create gives its slot back", async () => {
+    await setMcpWrite("on");
+    const { token: tok, id: tokenId } = await token();
+    const url = await start(ENFORCE_APP);
+    const c = await connect(url, tok);
+    const c2 = await connect(url, tok);
+    for (let i = 1; i <= 9; i++) {
+      await insertMcpChange(t.db, {
+        repositoryId: REPO_ID,
+        tokenId,
+        prNumber: 100 + i,
+        headSha: fakeSha(0x2000 + i),
+      });
+    }
+    api.state.branches.set("feat/a", fakeSha(0xa1));
+    api.state.branches.set("feat/b", fakeSha(0xb1));
+    const claims = () =>
+      t.db.selectFrom("mcp_changes").select("id").where("pr_number", "is", null).execute();
+
+    // The first call claims the tenth slot and is held at its create.
+    const held = api.block("POST", /\/pulls$/);
+    const first = call(c, "open_change", { repository: FULL, head: "feat/a", title: "x" });
+    await held.reached;
+    expect(await claims()).toHaveLength(1);
+    const second = await call(c2, "open_change", { repository: FULL, head: "feat/b", title: "x" });
+    expect(second.out).toEqual({ error: "rate_limited" });
+    held.release();
+    expect((await first).out).toMatchObject({ existing: false, headSha: fakeSha(0xa1) });
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+    expect(await claims()).toEqual([]);
+    expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(10);
+
+    // One slot frees up; a create that fails (a 422 with no PR to adopt) gives it back.
+    await t.db
+      .updateTable("mcp_changes")
+      .set({ created_at: new Date(Date.now() - 2 * 3600_000) })
+      .where("pr_number", "=", 101)
+      .execute();
+    api.failNext("POST", /\/pulls$/, 422);
+    expect(
+      (await call(c2, "open_change", { repository: FULL, head: "feat/b", title: "x" })).out,
+    ).toEqual({ error: "github_422" });
+    expect(await claims()).toEqual([]);
+    expect(
+      (await call(c2, "open_change", { repository: FULL, head: "feat/b", title: "x" })).out,
+    ).toMatchObject({ existing: false, headSha: fakeSha(0xb1) });
+    // A claim left by a crash holds its slot for an hour, then the next claim drops it.
+    await t.db
+      .insertInto("mcp_changes")
+      .values({
+        repository_id: REPO_ID,
+        token_id: tokenId,
+        pr_number: null,
+        head_sha: null,
+        created_at: new Date(Date.now() - 2 * 3600_000),
+      })
+      .execute();
+    await t.db
+      .updateTable("mcp_changes")
+      .set({ created_at: new Date(Date.now() - 2 * 3600_000) })
+      .where("pr_number", "=", 102)
+      .execute();
+    api.state.branches.set("feat/c", fakeSha(0xc1));
+    expect(
+      (await call(c, "open_change", { repository: FULL, head: "feat/c", title: "x" })).out,
+    ).toMatchObject({ existing: false });
+    expect(await claims()).toEqual([]);
+
+    // The count and the claim run under the repository row lock: five parallel claims for one
+    // free slot, one wins.
+    const n = await opensInLastHour(t.db, REPO_ID);
+    const raced = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        claimOpenSlot(t.db, { repositoryId: REPO_ID, tokenId, perHour: n + 1 }),
+      ),
+    );
+    expect(raced.filter((id) => id !== null)).toHaveLength(1);
+    expect(await claims()).toHaveLength(1);
   });
 
   it("I-MCP-13 a rollback mid-call: mcp_write set off after the early read → the gate refuses, mcp_write_off mode_changed, no mcp_changes row", async () => {

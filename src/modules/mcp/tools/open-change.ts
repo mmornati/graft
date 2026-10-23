@@ -17,7 +17,7 @@ import {
 } from "../../../mcp/schemas.js";
 import { getEffectiveModes } from "../../modes/index.js";
 import { type GraftField, normalizeField } from "../../provenance/index.js";
-import { insertMcpChange, opensInLastHour } from "../store.js";
+import { claimOpenSlot, insertMcpChange, settleOpenClaim } from "../store.js";
 import {
   checkRepository,
   githubError,
@@ -155,19 +155,30 @@ export async function openChange(
       warnings,
     };
   }
-  if ((await opensInLastHour(db, principal.repositoryId)) >= ctx.config.mcpOpenChangePerHour) {
-    throw new ToolError("rate_limited");
-  }
+  // D9 (c): a slot claimed under the repository lock, so concurrent calls cannot pass the cap.
+  const claimId = await claimOpenSlot(db, {
+    repositoryId: principal.repositoryId,
+    tokenId: principal.tokenId,
+    perHour: ctx.config.mcpOpenChangePerHour,
+  });
+  if (claimId === null) throw new ToolError("rate_limited");
+  const settle = (pr: { number: number; headSha: string } | null) =>
+    settleOpenClaim(db, {
+      claimId,
+      repositoryId: principal.repositoryId,
+      tokenId: principal.tokenId,
+      pr,
+    });
 
   // The write: the only `mcp` client of the codebase, and only `pulls.create`.
-  let writer: GitHubClient;
-  try {
-    writer = await ctx.github.forInstallation(principal.installationId, { feature: "mcp" });
-  } catch (err) {
-    throw githubError(err);
-  }
   let created: { number: number; headSha: string };
   try {
+    let writer: GitHubClient;
+    try {
+      writer = await ctx.github.forInstallation(principal.installationId, { feature: "mcp" });
+    } catch (err) {
+      throw githubError(err);
+    }
     const { data } = await writer.rest.pulls.create({
       owner,
       repo,
@@ -180,6 +191,9 @@ export async function openChange(
     });
     created = { number: data.number, headSha: data.head.sha };
   } catch (err) {
+    // Nothing was opened: the slot is given back before anything else.
+    await settle(null);
+    if (err instanceof ToolError) throw err;
     if (err instanceof MutationRefusedError) {
       if (err.refusal === "mode_off") throw new ToolError("mcp_write_off", "mode_changed");
       throw new ToolError("internal");
@@ -200,12 +214,7 @@ export async function openChange(
     }
     throw githubError(err);
   }
-  await insertMcpChange(db, {
-    repositoryId: principal.repositoryId,
-    tokenId: principal.tokenId,
-    prNumber: created.number,
-    headSha: created.headSha,
-  });
+  await settle(created);
   return {
     prNumber: created.number,
     url: url(created.number),

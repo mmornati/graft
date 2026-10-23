@@ -564,8 +564,9 @@ export interface McpChangesTable {
   id: Generated<string>;
   repository_id: number;
   token_id: string;
-  pr_number: number;
-  head_sha: string;
+  /** NULL with `head_sha`: a D9 (c) slot claimed before `pulls.create` (migration 0015). */
+  pr_number: number | null;
+  head_sha: string | null;
   created_at: Timestamp;
 }
 
