@@ -300,6 +300,24 @@ export async function runDoctor(
     );
   } else add("teams", "OK", "no repository enforces policy without members:read");
 
+  // public_enforce (Phase 1 step 7, D10): policy enforce requested on a public repository
+  const publicEnforce = await db
+    .selectFrom("repositories")
+    .select("full_name")
+    .where("installation_id", "=", id)
+    .where("removed_at", "is", null)
+    .where("private", "=", false)
+    .where("policy_mode", "=", "enforce")
+    .orderBy("full_name")
+    .execute();
+  if (publicEnforce.length > 0) {
+    add(
+      "public_enforce",
+      "WARN",
+      `policy enforce requested on ${publicEnforce.length} public ${publicEnforce.length === 1 ? "repository" : "repositories"}: ${publicEnforce.map((r) => r.full_name).join(", ")} (21 or more outsider change requests block the check; Phase 1 pilots do not enforce on public repositories)`,
+    );
+  } else add("public_enforce", "OK", "no public repository requests policy enforce");
+
   // break_glass (Phase 1 step 3, T7): every bypass in the last 7 days, so operators notice them
   const bypasses = await countAppliedSince(db, id, ago(7 * DAY_MS));
   if (bypasses.length > 0) {

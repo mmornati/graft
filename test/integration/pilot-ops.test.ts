@@ -187,6 +187,7 @@ describe("pilot doctor", () => {
       ["OK", "permissions"],
       ["OK", "modes"],
       ["OK", "teams"],
+      ["OK", "public_enforce"],
       ["OK", "break_glass"],
       ["OK", "guard_statuses"],
       ["OK", "guard_confirming"],
@@ -204,7 +205,7 @@ describe("pilot doctor", () => {
         )
       ).out,
     );
-    expect(json.checks).toHaveLength(21);
+    expect(json.checks).toHaveLength(22);
     expect(json.checks.every((c: { status: string }) => c.status === "OK")).toBe(true);
   });
 
@@ -296,12 +297,12 @@ describe("pilot doctor", () => {
     expect(res.code).toBe(1);
     expect(res.err).toBe("");
     const checks = JSON.parse(res.out).checks as { id: string; status: string }[];
-    expect(checks).toHaveLength(21);
+    expect(checks).toHaveLength(22);
     expect(checks.find((c) => c.id === "installation")?.status).toBe("FAIL");
     // An installation that does not exist at all answers the same way.
     const missing = await run("pilot", "doctor", "--installation", "999999", "--json");
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out).checks).toHaveLength(21);
+    expect(JSON.parse(missing.out).checks).toHaveLength(22);
     expect(missing.err).toBe("");
   });
 
@@ -957,13 +958,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0015_mcp_open_claims"]);
+    expect(down).toEqual(["0016_phase1_gate"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0015_mcp_open_claims"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0016_phase1_gate"]);
     }
   });
 });
