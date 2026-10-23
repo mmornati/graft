@@ -51,6 +51,19 @@ export function lowest<V extends string>(order: readonly [V, V], a: V, b: V): V 
   return order.indexOf(a) <= order.indexOf(b) ? a : b;
 }
 
+/**
+ * Phase 1 step 7 (D2): the ceiling a process computes with is the lower of its own
+ * `GRAFT_MODE_CEILING` and the value the last worker start stored in `service_state`. A missing row
+ * (no worker ever started) means the process's value alone; any stored value other than `report` or
+ * `enforce` means `report`. A worker start can therefore only lower the ceiling of every process
+ * that runs this code, so a rolling restart that lowers it is safe once the first new worker starts.
+ */
+export function effectiveCeiling(env: Mode, stored: string | null | undefined): Mode {
+  if (stored === null || stored === undefined) return env;
+  const worker: Mode = stored === "enforce" ? "enforce" : "report";
+  return lowest(["report", "enforce"], env, worker);
+}
+
 export interface EffectiveModesInput {
   ceiling: Mode;
   requested: { policy_mode: Mode; guard_mode: Mode; mcp_write: Switch };
