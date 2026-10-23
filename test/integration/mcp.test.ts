@@ -742,6 +742,56 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(await mcpRows()).toHaveLength(2);
   });
 
+  it("I-MCP-8b the D13 merge in the jobs: a default with a team and a looser rule on agent: [codex]; a disagreeing report naming codex keeps the security reviewer required", async () => {
+    loadPolicyScenario(api, {
+      policy:
+        "version: 1\ndefault:\n  require: { humans: 1, team: security }\nrules:\n  - match: { agent: [codex] }\n    require: { humans: 1 }\n",
+    });
+    api.state.teams.set("security", { members: new Map([["carol", "active"]]) });
+    await seedPr();
+    const before = await latestVerdict();
+    expect(before.outcome).toBe("would_require");
+    expect(before.required).toMatchObject({
+      constraints: [{ rules: [], humans: 1, teamCount: 1 }],
+      usedDefault: true,
+    });
+    const { token: tok } = await token();
+    const url = await start();
+    const c = await connect(url, tok);
+    expect(
+      (
+        await call(c, "report_provenance", {
+          repository: FULL,
+          pr: PR_NUMBER,
+          headSha: HEAD_SHA,
+          agent: "codex",
+        })
+      ).out,
+    ).toEqual({ stored: true, existing: false, agreement: "disagrees" });
+    const ctx = ctxFor();
+    const job = (await jobsNamed(t.db, "provenance.refresh")).at(-1);
+    expect(await refreshProvenance(job?.data as never, ctx)).toBe("published");
+    expect(await evaluatePolicyJobRun(POLICY_RUN, ctx)).toBe("published");
+    const verdict = await latestVerdict();
+    expect([verdict.outcome, verdict.author_kind]).toEqual(["would_require", "unknown"]);
+    // The unknown author alone would match the codex rule and drop the team: the stricter of
+    // the two verdicts keeps the default's security reviewer, and adds the codex rule.
+    expect(verdict.required).toMatchObject({
+      constraints: [
+        { rules: [], humans: 1, teamCount: 1 },
+        { rules: [1], humans: 1, teamCount: 0 },
+      ],
+      usedDefault: true,
+    });
+    const matched = verdict.rules_matched as {
+      index: number;
+      reasons: { key: string; uncertain: boolean }[];
+    }[];
+    expect(matched.find((m) => m.index === 1)?.reasons).toEqual([
+      expect.objectContaining({ key: "agent", uncertain: true }),
+    ]);
+  });
+
   it("I-MCP-9 report mode inert: open_change with default modes and mcp_write requested on → mcp_write_off (ceiling); no request at all during the call; no mcp client", async () => {
     await setMcpWrite("on");
     const { token: tok } = await token();
