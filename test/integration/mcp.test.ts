@@ -45,6 +45,7 @@ import {
   call,
   createTestToken,
   INITIALIZE,
+  LEGACY_PROTOCOL,
   LIST_TOOLS,
   type McpClientHandle,
   mcpClient,
@@ -160,6 +161,28 @@ async function start(cfg: Record<string, string> = {}): Promise<URL> {
   await server.listen({ port: 0, host: "127.0.0.1" });
   const { port } = server.server.address() as { port: number };
   return new URL(`http://127.0.0.1:${port}/mcp`);
+}
+
+/** A raw POST through Fastify's `inject`, from a chosen client address (D9 b is per IP). */
+async function injectPost(
+  server: AppServer,
+  body: unknown,
+  headers: Record<string, string>,
+  remoteAddress: string,
+): Promise<number> {
+  const res = await server.inject({
+    method: "POST",
+    url: "/mcp",
+    remoteAddress,
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": LEGACY_PROTOCOL,
+      ...headers,
+    },
+    payload: JSON.stringify(body),
+  });
+  return res.statusCode;
 }
 
 async function connect(
@@ -480,7 +503,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     );
   });
 
-  it("I-MCP-3 refused tokens: none, malformed, unknown, sharing a valid prefix, expired, revoked between two calls, a removed repository's → 401 with identical bodies", async () => {
+  it("I-MCP-3 refused tokens: none, malformed, unknown, sharing a valid prefix, expired, revoked between two calls, a removed repository's, a deleted or suspended installation's → 401 with identical bodies", async () => {
     const url = await start();
     const valid = await token();
     const expired = await token(REPO_ID, "expired");
@@ -526,6 +549,24 @@ describe("MCP server (Phase 1 step 6)", () => {
     query.searchParams.set("token", valid.token);
     expect((await rawPost(query, INITIALIZE)).status).toBe(401);
     expect((await rawPost(url, INITIALIZE, { cookie: `token=${valid.token}` })).status).toBe(401);
+
+    // The installation deleted, then suspended: the token's installation must be active (D7).
+    for (const column of ["deleted_at", "suspended_at"] as const) {
+      await t.db
+        .updateTable("installations")
+        .set({ [column]: new Date() })
+        .where("id", "=", INSTALLATION_ID)
+        .execute();
+      const res = await rawPost(url, INITIALIZE, { authorization: `Bearer ${valid.token}` });
+      expect(res.status, column).toBe(401);
+      expect(res.headers.get("www-authenticate"), column).toBe('Bearer realm="graft"');
+      bodies.push(await res.text());
+      await t.db
+        .updateTable("installations")
+        .set({ [column]: null })
+        .where("id", "=", INSTALLATION_ID)
+        .execute();
+    }
 
     // Revoked between two calls of the same client.
     const c = await connect(url, valid.token);
@@ -614,7 +655,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect((await fetch(url, { method: "GET" })).status).toBe(401);
   });
 
-  it("I-MCP-6 Origin: a foreign origin → 403; an allowed one → served; a body over 64 KiB → 413; text/plain → 415", async () => {
+  it("I-MCP-6 Origin: a foreign, empty or null origin → 403; an allowed one → served; a body over 64 KiB → 413; text/plain → 415", async () => {
     const { token: tok } = await token();
     const auth = { authorization: `Bearer ${tok}` };
     const url = await start({ GRAFT_MCP_ALLOWED_ORIGINS: "https://ok.example" });
@@ -627,6 +668,11 @@ describe("MCP server (Phase 1 step 6)", () => {
     });
     // Refused before the token is looked up.
     expect(tokenLookups).toBe(0);
+    // An empty Origin, and the literal "null" (a sandboxed iframe, a file: page), are foreign too.
+    for (const origin of ["", "null"]) {
+      expect((await rawPost(url, LIST_TOOLS, { ...auth, origin })).status, origin).toBe(403);
+    }
+    expect(tokenLookups).toBe(0);
     const ok = await rawPost(url, LIST_TOOLS, { ...auth, origin: "https://OK.example" });
     expect(ok.status).toBe(200);
     expect(await ok.text()).toContain("get_status");
@@ -636,7 +682,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(plain.status).toBe(415);
   });
 
-  it("I-MCP-7 rate limits: the 61st call in a minute → 429 with Retry-After; 21 bad tokens from one IP → 429, and the 22nd is not looked up", async () => {
+  it("I-MCP-7 rate limits: the 61st call in a minute → 429 with Retry-After; 21 bad tokens from one IP → 429, and the 22nd is not looked up; per IP, malformed headers count, a success resets nothing", async () => {
     const { token: tok } = await token();
     const url = await start();
     const auth = { authorization: `Bearer ${tok}` };
@@ -667,6 +713,22 @@ describe("MCP server (Phase 1 step 6)", () => {
     // For the rest of the minute even a valid token from that IP is refused.
     expect((await rawPost(url2, LIST_TOOLS, auth)).status).toBe(429);
     expect(tokenLookups).toBe(20);
+
+    // The count is per client IP: another address is still served.
+    const server2 = servers.at(-1) as AppServer;
+    expect(await injectPost(server2, LIST_TOOLS, auth, "10.0.0.2")).toBe(200);
+    // From a third address: malformed headers count, and a success in between resets nothing.
+    const ip3 = "10.0.0.3";
+    for (let i = 0; i < 10; i++) {
+      const h = { authorization: i % 2 === 0 ? "Bearer nope" : `Token ${tok}` };
+      expect(await injectPost(server2, LIST_TOOLS, h, ip3), `malformed ${i + 1}`).toBe(401);
+    }
+    for (let i = 0; i < 9; i++) {
+      expect(await injectPost(server2, LIST_TOOLS, bad, ip3), `bad ${i + 11}`).toBe(401);
+    }
+    expect(await injectPost(server2, LIST_TOOLS, auth, ip3)).toBe(200);
+    expect(await injectPost(server2, LIST_TOOLS, bad, ip3), "the 20th failure").toBe(401);
+    expect(await injectPost(server2, LIST_TOOLS, bad, ip3), "the 21st").toBe(429);
   });
 
   it("I-MCP-8 report_provenance: stale head, closed PR, invalid session URL; a disagreeing report makes the codex rule match uncertain (would_require); once per head; an agreeing report changes nothing; a new push allows a new report", async () => {
@@ -752,6 +814,10 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect((await report({ headSha: HEAD_SHA, agent: "claude-code" })).out).toEqual({
       error: "already_reported",
     });
+    // Every field is compared, not only the agent.
+    expect(
+      (await report({ headSha: HEAD_SHA, agent: "codex", model: "gpt-5", task: "#42" })).out,
+    ).toEqual({ error: "already_reported" });
     expect(
       (await report({ headSha: HEAD_SHA, agent: "codex", model: "gpt-5-codex", task: "#42" })).out,
     ).toEqual({ stored: true, existing: true, agreement: "disagrees" });
@@ -1025,7 +1091,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     ).toEqual([n, 777]);
   });
 
-  it("I-MCP-12 open_change refusals with no write: invalid_head (default branch, graft-revert/x), head_not_found, base_not_found, the hourly cap (the 11th open, two server instances)", async () => {
+  it("I-MCP-12 open_change refusals with no write: invalid_head (default branch, graft-revert/x), head_not_found, base_not_found (missing, or an existing graft-revert/ branch), the hourly cap (the 11th open, two server instances)", async () => {
     await setMcpWrite("on");
     const { token: tok } = await token();
     const url = await start(ENFORCE);
@@ -1042,6 +1108,12 @@ describe("MCP server (Phase 1 step 6)", () => {
       error: "base_not_found",
     });
     expect((await open(c, { head: "feat/mcp", base: "-bad" })).out).toEqual({
+      error: "base_not_found",
+    });
+    // An existing branch whose name the rule refuses is not a base either (the tool says so,
+    // before the mutation guard would refuse the body).
+    api.state.branches.set("graft-revert/x", fakeSha(0x7e7));
+    expect((await open(c, { head: "feat/mcp", base: "graft-revert/x" })).out).toEqual({
       error: "base_not_found",
     });
     expect(writes()).toEqual([]);
@@ -1085,15 +1157,13 @@ describe("MCP server (Phase 1 step 6)", () => {
   it("I-MCP-14 self-approval (D19): the commit author and committer of an MCP-opened PR do not count; another reviewer does; more than 250 commits or a commit with a null author → no approval counts", async () => {
     const { id: tokenId } = await token();
     await seedPr();
-    await t.db
-      .insertInto("mcp_changes")
-      .values({
-        repository_id: REPO_ID,
-        token_id: tokenId,
-        pr_number: PR_NUMBER,
-        head_sha: HEAD_SHA,
-      })
-      .execute();
+    // A row for the same PR number in another repository does not make A's PR an MCP one.
+    await insertMcpChange(t.db, {
+      repositoryId: REPO_B,
+      tokenId,
+      prNumber: PR_NUMBER,
+      headSha: HEAD_SHA,
+    });
     const withLogins = (author: string | null, committer = "web-flow") => [
       {
         ...makeCommit(HEAD_SHA, commitMessage("Fix", undefined, [["Graft-Agent", "claude-code"]])),
@@ -1114,6 +1184,14 @@ describe("MCP server (Phase 1 step 6)", () => {
     const ctx = ctxFor();
 
     api.state.reviews.set(PR_NUMBER, [makeReview({ id: 1, login: "alice", userId: 601 })]);
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    expect(await approvals()).toMatchObject({ current: 1, users: ["alice"], truncated: false });
+    await insertMcpChange(t.db, {
+      repositoryId: REPO_ID,
+      tokenId,
+      prNumber: PR_NUMBER,
+      headSha: HEAD_SHA,
+    });
     await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
     expect(await approvals()).toMatchObject({ current: 0, truncated: false });
 
