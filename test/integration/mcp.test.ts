@@ -1053,7 +1053,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
   });
 
-  it("I-MCP-14 self-approval (D19): the commit author of an MCP-opened PR does not count; another reviewer does; a commit with a null author → no approval counts", async () => {
+  it("I-MCP-14 self-approval (D19): the commit author and committer of an MCP-opened PR do not count; another reviewer does; more than 250 commits or a commit with a null author → no approval counts", async () => {
     const { id: tokenId } = await token();
     await seedPr();
     await t.db
@@ -1065,17 +1065,18 @@ describe("MCP server (Phase 1 step 6)", () => {
         head_sha: HEAD_SHA,
       })
       .execute();
-    const withLogins = (author: string | null) => [
+    const withLogins = (author: string | null, committer = "web-flow") => [
       {
         ...makeCommit(HEAD_SHA, commitMessage("Fix", undefined, [["Graft-Agent", "claude-code"]])),
         author: author === null ? null : { login: author },
-        committer: { login: "web-flow" },
+        committer: { login: committer },
       },
     ];
     api.state.commits.set(PR_NUMBER, withLogins("alice") as never);
     for (const [login, id] of [
       ["alice", 601],
       ["bob", 602],
+      ["carol", 603],
     ] as const) {
       api.state.permissions.set(login, { id, role: "write" });
     }
@@ -1093,6 +1094,27 @@ describe("MCP server (Phase 1 step 6)", () => {
     ]);
     await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
     expect(await approvals()).toMatchObject({ current: 1, users: ["bob"], truncated: false });
+
+    // A committer is excluded like an author: carol committed alice's commit.
+    api.state.commits.set(PR_NUMBER, withLogins("alice", "carol") as never);
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 3, login: "carol", userId: 603 }),
+      makeReview({ id: 2, login: "bob", userId: 602 }),
+    ]);
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    expect(await approvals()).toMatchObject({ current: 1, users: ["bob"], truncated: false });
+
+    // More than 250 commits (GitHub lists at most 250): nobody can be ruled out, no approval counts.
+    const pull = api.state.pulls.get(PR_NUMBER);
+    if (!pull) throw new Error("no pull");
+    pull.commits = 260;
+    api.state.commits.set(
+      PR_NUMBER,
+      Array.from({ length: 260 }, () => withLogins("alice")[0]) as never,
+    );
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    expect(await approvals()).toMatchObject({ current: 0, truncated: true });
+    pull.commits = 1;
 
     api.state.commits.set(PR_NUMBER, withLogins(null) as never);
     await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
