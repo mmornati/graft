@@ -203,6 +203,7 @@ const event = (name: string, payload: unknown) =>
 describe("guard: schema", () => {
   it("I-GRD-1 migration 0011 up, down, up; down restores the old status check and fails on a new status", async () => {
     // Step 3 review 1's migration and step 5's sit on top of 0011.
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -230,11 +231,13 @@ describe("guard: schema", () => {
         "0013_guard_revert",
         "0014_mcp",
         "0015_mcp_open_claims",
+        "0016_phase1_gate",
       ]);
     }
     // A row with a new status blocks the rollback.
     await sql`insert into guard_events (repository_id, branch, failing_sha, status)
       values (${REPO_ID}, 'main', ${C(1)}, 'flaky')`.execute(t.db);
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -247,9 +250,11 @@ describe("guard: schema", () => {
         "0013_guard_revert",
         "0014_mcp",
         "0015_mcp_open_claims",
+        "0016_phase1_gate",
       ]);
     }
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -261,6 +266,7 @@ describe("guard: schema", () => {
       "0013_guard_revert",
       "0014_mcp",
       "0015_mcp_open_claims",
+      "0016_phase1_gate",
     ]);
     const def = await sql<{ def: string }>`
       select pg_get_constraintdef(oid) as def from pg_constraint
@@ -1142,6 +1148,87 @@ describe("guard: detection and confirmation", () => {
       `POST /repos/${FULL_NAME}/issues/{n}/comments`,
     ]);
     expect(e).toMatchObject({ revert_outcome: "opened", revert_labelled: true });
+  });
+
+  it("I-GRD-MODE-1 events settled ambiguous, no_culprit and flaky by observe and confirm carry guard_mode (report by default, enforce with the ceiling and --guard enforce); observe never overwrites a stored value (Phase 1 step 7, D13)", async () => {
+    const off = { GRAFT_GUARD_CONFIRM: "off" };
+    const settledModes = async () =>
+      (await events()).map((r) => [r.failing_sha, r.status, r.guard_mode]);
+    const ambiguousAndNoCulprit = async (config: Record<string, string>) => {
+      history(5);
+      mergedPull(5, C(2));
+      mergedPull(6, C(3));
+      await track(C(5), null);
+      run(C(1), "test", "success");
+      run(C(3), "test", "failure");
+      run(C(4), "test", "success");
+      run(C(5), "test", "failure");
+      for (const k of [1, 3, 4, 5]) await observe(C(k), config);
+    };
+    await ambiguousAndNoCulprit(off);
+    expect(await settledModes()).toEqual([
+      [C(3), "ambiguous", "report"],
+      [C(5), "no_culprit", "report"],
+    ]);
+
+    // Enforce: the ceiling, --guard enforce and contents:write.
+    await truncateAll(t.db);
+    await seedWorld(t.db);
+    api = createFakeGitHubApi();
+    t.deps.github = fakeGitHubFactory(api);
+    await t.db.updateTable("repositories").set({ guard_mode: "enforce" }).execute();
+    await t.db
+      .updateTable("installations")
+      .set({
+        permissions: JSON.stringify({ checks: "write", contents: "write", pull_requests: "write" }),
+        permissions_read_at: now,
+      })
+      .execute();
+    await ambiguousAndNoCulprit({ ...off, GRAFT_MODE_CEILING: "enforce" });
+    expect(await settledModes()).toEqual([
+      [C(3), "ambiguous", "enforce"],
+      [C(5), "no_culprit", "enforce"],
+    ]);
+
+    // flaky, settled by observe (the next commit green): report.
+    await truncateAll(t.db);
+    await seedWorld(t.db);
+    api = createFakeGitHubApi();
+    t.deps.github = fakeGitHubFactory(api);
+    let id = await confirming();
+    expect((await events())[0]?.guard_mode).toBeNull();
+    advance(60);
+    run(C(3), "test", "success");
+    await observe(C(3));
+    expect(await settledModes()).toEqual([[C(2), "flaky", "report"]]);
+
+    // flaky, settled by guard.confirm (a re-run turned green before the deadline).
+    await truncateAll(t.db);
+    await seedWorld(t.db);
+    api = createFakeGitHubApi();
+    t.deps.github = fakeGitHubFactory(api);
+    id = await confirming();
+    advance(120);
+    run(C(2), "test", "success");
+    advance(7300);
+    await confirm({ eventId: id });
+    expect(await settledModes()).toEqual([[C(2), "flaky", "report"]]);
+
+    // A stored value is kept: the event already says enforce, observe settles it under report.
+    await truncateAll(t.db);
+    await seedWorld(t.db);
+    api = createFakeGitHubApi();
+    t.deps.github = fakeGitHubFactory(api);
+    id = await confirming();
+    await t.db
+      .updateTable("guard_events")
+      .set({ guard_mode: "enforce" })
+      .where("id", "=", id)
+      .execute();
+    advance(60);
+    run(C(3), "test", "success");
+    await observe(C(3));
+    expect(await settledModes()).toEqual([[C(2), "flaky", "enforce"]]);
   });
 
   it("I-GRD-14 GRAFT_GUARD_DETECTION=off: handlers enqueue nothing, jobs and crons idle", async () => {
