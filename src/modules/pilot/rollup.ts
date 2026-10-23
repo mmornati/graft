@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { JobContext } from "../../core/context.js";
 import type { Db } from "../../db/client.js";
 import { defineJob } from "../../queue/job.js";
+import { purgeStaleClaims } from "../mcp/store.js";
 
 export const METRICS_ROLLUP_JOB = "pilot.metrics.rollup";
 export const ROLLUP_VERSION = 1;
@@ -280,6 +281,10 @@ export async function rollupRange(
 
 /** The scheduled run: the last 7 UTC days, then prune. */
 export async function runRollup(ctx: JobContext): Promise<{ repositories: number; days: number }> {
+  // Phase 1 step 7 (D9 b): claims are not PRs; a crashed claim older than an hour is dropped
+  // before anything is computed. The `open_change` cap keeps its own stale delete.
+  const purged = await purgeStaleClaims(ctx.db);
+  if (purged > 0) ctx.log.info({ claims: purged }, "stale mcp claims deleted");
   const today = startOfUtcDay(ctx.clock.now());
   const out = await rollupRange(ctx, {
     from: new Date(today.getTime() - ROLLUP_WINDOW_DAYS * DAY_MS),

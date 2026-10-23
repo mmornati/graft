@@ -12,6 +12,8 @@ export type AppServer = FastifyInstance<Server, IncomingMessage, ServerResponse,
 export async function buildServer(deps: AppDeps): Promise<AppServer> {
   const production = deps.config.nodeEnv === "production";
   const app = Fastify({
+    // Phase 1 step 7 (D6): only the operator's proxies may set the client address; never `true`.
+    trustProxy: deps.config.trustProxy.length > 0 ? deps.config.trustProxy.join(",") : false,
     loggerInstance: deps.log,
     logController: new LogController({ disableRequestLogging: true }),
   });

@@ -428,8 +428,17 @@ export function createFakeGitHubApi(
     m = is("GET", /^\/pulls\/(\d+)\/commits$/);
     if (m) {
       const all = state.commits.get(Number(m[1]));
-      // The real API serves at most 250 commits.
-      return all ? paged(all.slice(0, 250), url, path) : json(404, { message: "Not Found" });
+      // The real API serves at most 250 commits. Phase 1 step 7 (D8): a commit is served with
+      // `commit.verification.verified: true` unless the test set the key (to `undefined` to
+      // serve none).
+      const served = all
+        ?.slice(0, 250)
+        .map((c) =>
+          Object.hasOwn(c.commit, "verification")
+            ? c
+            : { ...c, commit: { ...c.commit, verification: { verified: true, reason: "valid" } } },
+        );
+      return served ? paged(served, url, path) : json(404, { message: "Not Found" });
     }
     m = is("GET", /^\/pulls\/(\d+)\/files$/);
     if (m) {

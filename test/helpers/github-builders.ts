@@ -82,7 +82,8 @@ export function makePull(overrides: Partial<FakePull> = {}): FakePull {
 
 export interface FakeCommit {
   sha: string;
-  commit: { message: string };
+  /** Phase 1 step 7 (D8): `verification` defaults to verified on `pulls.listCommits`. */
+  commit: { message: string; verification?: { verified: boolean; reason?: string } | undefined };
 }
 
 export function makeCommit(sha: string, message: string): FakeCommit {

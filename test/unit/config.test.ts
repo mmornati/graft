@@ -401,3 +401,25 @@ describe("config", () => {
     }
   });
 });
+
+describe("config: Phase 1 step 7", () => {
+  it("U-CFG-40 GRAFT_TRUST_PROXY: empty → off; addresses and CIDR ranges accepted; true, a hop count, a hostname and a bad prefix → ConfigError naming the entry index only", () => {
+    expect(loadConfig(valid).trustProxy).toEqual([]);
+    expect(loadConfig({ ...valid, GRAFT_TRUST_PROXY: "" }).trustProxy).toEqual([]);
+    const c = loadConfig({ ...valid, GRAFT_TRUST_PROXY: "10.0.0.1,10.0.0.0/8,::1,fd00::/8" });
+    expect(c.trustProxy).toEqual(["10.0.0.1", "10.0.0.0/8", "::1", "fd00::/8"]);
+    expect(Object.isFrozen(c.trustProxy)).toBe(true);
+    for (const value of ["true", "2", "proxy.local", "10.0.0.0/33"]) {
+      const msg = errorOf({ ...valid, GRAFT_TRUST_PROXY: `10.0.0.1,${value}` }).message;
+      expect(msg, value).toContain(
+        "GRAFT_TRUST_PROXY: entry 2 must be an IP address or a CIDR range",
+      );
+      expect(msg, value).not.toContain(value === "2" ? "proxy.local" : value);
+    }
+  });
+
+  it("U-CFG-41 GITHUB_APP_SLUG=Graft-Dev is stored as graft-dev (step 6 review 2, nit F)", () => {
+    expect(loadConfig({ ...valid, GITHUB_APP_SLUG: "Graft-Dev" }).githubAppSlug).toBe("graft-dev");
+    expect(loadConfig(valid).githubAppSlug).toBeUndefined();
+  });
+});

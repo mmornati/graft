@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildFacts, listChangedPaths, listReviews } from "../../src/modules/policy/facts.js";
+import {
+  buildFacts,
+  listChangedPaths,
+  listCommitLogins,
+  listReviews,
+} from "../../src/modules/policy/facts.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
 import {
   fakeSha,
   HEAD_SHA,
   INSTALLATION_ID,
+  makeCommit,
   makeFile,
   makePull,
   makeReview,
@@ -184,5 +190,56 @@ describe("policy facts", () => {
     expect(
       buildFacts(base({ files, configSensitivePaths: ["services/billing/**"] })).risk.value,
     ).toBe("sensitive");
+  });
+});
+
+describe("listCommitLogins (Phase 1 step 7, D8)", () => {
+  type C = {
+    author?: string | null;
+    committer?: string | null;
+    verification?: { verified: boolean } | "absent";
+  };
+  const commit = (i: number, o: C = {}) => {
+    const base = makeCommit(fakeSha(0x100 + i), "x");
+    return {
+      ...base,
+      commit:
+        o.verification === "absent"
+          ? { ...base.commit, verification: undefined }
+          : o.verification === undefined
+            ? base.commit
+            : { ...base.commit, verification: o.verification },
+      author: o.author === null ? null : { login: o.author ?? "alice" },
+      committer: o.committer === null ? null : { login: o.committer ?? "web-flow" },
+    };
+  };
+  async function logins(commits: unknown[], count = commits.length) {
+    const api = createFakeGitHubApi();
+    api.state.commits.set(PR_NUMBER, commits as never);
+    const octokit = await fakeGitHubFactory(api).forInstallation(INSTALLATION_ID);
+    return listCommitLogins(octokit, { ...target, commits: count });
+  }
+
+  it("U-FCT-1 all verified → logins (authors and committers, web-flow left out); unverified, absent verification and a null committer → unverified; 251 → too_many; a null author → no_author", async () => {
+    expect(
+      await logins([
+        commit(1, { author: "Alice", committer: "web-flow" }),
+        commit(2, { author: "bob", committer: "Carol" }),
+      ]),
+    ).toEqual({ logins: ["alice", "bob", "carol"] });
+    expect(await logins([commit(1), commit(2, { verification: { verified: false } })])).toEqual({
+      unknown: "unverified",
+    });
+    expect(await logins([commit(1, { verification: "absent" })])).toEqual({
+      unknown: "unverified",
+    });
+    expect(await logins([commit(1, { committer: null })])).toEqual({ unknown: "unverified" });
+    expect(
+      await logins(
+        Array.from({ length: 251 }, (_, i) => commit(i)),
+        251,
+      ),
+    ).toEqual({ unknown: "too_many" });
+    expect(await logins([commit(1, { author: null })])).toEqual({ unknown: "no_author" });
   });
 });
