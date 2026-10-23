@@ -61,6 +61,7 @@ const FEAT_SHA = fakeSha(0xfea7);
 const TITLE_SENTINEL = "MCP_TITLE_SENTINEL_zq";
 const BODY_SENTINEL = "MCP_BODY_SENTINEL_zq";
 const AGENT_SENTINEL = "sentinel-agent-zq";
+const ARG_SENTINEL = "argsentinel-zq";
 /** The policy of I-MCP-8: a require rule on agent codex, and an approve rule for everything else. */
 const AGENT_POLICY = [
   "version: 1",
@@ -96,11 +97,33 @@ const clients: McpClientHandle[] = [];
 const features: (string | null)[] = [];
 const refused: MutationRefusedError[] = [];
 let tokenLookups = 0;
+/** I-MCP-16: thrown once by the next modes read of the server (a tool failure that is no ToolError). */
+let failModesRead: Error | null = null;
 
 const countTokenLookups: KyselyPlugin = {
   transformQuery(a) {
     if (a.node.kind === "SelectQueryNode" && JSON.stringify(a.node).includes('"mcp_tokens"')) {
       tokenLookups++;
+    }
+    return a.node;
+  },
+  async transformResult(a) {
+    return a.result;
+  },
+};
+
+const failModes: KyselyPlugin = {
+  transformQuery(a) {
+    const q = JSON.stringify(a.node);
+    if (
+      failModesRead !== null &&
+      a.node.kind === "SelectQueryNode" &&
+      q.includes('"mcp_write"') &&
+      !q.includes('"mcp_tokens"')
+    ) {
+      const err = failModesRead;
+      failModesRead = null;
+      throw err;
     }
     return a.node;
   },
@@ -128,7 +151,7 @@ async function start(cfg: Record<string, string> = {}): Promise<URL> {
     ...t.deps,
     config,
     github: factoryFor(config),
-    db: t.db.withPlugin(countTokenLookups),
+    db: t.db.withPlugin(countTokenLookups).withPlugin(failModes),
   });
   servers.push(server);
   await server.listen({ port: 0, host: "127.0.0.1" });
@@ -1182,6 +1205,38 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(bad.status).toBe(400);
     // The SDK reported them through onerror, logged sanitised.
     expect(logged).toContain('"msg":"mcp sdk error"');
+    // An SDK error whose message holds the token (an unsupported protocol version header echoes
+    // it): the onerror line holds the redacted form only.
+    const echoed = await rawPost(url, LIST_TOOLS, {
+      authorization: `Bearer ${tok}`,
+      "mcp-protocol-version": tok,
+    });
+    expect(echoed.status).toBe(400);
+    const sdkLines = logged.split("\n").filter((l) => l.includes('"msg":"mcp sdk error"'));
+    expect(sdkLines.some((l) => l.includes("graft_mcp_[redacted]"))).toBe(true);
+
+    // A tool that fails with an error that is no ToolError, shaped like an Octokit error: its
+    // message holds the token, its request body a PR body; the call's argument holds a sentinel.
+    api.state.branches.set(ARG_SENTINEL, fakeSha(0xba5e));
+    failModesRead = Object.assign(new Error(`boom ${tok}`), {
+      status: 500,
+      request: {
+        method: "POST",
+        url: `https://api.github.com/repos/${FULL}/pulls`,
+        body: JSON.stringify({ title: TITLE_SENTINEL, body: BODY_SENTINEL }),
+      },
+    });
+    const c = await connect(url, tok);
+    const failed = await call(c, "get_policy", { repository: FULL, base: ARG_SENTINEL });
+    expect(failed.out).toEqual({ error: "internal" });
+    expect(failModesRead).toBeNull();
+    const toolLines = logged.split("\n").filter((l) => l.includes('"msg":"mcp tool failed"'));
+    expect(toolLines).toHaveLength(1);
+    expect(toolLines[0]).toContain("graft_mcp_[redacted]");
+    expect(toolLines[0]).toContain('"tool":"get_policy"');
+    for (const s of [ARG_SENTINEL, TITLE_SENTINEL, BODY_SENTINEL]) {
+      expect(logged.includes(s), s).toBe(false);
+    }
     expect(logged.length).toBeGreaterThan(0);
     for (const s of [...secrets, TITLE_SENTINEL, BODY_SENTINEL, AGENT_SENTINEL]) {
       expect(logged.includes(s), s.slice(0, 16)).toBe(false);
