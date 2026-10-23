@@ -55,3 +55,37 @@ export function summarize(values: readonly number[]): Summary {
     p90: round1(percentile(sorted, 0.9)),
   };
 }
+
+/** ln(k!) for k = 0..n, by cumulative sums (exact enough for the pilot volumes: n in the thousands). */
+const logFactorials: number[] = [0];
+function logFactorial(k: number): number {
+  for (let i = logFactorials.length; i <= k; i++) {
+    logFactorials.push((logFactorials[i - 1] as number) + Math.log(i));
+  }
+  return logFactorials[k] as number;
+}
+
+/**
+ * Phase 1 step 7 (§8.5): `P(X ≥ k)` for `X ~ Binomial(n, p)`, computed exactly term by term in log
+ * space (log-sum-exp), so small tails do not underflow. `k ≤ 0` gives 1, `k > n` gives 0.
+ */
+export function binomialUpperTail(k: number, n: number, p: number): number {
+  if (!Number.isInteger(k) || !Number.isInteger(n) || n < 0) {
+    throw new RangeError("binomialUpperTail: k and n must be integers, n ≥ 0");
+  }
+  if (!(p >= 0 && p <= 1)) throw new RangeError("binomialUpperTail: p must be in [0, 1]");
+  if (k <= 0) return 1;
+  if (k > n) return 0;
+  if (p === 0) return 0;
+  if (p === 1) return 1;
+  const lp = Math.log(p);
+  const lq = Math.log1p(-p);
+  const terms: number[] = [];
+  for (let i = k; i <= n; i++) {
+    terms.push(logFactorial(n) - logFactorial(i) - logFactorial(n - i) + i * lp + (n - i) * lq);
+  }
+  const max = Math.max(...terms);
+  let sum = 0;
+  for (const t of terms) sum += Math.exp(t - max);
+  return Math.min(1, Math.exp(max + Math.log(sum)));
+}
