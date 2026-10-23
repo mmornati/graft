@@ -52,11 +52,24 @@ async function branchExists(
   }
 }
 
+/** Graft's own bot login (`<slug>[bot]`, lowercased), or null when the slug is not configured. */
+function graftBotLogin(ctx: ToolContext): string | null {
+  const slug = ctx.config.githubAppSlug;
+  return slug ? `${slug}[bot]`.toLowerCase() : null;
+}
+
+interface FoundPull {
+  number: number;
+  headSha: string;
+  /** Authored by Graft's own App (never any other bot), as far as Graft can tell. */
+  byGraft: boolean;
+}
+
 /** The open PR from `head` into `base` of this repository, if any (D17: retries are safe). */
 async function findOpenPull(
   octokit: GitHubClient,
-  o: { owner: string; repo: string; head: string; base: string },
-): Promise<{ number: number; headSha: string; byBot: boolean } | null> {
+  o: { owner: string; repo: string; head: string; base: string; botLogin: string | null },
+): Promise<FoundPull | null> {
   try {
     const { data } = await octokit.rest.pulls.list({
       owner: o.owner,
@@ -67,24 +80,28 @@ async function findOpenPull(
       per_page: 10,
     });
     const hit = data.find((p) => p.head.ref === o.head && p.base.ref === o.base);
-    return hit
-      ? { number: hit.number, headSha: hit.head.sha, byBot: hit.user?.type === "Bot" }
-      : null;
+    if (!hit) return null;
+    const login = hit.user?.login;
+    const byGraft =
+      o.botLogin !== null &&
+      hit.user?.type === "Bot" &&
+      typeof login === "string" &&
+      login.toLowerCase() === o.botLogin;
+    return { number: hit.number, headSha: hit.head.sha, byGraft };
   } catch (err) {
     throw githubError(err);
   }
 }
 
 /**
- * An open PR found by head is returned, not created. When a bot authored it, it may be one Graft
- * opened whose `mcp_changes` row was lost (a crash after `pulls.create`): record it, so D19 still
- * excludes its commit authors. Marking another bot's PR only makes its approvals stricter.
+ * An open PR found by head is returned, not created. When Graft's own App authored it, it may be
+ * one Graft opened whose `mcp_changes` row was lost (a crash after `pulls.create`): record it, so
+ * D19 still excludes its commit authors. A person's or another bot's PR (Dependabot, Renovate) is
+ * never marked: marking it would let a token holder switch its approvals off, show it as opened
+ * through MCP and fill the hourly cap. Without `GITHUB_APP_SLUG` nothing is adopted.
  */
-async function adopt(
-  ctx: ToolContext,
-  found: { number: number; headSha: string; byBot: boolean },
-): Promise<void> {
-  if (!found.byBot) return;
+async function adopt(ctx: ToolContext, found: FoundPull): Promise<void> {
+  if (!found.byGraft) return;
   await insertMcpChange(ctx.db, {
     repositoryId: ctx.principal.repositoryId,
     tokenId: ctx.principal.tokenId,
@@ -126,7 +143,8 @@ export async function openChange(
   const { body, warnings } = buildPrBody(input.body, input.provenance, (key, raw) =>
     normalizeField(FIELD_OF[key], raw),
   );
-  const found = await findOpenPull(reader, { owner, repo, head, base });
+  const botLogin = graftBotLogin(ctx);
+  const found = await findOpenPull(reader, { owner, repo, head, base, botLogin });
   if (found) {
     await adopt(ctx, found);
     return {
@@ -168,7 +186,7 @@ export async function openChange(
     }
     if (githubStatus(err) === 422) {
       // "A pull request already exists" (a concurrent call, or a lost answer): adopt it.
-      const adopted = await findOpenPull(reader, { owner, repo, head, base });
+      const adopted = await findOpenPull(reader, { owner, repo, head, base, botLogin });
       if (adopted) {
         await adopt(ctx, adopted);
         return {

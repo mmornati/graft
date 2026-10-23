@@ -36,6 +36,7 @@ One report per head: the same report again returns the stored result; a differen
 - `title`: 1 to 256 characters, no control characters. `body`: at most 16,000 characters. `maintainer_can_modify` is always `false`; `draft` is passed through.
 - Title and body are sent to GitHub and nowhere else: not stored, not logged, not returned.
 - At most `GRAFT_MCP_OPEN_CHANGE_PER_HOUR` (default 10) PRs per repository in any rolling hour, counted in the database across server processes.
+- An open PR for the same `head` and `base` is returned with `existing: true` instead of a new one. Graft records it as opened through MCP only when Graft's own App authored it (`<GITHUB_APP_SLUG>[bot]`): a person's PR, or another bot's (Dependabot, Renovate), is never marked.
 - **Approvals.** The PR is authored by Graft's bot, which never counts as an approver. Graft also skips the approvals of everyone who authored or committed its commits (GitHub's `web-flow` committer aside), so whoever pushed the branch cannot approve their own change. If a commit has no GitHub user as author, or the PR has more than 250 commits, no approval counts.
 
 ## Getting a token

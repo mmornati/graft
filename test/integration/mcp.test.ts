@@ -15,6 +15,7 @@ import { type AppServer, buildServer } from "../../src/http/server.js";
 import { hashToken } from "../../src/mcp/tokens.js";
 import { upsertRepositories } from "../../src/modules/installations/store.js";
 import { authorizeToken } from "../../src/modules/mcp/auth.js";
+import { insertMcpChange } from "../../src/modules/mcp/store.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { evaluatePolicyJobRun } from "../../src/modules/policy/job.js";
 import { refreshProvenance } from "../../src/modules/provenance/job.js";
@@ -144,6 +145,8 @@ function factoryFor(config: ReturnType<typeof testConfig>): GitHubClientFactory 
 }
 
 const ENFORCE = { GRAFT_MODE_CEILING: "enforce" };
+/** The fake API opens PRs as `graft-dev[bot]`: Graft's own bot when the slug is `graft-dev`. */
+const ENFORCE_APP = { ...ENFORCE, GITHUB_APP_SLUG: "graft-dev" };
 
 async function start(cfg: Record<string, string> = {}): Promise<URL> {
   const config = testConfig(cfg);
@@ -900,10 +903,10 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(api.requests).toEqual([]);
   });
 
-  it("I-MCP-11 open_change enforcing: one POST /pulls with exactly the §7 body, the trailer block last; an mcp_changes row; the URL from stored values; repeated → existing; a 422 already exists → adopted", async () => {
+  it("I-MCP-11 open_change enforcing: one POST /pulls with exactly the §7 body, the trailer block last; an mcp_changes row; the URL from stored values; repeated → existing; a 422 already exists → adopted; only Graft's own PR is adopted, never a person's or another bot's", async () => {
     await setMcpWrite("on");
     const { token: tok, id: tokenId } = await token();
-    const url = await start(ENFORCE);
+    const url = await start(ENFORCE_APP);
     const c = await connect(url, tok);
     const res = await call(c, "open_change", {
       repository: FULL,
@@ -974,6 +977,32 @@ describe("MCP server (Phase 1 step 6)", () => {
       (await call(c, "open_change", { repository: FULL, head: "feat/human", title: "x" })).out,
     ).toMatchObject({ prNumber: 778, existing: true });
     expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(1);
+    // Another bot's open PR (Renovate) is returned too, and never marked either.
+    api.state.branches.set("renovate/x", fakeSha(0xbec));
+    api.state.pulls.set(779, {
+      ...(api.state.pulls.get(n) as NonNullable<ReturnType<typeof api.state.pulls.get>>),
+      number: 779,
+      node_id: "PR_fake779",
+      user: { id: 78, login: "renovate[bot]", type: "Bot" },
+      head: { sha: fakeSha(0xbec), ref: "renovate/x" },
+    });
+    expect(
+      (await call(c, "open_change", { repository: FULL, head: "renovate/x", title: "x" })).out,
+    ).toMatchObject({ prNumber: 779, existing: true });
+    expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(1);
+    // Without GITHUB_APP_SLUG Graft cannot tell its own PR: a lost row is not restored.
+    const noSlug = await connect(await start(ENFORCE), tok);
+    await t.db.deleteFrom("mcp_changes").execute();
+    expect(
+      (await call(noSlug, "open_change", { repository: FULL, head: "feat/mcp", title: "x" })).out,
+    ).toMatchObject({ prNumber: n, existing: true });
+    expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
+    await insertMcpChange(t.db, {
+      repositoryId: REPO_ID,
+      tokenId,
+      prNumber: n,
+      headSha: FEAT_SHA,
+    });
 
     // A race: the PR appears between the lookup and the create (422 "already exists").
     api.state.branches.set("feat/race", fakeSha(0xace));
