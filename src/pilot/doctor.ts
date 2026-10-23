@@ -385,6 +385,23 @@ export async function runDoctor(
       `${nErrors} guard events with revert outcome error in the last 7 days`,
     );
   } else add("guard_revert_errors", "OK", "no guard revert ended in error in the last 7 days");
+
+  // mcp (Phase 1 step 6, §10): tokens about to stop working, and tokens nobody uses
+  const tokens = await sql<{ expiring: string; unused: string }>`
+    select
+      count(*) filter (where expires_at <= ${new Date(now.getTime() + 7 * DAY_MS)})::text as expiring,
+      count(*) filter (where last_used_at is null and created_at < ${ago(14 * DAY_MS)})::text as unused
+    from mcp_tokens
+    where repository_id in (select id from repositories where installation_id = ${id} and removed_at is null)
+      and revoked_at is null and expires_at > ${now}`.execute(db);
+  const nExpiring = num(tokens.rows[0]?.expiring);
+  if (nExpiring > 0) {
+    add("mcp_tokens_expiring", "WARN", `${nExpiring} MCP tokens expiring within 7 days`);
+  } else add("mcp_tokens_expiring", "OK", "no MCP token expires within 7 days");
+  const nUnused = num(tokens.rows[0]?.unused);
+  if (nUnused > 0) {
+    add("mcp_tokens_unused", "WARN", `${nUnused} MCP tokens never used, older than 14 days`);
+  } else add("mcp_tokens_unused", "OK", "no MCP token older than 14 days is unused");
   return checks;
 }
 

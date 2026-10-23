@@ -8,8 +8,9 @@
  * GitHub, once with default modes and once with every mode at its maximum, and asserts that the
  * writes to GitHub are exactly the Phase 0 set. With default modes every check is `neutral`; with
  * every mode at its maximum, only `graft/policy` may conclude otherwise, and only through the
- * `policy` feature client (step 2), and the guard opens exactly one revert pull request through
- * the `guard` feature client (step 5).
+ * `policy` feature client (step 2), the guard opens exactly one revert pull request through
+ * the `guard` feature client (step 5), and MCP's `open_change` opens one pull request through the
+ * `mcp` feature client (step 6).
  */
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -50,6 +51,7 @@ import {
   REPO_ID,
 } from "../helpers/github-builders.js";
 import { loadIntentScenario, scenarioLlm } from "../helpers/intent-scenario.js";
+import { call, createTestToken, mcpClient } from "../helpers/mcp-client.js";
 import { B1, B2, EXAMPLE_POLICY, putContent } from "../helpers/policy-scenario.js";
 import { sleep } from "../helpers/wait.js";
 
@@ -1029,4 +1031,165 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       ]);
     });
   }
+
+  /**
+   * Phase 1 step 6 (T12): the MCP calls, through a real MCP client over HTTP. `mcp_write` is
+   * requested `on` in both profiles and one token is created through the store. Under `default`
+   * the ceiling keeps `mcp_write` off: `open_change` makes no request and no `mcp` client.
+   */
+  const mcp = {
+    ran: false,
+    from: 0,
+    gateFrom: 0,
+    featuresFrom: 0,
+    refusedFrom: 0,
+    openFrom: 0,
+    openTo: 0,
+    openFeatures: [] as (string | null)[],
+    secondFrom: 0,
+    secondTo: 0,
+    results: {} as Record<string, { isError: boolean; out: Record<string, unknown> }>,
+  };
+  const MCP_HEAD = "feat/mcp-neutral";
+  const mcpScenario = async () => {
+    if (mcp.ran) return;
+    mcp.ran = true;
+    await restoreModes();
+    await t.db.updateTable("repositories").set({ mcp_write: "on" }).execute();
+    const { token } = await createTestToken(t.db, { repositoryId: REPO_ID });
+    api.state.branches.set(MCP_HEAD, fakeSha(0x3c9));
+    await server.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = server.server.address() as { port: number };
+    const client = await mcpClient(new URL(`http://127.0.0.1:${port}/mcp`), token);
+    mcp.from = api.requests.length;
+    mcp.gateFrom = gateCalls.length;
+    mcp.featuresFrom = featureClients.length;
+    mcp.refusedFrom = refused.length;
+    try {
+      const pull = api.state.pulls.get(PR_NUMBER);
+      if (!pull) throw new Error("no pull");
+      mcp.results.status = await call(client, "get_status", {
+        repository: FULL_NAME,
+        pr: PR_NUMBER,
+      });
+      mcp.results.policy = await call(client, "get_policy", { repository: FULL_NAME });
+      // Trailers say claude-code: this report disagrees.
+      mcp.results.report = await call(client, "report_provenance", {
+        repository: FULL_NAME,
+        pr: PR_NUMBER,
+        headSha: pull.head.sha,
+        agent: "codex",
+      });
+      await drain();
+      const open = { repository: FULL_NAME, head: MCP_HEAD, title: "Open through MCP" };
+      mcp.openFrom = api.requests.length;
+      const featuresAt = featureClients.length;
+      mcp.results.open = await call(client, "open_change", open);
+      mcp.openTo = api.requests.length;
+      mcp.openFeatures = featureClients.slice(featuresAt);
+      mcp.secondFrom = api.requests.length;
+      mcp.results.second = await call(client, "open_change", open);
+      mcp.secondTo = api.requests.length;
+      await drain();
+    } finally {
+      await client.close();
+    }
+  };
+  const mcpWrites = () =>
+    api.requests.slice(mcp.from).filter((r) => r.method !== "GET" && r.method !== "HEAD");
+
+  if (profile.name === "default") {
+    it("N-14 [default] MCP calls: the mutating requests are still the Phase 0 set; open_change returns mcp_write_off (ceiling), made no request, and no feature client was created for it", async () => {
+      await mcpScenario();
+      expect(mcp.results.status?.isError).toBe(false);
+      expect(mcp.results.policy?.isError).toBe(false);
+      expect(mcp.results.report?.out).toEqual({
+        stored: true,
+        existing: false,
+        agreement: "disagrees",
+      });
+      const writes = mcpWrites();
+      // The report's refresh republished the provenance check and the comment: Phase 0 routes.
+      expect(writes.some((r) => /\/check-runs(\/\d+)?$/.test(r.path))).toBe(true);
+      for (const r of writes) {
+        expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(
+          classifyWrite(r.method, r.path).kind,
+        );
+        if (/\/check-runs(\/\d+)?$/.test(r.path)) {
+          expect(nonNeutral(r), JSON.stringify(r.body)).toBe(false);
+        }
+      }
+      expect(mcp.results.open?.out).toEqual({ error: "mcp_write_off", detail: "ceiling" });
+      expect(mcp.results.second?.out).toEqual({ error: "mcp_write_off", detail: "ceiling" });
+      expect(mcp.openTo).toBe(mcp.openFrom);
+      expect(mcp.secondTo).toBe(mcp.secondFrom);
+      expect(mcp.openFeatures).toEqual([]);
+      // N-8 extended: no phase1 route, no mcp or guard client, no gate question, no refusal.
+      for (const r of writes) {
+        expect(classifyWrite(r.method, r.path).kind, `${r.method} ${r.path}`).not.toBe("phase1");
+      }
+      const made = featureClients.slice(mcp.featuresFrom);
+      expect(made).not.toContain("mcp");
+      expect(made).not.toContain("guard");
+      expect(gateCalls.slice(mcp.gateFrom)).toEqual([]);
+      expect(refused.slice(mcp.refusedFrom).map((e) => e.message)).toEqual([]);
+      expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
+    });
+  } else {
+    it("N-15 [max] MCP calls: open_change makes exactly one POST …/pulls through an mcp client, allowed by the gate; a second open with the same head writes nothing; every phase1 request came from a guard or mcp client and was allowed", async () => {
+      await mcpScenario();
+      expect(mcp.results.report?.out).toMatchObject({ stored: true, agreement: "disagrees" });
+      expect(mcp.results.open?.isError, JSON.stringify(mcp.results.open)).toBe(false);
+      expect(mcp.results.open?.out).toMatchObject({ existing: false });
+      const during = api.requests
+        .slice(mcp.openFrom, mcp.openTo)
+        .filter((r) => r.method !== "GET" && !r.path.endsWith("/access_tokens"));
+      expect(during.map((r) => `${r.method} ${r.path}`)).toEqual([
+        `POST /repos/${FULL_NAME}/pulls`,
+      ]);
+      expect(during[0]?.body).toMatchObject({ head: MCP_HEAD, maintainer_can_modify: false });
+      expect(mcp.openFeatures).toContain("mcp");
+      const mcpGate = gateCalls.slice(mcp.gateFrom).filter((c) => c.feature === "mcp");
+      expect(mcpGate).toEqual([{ feature: "mcp", allowed: true }]);
+      // The second open finds the PR by head: existing, no write.
+      expect(mcp.results.second?.out).toMatchObject({
+        existing: true,
+        prNumber: mcp.results.open?.out.prNumber,
+      });
+      expect(
+        api.requests
+          .slice(mcp.secondFrom, mcp.secondTo)
+          .filter((r) => r.method !== "GET" && !r.path.endsWith("/access_tokens")),
+      ).toEqual([]);
+      expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(1);
+      // N-8 restated for max, over the whole run: every phase1 request was a guard or mcp write
+      // that the gate allowed for its feature.
+      const phase1 = api.requests.filter(
+        (r) => r.method !== "GET" && classifyWrite(r.method, r.path).kind === "phase1",
+      );
+      const allowed = gateCalls.filter(
+        (c) => (c.feature === "guard" || c.feature === "mcp") && c.allowed,
+      );
+      // N-5 sends two refs through the guard client on purpose (the fake answers 404).
+      expect(phase1).toHaveLength(allowed.length);
+      for (const r of phase1.filter((x) => x.path.endsWith("/pulls"))) {
+        const head = String(r.body?.head ?? "");
+        expect(head === MCP_HEAD || head.startsWith("graft-revert/"), head).toBe(true);
+      }
+      expect(refused.slice(mcp.refusedFrom).map((e) => e.message)).toEqual([]);
+    });
+  }
+
+  it(`N-16 [${profile.name}] across the MCP calls, no code is read: no /contents/ but the policy file, no /git/blobs, no /compare/, no .diff or .patch media type`, async () => {
+    await mcpScenario();
+    const reads = api.requests.slice(mcp.from);
+    expect(reads.length).toBeGreaterThan(0);
+    for (const r of reads) {
+      const where = `${r.method} ${r.path}`;
+      if (r.path.includes("/contents/")) expect(r.path, where).toMatch(/\/contents\/graft\.yaml$/);
+      expect(r.path, where).not.toMatch(/\/git\/blobs/);
+      expect(r.path, where).not.toMatch(/\/compare\//);
+      expect(r.accept ?? "", where).not.toMatch(/diff|patch/);
+    }
+  });
 });

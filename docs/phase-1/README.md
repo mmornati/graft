@@ -109,6 +109,7 @@ Detailed spec: [step-6-mcp-server.md](step-6-mcp-server.md). It uses the MCP Typ
 - Tools: `get_status` (card, provenance, policy verdict and would-be conclusion, guard events for a PR), `get_policy` (the parsed effective policy and modes for the repository), `report_provenance` (agent, model, task, session link for a PR head; stored as untrusted, exactly like trailers — it can tighten a verdict, never loosen it), `open_change` (open a PR from a branch the agent already pushed, with provenance attached).
 - `open_change` creates a PR, so it is the one MCP write to GitHub: available only when `mcp_write` is on for the repository. Reads and `report_provenance` (Graft-side data only) work in report mode.
 - **Done when:** an MCP client in an integration test reads status and policy with a valid token, is refused with a revoked or other-repo token, and `open_change` is refused while `mcp_write` is off.
+- **Built with these deviations** (see [decisions.md](../decisions.md#phase-1-step-6-mcp-server)): a disagreeing report gives the stricter of the verdicts with the unknown author and with the trailers' author, because an unknown author alone can trade the policy's `default` for a looser `require` rule (D13's "never loosens" did not hold for every policy); the SDK answers a schema-refused argument with a tool error, not JSON-RPC `-32602`; user page: [features/mcp.md](../features/mcp.md).
 
 ### Step 7 — Security review, five pilots, gate (week 12)
 

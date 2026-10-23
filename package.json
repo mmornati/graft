@@ -32,6 +32,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@octokit/app": "^16.1.4",
     "@octokit/rest": "^22.0.1",
     "@octokit/webhooks": "^14.2.0",
@@ -47,6 +49,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@modelcontextprotocol/client": "2.3.1",
     "@octokit/webhooks-examples": "^7.6.1",
     "@octokit/webhooks-schemas": "^7.6.1",
     "@types/node": "^26.6.5",

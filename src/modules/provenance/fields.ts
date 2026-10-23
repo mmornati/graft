@@ -61,6 +61,15 @@ export function validateSessionUrl(raw: string): string | null {
   return href.length <= MAX_RAW_VALUE_CHARS ? href : null;
 }
 
+/**
+ * One trailer value, validated and normalised as a trailer is (character sets, length caps, the
+ * session URL rules), or null. Phase 1 step 6 uses it for MCP provenance (D13, D18).
+ */
+export function normalizeField(field: GraftField, raw: string): string | null {
+  if (raw.length > MAX_RAW_VALUE_CHARS || trimWs(raw) === "") return null;
+  return normalize(field, raw);
+}
+
 function normalize(field: GraftField, raw: string): string | null {
   const v = trimWs(raw);
   switch (field) {

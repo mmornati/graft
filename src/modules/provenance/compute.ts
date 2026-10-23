@@ -150,3 +150,20 @@ export function computeProvenance(input: ProvenanceInput): ProvenanceResult {
     },
   };
 }
+
+export type McpReportState = "none" | "agrees" | "disagrees";
+
+/**
+ * Phase 1 step 6 (§8, D13): how an MCP provenance report compares with the trailers of its head.
+ * It agrees iff the trailers were computed for that head, say an agent wrote it, and name the
+ * same agent (case-insensitive); anything else disagrees, which makes the author fact `unknown`.
+ */
+export function mcpAgreement(
+  trailers: { headSha: string; authorKind: "agent" | "human"; agent: string | null } | null,
+  report: { headSha: string; agent: string } | null,
+): McpReportState {
+  if (report === null) return "none";
+  if (trailers === null || trailers.headSha !== report.headSha) return "disagrees";
+  if (trailers.authorKind !== "agent" || trailers.agent === null) return "disagrees";
+  return trailers.agent.toLowerCase() === report.agent.toLowerCase() ? "agrees" : "disagrees";
+}

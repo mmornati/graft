@@ -12,6 +12,7 @@ import * as m0010 from "./0010_audit_log.js";
 import * as m0011 from "./0011_guard.js";
 import * as m0012 from "./0012_audit_label_event.js";
 import * as m0013 from "./0013_guard_revert.js";
+import * as m0014 from "./0014_mcp.js";
 
 export const migrations: Record<string, Migration> = {
   "0001_initial": m0001,
@@ -27,4 +28,5 @@ export const migrations: Record<string, Migration> = {
   "0011_guard": m0011,
   "0012_audit_label_event": m0012,
   "0013_guard_revert": m0013,
+  "0014_mcp": m0014,
 };

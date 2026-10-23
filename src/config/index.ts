@@ -138,6 +138,23 @@ const onOff = z
   .enum(["on", "off"], { error: 'must be "on" or "off"' })
   .transform((v) => v === "on");
 
+/**
+ * Phase 1 step 6 (D4): comma-separated origins (`scheme://host[:port]`, no path) a browser may call
+ * `/mcp` from. Compared exactly with the request's `Origin` header, after lowercasing.
+ */
+const originList = z
+  .string()
+  .transform(csv)
+  .refine(
+    (l) =>
+      l.every((o) => {
+        if (!URL.canParse(o)) return false;
+        const u = new URL(o);
+        return /^https?:$/.test(u.protocol) && u.origin === o;
+      }),
+    { message: "must be comma-separated origins like https://app.example.com (no path)" },
+  );
+
 const EnvSchema = z.object({
   NODE_ENV: withDefault(z.enum(["development", "test", "production"]), "development"),
   HOST: withDefault(z.string().min(1), "0.0.0.0"),
@@ -199,6 +216,12 @@ const EnvSchema = z.object({
   GRAFT_GUARD_REVERT_MAX_PATHS: withDefault(intString(1, 1000), "300"),
   GRAFT_GUARD_REVERT_MAX_TREE_READS: withDefault(intString(10, 1000), "200"),
   GRAFT_GUARD_REVERT_MAX_AGE_HOURS: withDefault(intString(1, 168), "24"),
+  GRAFT_MCP: withDefault(onOff, "on"),
+  GRAFT_MCP_ALLOWED_ORIGINS: withDefault(originList, ""),
+  GRAFT_MCP_RATE_LIMIT_PER_MINUTE: withDefault(intString(1, 600), "60"),
+  GRAFT_MCP_AUTH_FAILURES_PER_MINUTE: withDefault(intString(1, 600), "20"),
+  GRAFT_MCP_OPEN_CHANGE_PER_HOUR: withDefault(intString(1, 100), "10"),
+  GRAFT_MCP_MAX_TOKENS_PER_REPO: withDefault(intString(1, 50), "10"),
 });
 
 export interface Config {
@@ -293,6 +316,18 @@ export interface Config {
    * before any write, so a job sent again late never opens a revert days after the failure.
    */
   readonly guardRevertMaxAgeHours: number;
+  /** Phase 1 step 6 (D22): the MCP endpoint's kill switch. Off: `/mcp` is not registered. */
+  readonly mcp: boolean;
+  /** Phase 1 step 6 (D4): lowercased origins allowed to call `/mcp`; empty refuses every browser. */
+  readonly mcpAllowedOrigins: readonly string[];
+  /** Phase 1 step 6 (D9 a): requests per token per minute, per process. */
+  readonly mcpRateLimitPerMinute: number;
+  /** Phase 1 step 6 (D9 b): failed authentications per client IP per minute, per process. */
+  readonly mcpAuthFailuresPerMinute: number;
+  /** Phase 1 step 6 (D9 c): `open_change` PRs per repository in any rolling hour. */
+  readonly mcpOpenChangePerHour: number;
+  /** Phase 1 step 6 (D11): active MCP tokens per repository. */
+  readonly mcpMaxTokensPerRepo: number;
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -415,5 +450,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     guardRevertMaxPaths: d.GRAFT_GUARD_REVERT_MAX_PATHS,
     guardRevertMaxTreeReads: d.GRAFT_GUARD_REVERT_MAX_TREE_READS,
     guardRevertMaxAgeHours: d.GRAFT_GUARD_REVERT_MAX_AGE_HOURS,
+    mcp: d.GRAFT_MCP,
+    mcpAllowedOrigins: Object.freeze([...d.GRAFT_MCP_ALLOWED_ORIGINS]),
+    mcpRateLimitPerMinute: d.GRAFT_MCP_RATE_LIMIT_PER_MINUTE,
+    mcpAuthFailuresPerMinute: d.GRAFT_MCP_AUTH_FAILURES_PER_MINUTE,
+    mcpOpenChangePerHour: d.GRAFT_MCP_OPEN_CHANGE_PER_HOUR,
+    mcpMaxTokensPerRepo: d.GRAFT_MCP_MAX_TOKENS_PER_REPO,
   });
 }

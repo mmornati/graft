@@ -187,7 +187,7 @@ Steps 1 to 4 are built and merged; steps 5 to 7 are not. **Everything defaults t
 | 3 Break-glass and audit log | A maintainer or admin adds the break-glass label to bypass the policy for one commit; every bypass is written to an audit log (`pnpm graft audit list`), and mode changes are recorded too (`pnpm graft mode history`). | Built |
 | 4 Post-merge guard detection | Watches default-branch commits, reads existing CI results, and names the culprit commit in a comment and `pnpm graft guard list`. Detection only. See [Guard](docs/features/guard.md). | Built, report by default |
 | 5 Revert PRs | The guard opens a revert PR for a confirmed culprit. | Not built |
-| 6 MCP server | `open_change`, `report_provenance`, `get_status`, `get_policy` with per-repository tokens. | Not built |
+| 6 MCP server | `open_change`, `report_provenance`, `get_status`, `get_policy` at `/mcp`, with per-repository tokens (`pnpm graft mcp-token`). See [MCP server](docs/features/mcp.md). | Built; `open_change` off until `mcp_write` is on |
 | 7 Security review, pilots and gate | A security review, 5 pilots and the Phase 1 gate. | Not built |
 
 The Phase 1 reviews are in [docs/phase-1/reviews](docs/phase-1/reviews). Real GitHub behavior of the new steps is untested outside fakes.

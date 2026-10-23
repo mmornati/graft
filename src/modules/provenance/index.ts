@@ -12,8 +12,9 @@ export type {
   ProvenanceResult,
   ResolvedField,
 } from "./compute.js";
-export { computeProvenance } from "./compute.js";
+export { computeProvenance, type McpReportState, mcpAgreement } from "./compute.js";
 export { fetchPrCommits } from "./fetch.js";
 export type { GraftField, ProvenanceWarning } from "./fields.js";
-export { PROVENANCE_CHECK_NAME } from "./job.js";
-export { type ChangeProvenanceRow, getChangeProvenance } from "./store.js";
+export { normalizeField } from "./fields.js";
+export { PROVENANCE_CHECK_NAME, provenanceRefreshJob, type RefreshData } from "./job.js";
+export { type ChangeProvenanceRow, getChangeProvenance, getMcpReport } from "./store.js";

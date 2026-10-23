@@ -101,6 +101,39 @@ export async function resetModesOnTransfer(
   return changed.length;
 }
 
+/**
+ * Phase 1 step 6, D12: a repository that moves to another installation, or comes back after
+ * removal, loses every active MCP token (`revoked_by = 'system'`). A token was granted for the
+ * repository under one owner. Call it in the transaction that reactivates the row, before the
+ * upsert. The SQL lives here rather than in the MCP module, which this module does not import.
+ */
+export async function revokeTokensOnTransfer(
+  ex: Executor,
+  installationId: number,
+  repositoryId: number,
+  now: Date,
+): Promise<number> {
+  const row = await ex
+    .selectFrom("repositories")
+    .select(["installation_id", "removed_at"])
+    .where("id", "=", repositoryId)
+    .executeTakeFirst();
+  if (!row) return 0;
+  const moved = Number(row.installation_id) !== installationId;
+  if (!moved && row.removed_at === null) return 0;
+  const revoked = await ex
+    .updateTable("mcp_tokens")
+    .set({
+      revoked_at: now,
+      revoked_by: "system",
+      revoke_reason: moved ? "repository_transferred" : "repository_readded",
+    })
+    .where("repository_id", "=", repositoryId)
+    .where("revoked_at", "is", null)
+    .executeTakeFirst();
+  return Number(revoked.numUpdatedRows);
+}
+
 /** Upsert repositories as active (removed_at = NULL); renames update full_name. */
 export async function upsertRepositories(
   ex: Executor,
@@ -109,6 +142,7 @@ export async function upsertRepositories(
   now: Date,
 ): Promise<void> {
   for (const r of repos) {
+    await revokeTokensOnTransfer(ex, installationId, r.id, now);
     await resetModesOnTransfer(ex, installationId, r.id, now);
     await ex
       .insertInto("repositories")

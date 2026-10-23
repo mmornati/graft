@@ -2,7 +2,7 @@ import type { Selectable, Transaction } from "kysely";
 import type { Db } from "../../db/client.js";
 import type { Database, FieldSource, ProvenanceFieldName } from "../../db/schema.js";
 import type { Change } from "../changes/index.js";
-import type { ProvenanceResult } from "./compute.js";
+import type { McpReportState, ProvenanceResult } from "./compute.js";
 
 type Tx = Transaction<Database>;
 
@@ -16,6 +16,8 @@ export async function persistProvenance(
     result: ProvenanceResult;
     now: Date;
     checkRunId?: number;
+    /** Phase 1 step 6 (D13): the MCP report's agreement for this head. */
+    mcpReport?: McpReportState;
   },
 ): Promise<void> {
   const { change, result: r, now } = o;
@@ -115,6 +117,7 @@ export async function persistProvenance(
     commits_with_trailers: r.counts.withTrailers,
     agent_coauthor_commits: r.counts.agentCoauthor,
     commits_truncated: r.truncated,
+    mcp_report: o.mcpReport ?? "none",
     computed_at: now,
     updated_at: now,
   };
@@ -154,4 +157,15 @@ export async function setCheckRunId(tx: Tx, changeId: string, checkRunId: number
     .set({ check_run_id: checkRunId, updated_at: now })
     .where("change_id", "=", changeId)
     .execute();
+}
+
+/** Phase 1 step 6 (D14): the MCP report of a change for one head, if any. */
+export async function getMcpReport(tx: Tx | Db, changeId: string, headSha: string) {
+  return tx
+    .selectFrom("provenance")
+    .select(["id", "agent", "model", "task_external_id", "session_url", "commit_sha"])
+    .where("change_id", "=", changeId)
+    .where("source", "=", "mcp")
+    .where("commit_sha", "=", headSha)
+    .executeTakeFirst();
 }

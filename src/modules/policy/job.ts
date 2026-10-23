@@ -25,7 +25,7 @@ import {
   type PublishedCheck,
   publishedCheck,
 } from "../../policy/enforce.js";
-import { type ApprovalCount, countApprovals, evaluatePolicy } from "../../policy/evaluate.js";
+import { type ApprovalCount, countApprovals, evaluateWithReport } from "../../policy/evaluate.js";
 import { type LoadedPolicy, loadBasePolicy, resolveBaseCommit } from "../../policy/load.js";
 import { canonicalHash } from "../../policy/parse.js";
 import { PermanentJobError } from "../../queue/errors.js";
@@ -42,7 +42,7 @@ import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
 import { resolveApprovers } from "./approvals.js";
 import { type BreakGlassFacts, type BreakGlassState, resolveBreakGlass } from "./break-glass.js";
-import { buildFacts, listChangedPaths, listReviews } from "./facts.js";
+import { buildFacts, listChangedPaths, listCommitLogins, listReviews } from "./facts.js";
 import {
   type BreakGlassView,
   POLICY_CHECK_NAME,
@@ -354,11 +354,35 @@ export async function evaluatePolicyJobRun(
         policySensitivePaths: loaded.policy.sensitivePaths,
       });
       view.facts = facts;
-      view.verdict = evaluatePolicy(loaded.policy, facts, { budget: globBudget });
+      // Phase 1 step 6 (D13): when an MCP report disagreed, the stricter of the verdicts with
+      // the unknown author and with the trailers' author.
+      const disagreed =
+        provenance !== undefined &&
+        provenance.head_sha === headSha &&
+        provenance.mcp_report === "disagrees";
+      view.verdict = evaluateWithReport(
+        loaded.policy,
+        facts,
+        disagreed ? { kind: provenance.author_kind, agent: provenance.agent } : null,
+        { budget: globBudget },
+      );
+      // Phase 1 step 6 (D19): a PR opened through MCP is authored by Graft's bot, so the people
+      // whose commits it holds are excluded like a PR author; unknown authors exclude everyone.
+      let excludedLogins: readonly string[] | "everyone" | undefined;
+      if (await openedThroughMcp(ctx.db, data.repositoryId, data.prNumber)) {
+        excludedLogins =
+          (await listCommitLogins(octokit, {
+            owner: data.owner,
+            repo: data.repo,
+            prNumber: data.prNumber,
+            commits: pull.commits,
+          })) ?? "everyone";
+      }
       view.approvals = countApprovals(reviews, {
         headSha,
         prAuthorLogin: pull.user?.login ?? "ghost",
         truncated,
+        ...(excludedLogins === undefined ? {} : { excludedLogins }),
       });
       // Who counts (step 2, §5): role checks and team memberships, in every mode, before the lock.
       view.approvers = await resolveApprovers(octokit, {
@@ -708,6 +732,21 @@ export async function evaluatePolicyJobRun(
     matched: view.verdict?.matched.length ?? 0,
     uncertain: view.verdict?.matched.some((m) => m.reasons.some((r) => r.uncertain)) ?? false,
   });
+}
+
+/** Phase 1 step 6 (D19): whether `open_change` opened this PR (an `mcp_changes` row). */
+async function openedThroughMcp(
+  db: JobContext["db"],
+  repositoryId: number,
+  prNumber: number,
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("mcp_changes")
+    .select("id")
+    .where("repository_id", "=", repositoryId)
+    .where("pr_number", "=", prNumber)
+    .executeTakeFirst();
+  return row !== undefined;
 }
 
 /** D12: the gate refused the check write with `mode_report`; caught outside the lock. */
