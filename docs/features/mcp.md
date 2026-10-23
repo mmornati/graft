@@ -125,4 +125,5 @@ A token holder cannot loosen a verdict, approve its own change, write to GitHub 
 
 - With `mcp_write` on, a token holder can open PRs from **any** existing branch of the repository, including one someone else pushed. The PR shows Graft's bot as author and that branch's commits; the commit authors' approvals do not count, and its review follows the policy like any PR.
 - A leaked token works until it expires or is revoked. Revocation is immediate; the per-token limit and the open cap bound the damage.
-- The per-token and failed-auth limits are per process.
+- The per-token and failed-auth limits are per process. Behind a proxy that is not configured as trusted, every client shares the proxy's address, so anyone sending 20 bad tokens locks every client out for the rest of the minute.
+- The approval exclusion for MCP-opened PRs trusts git commit authors, which whoever pushes the branch chooses: a pusher who writes commits under someone else's name can approve the PR. Both are open items for the Phase 1 security review (step 7).

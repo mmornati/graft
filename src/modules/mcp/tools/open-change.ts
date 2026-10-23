@@ -56,7 +56,7 @@ async function branchExists(
 async function findOpenPull(
   octokit: GitHubClient,
   o: { owner: string; repo: string; head: string; base: string },
-): Promise<{ number: number; headSha: string } | null> {
+): Promise<{ number: number; headSha: string; byBot: boolean } | null> {
   try {
     const { data } = await octokit.rest.pulls.list({
       owner: o.owner,
@@ -67,10 +67,30 @@ async function findOpenPull(
       per_page: 10,
     });
     const hit = data.find((p) => p.head.ref === o.head && p.base.ref === o.base);
-    return hit ? { number: hit.number, headSha: hit.head.sha } : null;
+    return hit
+      ? { number: hit.number, headSha: hit.head.sha, byBot: hit.user?.type === "Bot" }
+      : null;
   } catch (err) {
     throw githubError(err);
   }
+}
+
+/**
+ * An open PR found by head is returned, not created. When a bot authored it, it may be one Graft
+ * opened whose `mcp_changes` row was lost (a crash after `pulls.create`): record it, so D19 still
+ * excludes its commit authors. Marking another bot's PR only makes its approvals stricter.
+ */
+async function adopt(
+  ctx: ToolContext,
+  found: { number: number; headSha: string; byBot: boolean },
+): Promise<void> {
+  if (!found.byBot) return;
+  await insertMcpChange(ctx.db, {
+    repositoryId: ctx.principal.repositoryId,
+    tokenId: ctx.principal.tokenId,
+    prNumber: found.number,
+    headSha: found.headSha,
+  });
 }
 
 export async function openChange(
@@ -108,6 +128,7 @@ export async function openChange(
   );
   const found = await findOpenPull(reader, { owner, repo, head, base });
   if (found) {
+    await adopt(ctx, found);
     return {
       prNumber: found.number,
       url: url(found.number),
@@ -149,6 +170,7 @@ export async function openChange(
       // "A pull request already exists" (a concurrent call, or a lost answer): adopt it.
       const adopted = await findOpenPull(reader, { owner, repo, head, base });
       if (adopted) {
+        await adopt(ctx, adopted);
         return {
           prNumber: adopted.number,
           url: url(adopted.number),

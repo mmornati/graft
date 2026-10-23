@@ -860,6 +860,27 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(again.out).toMatchObject({ prNumber: n, existing: true, headSha: FEAT_SHA });
     expect(writes().length).toBe(writesBefore);
     expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(1);
+    // A row lost after the create (a crash) is restored by the retry that finds the bot's PR.
+    await t.db.deleteFrom("mcp_changes").execute();
+    expect(
+      (await call(c, "open_change", { repository: FULL, head: "feat/mcp", title: "x" })).out,
+    ).toMatchObject({ prNumber: n, existing: true });
+    expect(
+      (await t.db.selectFrom("mcp_changes").select("pr_number").execute()).map((r) => r.pr_number),
+    ).toEqual([n]);
+    // A person's open PR for a branch is returned as it is, and never marked as opened by MCP.
+    api.state.branches.set("feat/human", fakeSha(0xbeb));
+    api.state.pulls.set(778, {
+      ...(api.state.pulls.get(n) as NonNullable<ReturnType<typeof api.state.pulls.get>>),
+      number: 778,
+      node_id: "PR_fake778",
+      user: { id: 77, login: "alice", type: "User" },
+      head: { sha: fakeSha(0xbeb), ref: "feat/human" },
+    });
+    expect(
+      (await call(c, "open_change", { repository: FULL, head: "feat/human", title: "x" })).out,
+    ).toMatchObject({ prNumber: 778, existing: true });
+    expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toHaveLength(1);
 
     // A race: the PR appears between the lookup and the create (422 "already exists").
     api.state.branches.set("feat/race", fakeSha(0xace));
@@ -874,6 +895,12 @@ describe("MCP server (Phase 1 step 6)", () => {
     const raced = await call(c, "open_change", { repository: FULL, head: "feat/race", title: "x" });
     expect(raced.out).toMatchObject({ prNumber: 777, existing: true, headSha: fakeSha(0xace) });
     expect(api.find("POST", /\/pulls$/)).toHaveLength(2);
+    // The adopted PR is the bot's: recorded, so D19 applies to it.
+    expect(
+      (await t.db.selectFrom("mcp_changes").select("pr_number").orderBy("pr_number").execute()).map(
+        (r) => r.pr_number,
+      ),
+    ).toEqual([n, 777]);
   });
 
   it("I-MCP-12 open_change refusals with no write: invalid_head (default branch, graft-revert/x), head_not_found, base_not_found, the hourly cap (the 11th open, two server instances)", async () => {
