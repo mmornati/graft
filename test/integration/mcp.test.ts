@@ -454,7 +454,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     );
   });
 
-  it("I-MCP-3 refused tokens: none, malformed, unknown, expired, revoked between two calls, a removed repository's → 401 with identical bodies", async () => {
+  it("I-MCP-3 refused tokens: none, malformed, unknown, sharing a valid prefix, expired, revoked between two calls, a removed repository's → 401 with identical bodies", async () => {
     const url = await start();
     const valid = await token();
     const expired = await token(REPO_ID, "expired");
@@ -473,9 +473,17 @@ describe("MCP server (Phase 1 step 6)", () => {
       .where("id", "=", REPO_B)
       .execute();
 
+    // Same `graft_mcp_` and 8-character prefix as the valid token, one later character changed:
+    // the lookup is by the hash of the whole string, never by the prefix.
+    const flip = (ch: string) => (ch === "A" ? "B" : "A");
+    const samePrefix = `${valid.token.slice(0, 30)}${flip(valid.token[30] as string)}${valid.token.slice(31)}`;
+    expect(samePrefix.slice(0, 18)).toBe(valid.token.slice(0, 18));
+    expect(samePrefix).not.toBe(valid.token);
+
     const bodies: string[] = [];
     for (const headers of [
       {} as Record<string, string>,
+      { authorization: `Bearer ${samePrefix}` },
       { authorization: "Bearer nope" },
       { authorization: `bearer ${valid.token}` },
       { authorization: `Bearer graft_mcp_${"A".repeat(43)}` },
@@ -511,7 +519,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(new Set(bodies)).toEqual(new Set(['{"error":"unauthorized"}']));
   });
 
-  it("I-MCP-4 another repository: a token for B naming A, or a repository Graft does not know → forbidden_repository; PR numbers resolve only within B", async () => {
+  it("I-MCP-4 another repository: a token for B naming A, or a repository Graft does not know → forbidden_repository; PR numbers resolve only within B for get_status and report_provenance", async () => {
     await seedPr();
     const b = await token(REPO_B);
     const url = await start();
@@ -531,10 +539,22 @@ describe("MCP server (Phase 1 step 6)", () => {
         });
       }
     }
-    // Case-insensitive match on the token's own repository; PR 2 exists only in A.
+    // Case-insensitive match on the token's own repository; PR 2 exists only in A, so neither
+    // tool finds it through B's token, with A's head.
     expect(
       (await call(c, "get_status", { repository: FULL_B.toUpperCase(), pr: PR_NUMBER })).out,
     ).toEqual({ error: "not_found" });
+    expect(
+      (
+        await call(c, "report_provenance", {
+          repository: FULL_B,
+          pr: PR_NUMBER,
+          headSha: HEAD_SHA,
+          agent: "codex",
+        })
+      ).out,
+    ).toEqual({ error: "not_found" });
+    expect(await jobsNamed(t.db, "provenance.refresh")).toEqual([]);
     const mcpRows = await t.db
       .selectFrom("provenance")
       .select("id")
