@@ -8,9 +8,9 @@
 ![Node 24](https://img.shields.io/badge/node-24-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![pnpm 11](https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white)
-![Phase 1: steps 1 to 4 built, report mode by default](https://img.shields.io/badge/status-Phase%201%20%C2%B7%20steps%201%E2%80%934%20built%20%C2%B7%20report%20mode-orange)
+![Phase 1 built, report mode by default](https://img.shields.io/badge/status-Phase%201%20built%20%C2%B7%20report%20mode%20by%20default-orange)
 
-[Website](https://mmornati.github.io/graft/) · [Video](https://mmornati.github.io/graft/videos/graft-explained/) · [Reviewer tour](https://mmornati.github.io/graft/videos/reviewer-tour/) · [Quickstart](#quickstart-offline-under-5-minutes) · [Features](#features) · [How it works](#how-it-works) · [Docs](docs/README.md) · [Status](#status-and-roadmap)
+[Website](https://mmornati.github.io/graft/) · [Video](https://mmornati.github.io/graft/videos/graft-explained/) · [Reviewer tour](https://mmornati.github.io/graft/videos/reviewer-tour/) · [Enforce mode tour](https://mmornati.github.io/graft/videos/enforce-tour/) · [Quickstart](#quickstart-offline-under-5-minutes) · [Features](#features) · [How it works](#how-it-works) · [Docs](docs/README.md) · [Status](#status-and-roadmap)
 
 </div>
 
@@ -24,7 +24,7 @@ Coding agents open pull requests faster than people can review them, and a PR de
 4. **What the policy says**: the repository's `graft.yaml` decides whether the change would be auto-approved, need humans or a team, or be blocked.
 
 > [!NOTE]
-> Graft defaults to **report mode** (Phase 0, shadow mode). Out of the box it reports and never enforces: every Graft check concludes `neutral`, a "would approve" is not an approval, and team membership is not checked. Phase 1 steps 1 to 4 (modes, enforceable approvals, break-glass, guard detection) are built but stay off until an operator raises `GRAFT_MODE_CEILING` and sets a repository to enforce; see [Modes](docs/features/modes.md). Keep your branch protection as it is.
+> Graft defaults to **report mode** (shadow mode). Out of the box it reports and never enforces: every Graft check concludes `neutral`, a "would approve" is not an approval, and the guard only comments. All of Phase 1 (enforceable approvals, break-glass, the post-merge guard with revert PRs, the MCP server) is built, but stays off until an operator raises `GRAFT_MODE_CEILING` and sets one repository to enforce; see [Modes](docs/features/modes.md) and the [rollout runbook](docs/pilots/phase-1-runbook.md). Until then, keep your branch protection as it is.
 
 ## Features
 
@@ -33,6 +33,8 @@ Coding agents open pull requests faster than people can review them, and a PR de
 | **Provenance**<br/>`Graft-Agent`, `Graft-Model`, `Graft-Task` and `Graft-Session` git trailers (or the PR description), bot accounts, configured logins and agent co-authors decide "agent or human". [More](docs/features/provenance.md) | **Intent cards**<br/>A writer model drafts the card from the title, description, linked issue and diff; a verifier sees only the diff, the file list and the card. Untrusted PR text is fenced as data. [More](docs/features/intent-cards.md) |
 | **Risk floor**<br/>`trivial`, `logic` or `sensitive` from fixed rules over paths, size, deleted tests, CI, dependency, infra, auth and migration files. The model can only raise the class. [More](docs/features/intent-cards.md) | **Policy engine, report-only**<br/>`graft.yaml` from the base branch only: block wins, then require, then approve. A `graft/policy` check and a policy section; a CLI and a CI lint. [More](docs/features/policy.md) |
 | **Evaluation set**<br/>`pnpm eval`: encrypted pilot case sets outside the repo, blind labeling, Cohen's kappa, fake and live runs, and a synthetic set with a saved baseline in CI. [More](docs/features/evaluation.md) | **Pilots and the gate**<br/>Onboarding kit, verified-reviewer votes, a Wilson-interval Phase 0 gate report, review-time baseline, daily rollup, incidents and offboarding. [More](docs/features/pilots-and-gate.md) |
+| **Modes, approvals and break-glass**<br/>Per-repository `policy_mode`, `guard_mode` and `mcp_write` under a server ceiling, and a write allow-list that refuses anything a mode does not permit. In enforce mode `graft/policy` counts real approvals (write access, current head, verified teams); a maintainer's `graft:break-glass` label bypasses it for one commit, and every bypass is audited. [More](docs/features/modes.md) | **Post-merge guard and revert PRs**<br/>Watches `main`'s CI, names the culprit commit once a failure is confirmed, and in enforce mode opens a labelled revert PR built from blob SHAs, without reading code. Auto-merge of `trivial` or `logic` reverts is opt-in, never for `sensitive`. [More](docs/features/guard.md) |
+| **MCP server**<br/>`get_status`, `get_policy`, `report_provenance` and `open_change` at `/mcp` for agents, with per-repository tokens stored as hashes. Reported provenance can only tighten a verdict; `open_change` needs `mcp_write`. [More](docs/features/mcp.md) | **Gates from data**<br/>`pnpm graft gate report` decides the Phase 0 gate (card accuracy) and the Phase 1 gate (PRs merged with no human, review minutes, breakages caught, escaped defects), measured from enforce-mode rows and previewed from report mode. [More](docs/features/pilots-and-gate.md) |
 | **Privacy by design**<br/>No file contents, diffs, PR titles or bodies are stored or logged: only paths, SHAs, numbers and the model's own prose. [More](docs/architecture.md#contracts) | **Live e2e scenarios**<br/>`pnpm graft e2e` proves the fakes' assumptions against real GitHub in a guarded sandbox repository, or fully offline. [More](docs/e2e.md) |
 
 ## How it works
@@ -65,8 +67,8 @@ sequenceDiagram
     W->>AI: verifier (diff and card only)
     W->>W: final risk = max(floor, models)
     W->>GH: read graft.yaml at the base commit
-    W->>W: evaluate policy (report only)
-    W->>GH: graft/provenance, graft/intent, graft/policy (neutral) + managed comment
+    W->>W: evaluate policy, count approvals
+    W->>GH: graft/provenance, graft/intent, graft/policy (neutral in report mode) + managed comment
 ```
 
 ## Quickstart (offline, under 5 minutes)
@@ -135,12 +137,14 @@ A fictional pull request in a fictional `acme` organisation: an agent adds a log
 >
 > **Would require 2 humans (1 from `@acme/security`)** · report only
 >
+> **In enforce mode this check would be:** `failure`, needs approvals: 1 more from anyone, 1 from `@acme/security`.
+>
 > - Rule 3 infra-and-auth: paths match `src/auth/login.ts`, `src/auth/rate-limit.ts`, `test/auth/rate-limit.test.ts`
 > - Rule 4 agent-sensitive: risk `sensitive` (card), author agent `claude-code`
 >
-> **Approvals so far:** 1 on this head (`dana`). Team membership is not checked in Phase 0.
+> **Approvals so far:** 1 on this head (`dana`); 1 counts (write access).
 >
-> Policy `graft.yaml` on `main` at `9d8c7b6` · head `4c9e1f2` · Graft only reports in Phase 0; it approves and blocks nothing.
+> Policy `graft.yaml` on `main` at `9d8c7b6` · head `4c9e1f2` · Graft mode: report. Graft approves and blocks nothing here.
 >
 > <sub>Maintained by Graft; edits to this comment are overwritten.</sub>
 
@@ -152,11 +156,12 @@ The same information appears in the `graft/provenance`, `graft/intent` (with "Ca
 | --- | --- |
 | Install, run, test | [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) |
 | Real GitHub App | [Registration, smee, permissions](docs/github-app.md) |
-| Features | [Provenance](docs/features/provenance.md) · [Intent cards](docs/features/intent-cards.md) · [Policy](docs/features/policy.md) ([graft.yaml reference](docs/graft-yaml.md)) · [Evaluation](docs/features/evaluation.md) · [Pilots and gate](docs/features/pilots-and-gate.md) |
+| Features | [Provenance](docs/features/provenance.md) · [Intent cards](docs/features/intent-cards.md) · [Policy](docs/features/policy.md) ([graft.yaml reference](docs/graft-yaml.md)) · [Modes](docs/features/modes.md) · [Post-merge guard](docs/features/guard.md) · [MCP server](docs/features/mcp.md) · [Evaluation](docs/features/evaluation.md) · [Pilots and gates](docs/features/pilots-and-gate.md) |
+| Videos | [Graft, explained](docs/video.md) · [What a reviewer sees](docs/video-reviewer-tour.md) · [Enforce mode, step by step](docs/video-enforce-tour.md) |
 | Live tests | [E2E scenarios](docs/e2e.md) · [Runbook](docs/e2e/runbook.md) |
 | Internals | [Architecture and data model](docs/architecture.md) · [Decisions and deviations by step](docs/decisions.md) |
-| Pilots | [Onboarding runbook](docs/pilots/onboarding.md) · [Starter policies](docs/pilots/) |
-| Product | [MVP spec](docs/spec/mvp-spec.md) · [Development plan](docs/plan/development-plan.md) · [Phase 0 steps](docs/phase-0/README.md) · [Human to-do](docs/phase-0/HUMAN-TODO.md) |
+| Pilots | [Onboarding runbook](docs/pilots/onboarding.md) · [Phase 1 rollout runbook](docs/pilots/phase-1-runbook.md) · [Starter policies](docs/pilots/) |
+| Product | [MVP spec](docs/spec/mvp-spec.md) · [Development plan](docs/plan/development-plan.md) · [Phase 0 steps](docs/phase-0/README.md) · [Phase 1 steps](docs/phase-1/README.md) · Human to-do ([Phase 0](docs/phase-0/HUMAN-TODO.md), [Phase 1](docs/phase-1/HUMAN-TODO.md)) · [Changelog](CHANGELOG.md) |
 
 The full index is [docs/README.md](docs/README.md).
 
@@ -178,7 +183,7 @@ Still open in Phase 0: the steps only a person can do, such as registering the p
 
 ### Phase 1
 
-Steps 1 to 4 are built and merged; steps 5 to 7 are not. **Everything defaults to report mode**: the server ceiling `GRAFT_MODE_CEILING` defaults to `report`, so no repository can enforce anything until an operator raises it and then runs `pnpm graft mode set` for that repository ([Modes](docs/features/modes.md)). With defaults, every Graft check still concludes `neutral`, as in Phase 0.
+All seven steps are built, reviewed and merged (release `v0.1.0`). **Everything defaults to report mode**: the server ceiling `GRAFT_MODE_CEILING` defaults to `report`, so no repository can enforce anything until an operator raises it and then runs `pnpm graft mode set` for that repository ([Modes](docs/features/modes.md)). With defaults, every Graft check still concludes `neutral`, as in Phase 0.
 
 | Step | What it adds | State |
 | --- | --- | --- |
@@ -186,11 +191,19 @@ Steps 1 to 4 are built and merged; steps 5 to 7 are not. **Everything defaults t
 | 2 Approvals Graft can enforce | In enforce mode `graft/policy` concludes `success` or `failure` from reviews and team membership, re-runs on push, review and membership changes, and drops stale approvals. | Built, off until a repository is set to enforce |
 | 3 Break-glass and audit log | A maintainer or admin adds the break-glass label to bypass the policy for one commit; every bypass is written to an audit log (`pnpm graft audit list`), and mode changes are recorded too (`pnpm graft mode history`). | Built |
 | 4 Post-merge guard detection | Watches default-branch commits, reads existing CI results, and names the culprit commit in a comment and `pnpm graft guard list`. Detection only. See [Guard](docs/features/guard.md). | Built, report by default |
-| 5 Revert PRs | The guard opens a revert PR for a confirmed culprit. | Not built |
+| 5 Revert PRs | In enforce mode the guard opens a `graft:revert` PR for a confirmed culprit, built from blob SHAs without reading code; a culprit whose files changed again is `needs_human`. Opt-in auto-merge for `trivial` and `logic` reverts (`guard.auto_merge_reverts`). See [Guard](docs/features/guard.md#revert-pull-requests). | Built, report by default |
 | 6 MCP server | `open_change`, `report_provenance`, `get_status`, `get_policy` at `/mcp`, with per-repository tokens (`pnpm graft mcp-token`). See [MCP server](docs/features/mcp.md). | Built; `open_change` off until `mcp_write` is on |
-| 7 Security review, pilots and gate | A security review, 5 pilots and the Phase 1 gate. | Not built |
+| 7 Security review, pilots and gate | The [security review](docs/phase-1/reviews/step-7-security-review.md) of everything that writes and its fixes (the lower of two ceilings, no query-string writes, MCP auth before the body, verified commits on MCP PRs, `--public` to enforce a public repository), the [rollout runbook](docs/pilots/phase-1-runbook.md) and `pnpm graft gate report --phase 1`. | Built; gate awaits 5 pilots |
 
-The Phase 1 reviews are in [docs/phase-1/reviews](docs/phase-1/reviews). Real GitHub behavior of the new steps is untested outside fakes.
+The Phase 1 reviews are in [docs/phase-1/reviews](docs/phase-1/reviews). Real GitHub behavior of the new writes (revert trees, auto-merge, `open_change`, label events) is untested outside fakes: the real-GitHub checks and smoke tests are listed in the [Phase 1 HUMAN-TODO](docs/phase-1/HUMAN-TODO.md).
+
+### What comes next
+
+No more code steps are planned for Phase 1. What is left is done by people: register the production App with the chosen manifest, run the HUMAN-TODO smoke tests and real-GitHub checks, recruit the pilot teams (2 for Phase 0, 5 for Phase 1), take each one through the [runbook](docs/pilots/phase-1-runbook.md), and call the Phase 0 and Phase 1 gates from `pnpm graft gate report`. Graft reaches `v1.0.0` when both gates pass. Task grouping and candidate ranking (Phase 2) are out of scope until then.
+
+### Graft on this repository
+
+Graft reviews its own pull requests in report mode. Its policy is [`graft.yaml`](graft.yaml): the safety core (GitHub writes, webhooks, modes, policy, guard, MCP, audit, deployment) is `sensitive` and needs a human, trivial changes would be auto-approved, agents may never touch secrets, and the guard watches only the CI job `check`. The repository is public, so the runbook keeps `policy_mode` in report (step 7 D10). Agents working here add `Graft-*` trailers as [CLAUDE.md](CLAUDE.md) asks.
 
 ## Repository layout
 
@@ -207,8 +220,11 @@ src/
   github/     Octokit factory, managed comment, markdown safety
   llm/        model-client interface, Anthropic client, fake
   policy/     graft.yaml schema, safe YAML parse, evaluator, loader
-  modules/    installations, changes, provenance, intent, policy, pilot
+  modules/    installations, changes, provenance, intent, policy, pilot, modes, audit, guard, mcp
   eval/       the evaluation tool
+  modes/      the mode ceiling and the GitHub write allow-list
+  guard/      post-merge culprit detection and revert planning
+  mcp/        MCP tool schemas and token hashing
   pilot/      CLI-side pilot libraries: baseline, gate, doctor, purge
   e2e/        the live end-to-end runner
 eval/         JSON Schemas, synthetic set, saved baseline, thresholds
