@@ -24,6 +24,7 @@ import {
   type RevertData,
   revertClosed,
   runRevert,
+  settleFailedRun,
   trackDefaultBranch,
 } from "../../src/modules/guard/index.js";
 import { countOpenReverts } from "../../src/modules/guard/store.js";
@@ -31,6 +32,7 @@ import { apiTreeReader } from "../../src/modules/guard/trees.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { runDoctor } from "../../src/pilot/doctor.js";
 import { clearPolicyCache } from "../../src/policy/load.js";
+import { PermanentJobError } from "../../src/queue/errors.js";
 import { resolveJobOptions } from "../../src/queue/queue.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
 import { FIXED_NOW, testConfig } from "../helpers/config.js";
@@ -1833,6 +1835,70 @@ describe("guard revert: enforce", () => {
     expect(
       [...api.state.pulls.values()].filter((p) => p.head.ref?.startsWith("graft-revert/")),
     ).toHaveLength(1);
+  });
+
+  it("I-REV-10d lookup failure: the ref is created, the last attempt fails and its PR lookup fails too: no outcome, left resumable (step 7 review 1, X6)", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      api.failNext("GET", /\/pulls$/, 500);
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    expect(await runRevert(data, ctx(ENFORCE, LAST_ATTEMPT))).toBe("stopped");
+    const e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: null, revert_pr_number: null, comment_id: null });
+    expect(e.revert_commit_sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(api.find("GET", /\/pulls$/).length).toBeGreaterThan(0);
+    expect(comments()).toEqual([]);
+  });
+
+  it("I-REV-10f a permanent error after the ref (POST …/pulls answers 422): settled error with a comment, the cap slot released, no later guard.revert (step 7 review 1, finding 1)", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      api.failNext("POST", /\/pulls$/, 422);
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    // Not the last attempt: a permanent error is never retried, so it settles now.
+    expect(await runRevert(data, ctx(ENFORCE, RETRYING))).toBe("commented");
+    const e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: "error", revert_pr_number: null });
+    expect(e.revert_branch).not.toBeNull();
+    expect(e.comment_id).not.toBeNull();
+    expect(comments()).toHaveLength(1);
+    expect(await countOpenReverts(t.db, REPO_ID, "00000000-0000-0000-0000-000000000000")).toBe(0);
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+    // The job row has expired: a later observe sends no guard.revert, and nothing is retried.
+    advance(2 * 3600);
+    await observeOnly(C(3), ENFORCE);
+    expect(await takeReverts()).toEqual([]);
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+  });
+
+  it("I-REV-10f settleFailedRun: writes began, then a permanent error outside failed(): settled error with a comment; a retryable one on the last attempt stays resumable", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    expect(await eventById(id)).toMatchObject({ revert_outcome: null, comment_id: null });
+    await settleFailedRun(data, ctx(ENFORCE, LAST_ATTEMPT), new Error("token service down"));
+    expect(await eventById(id)).toMatchObject({ revert_outcome: null, comment_id: null });
+    await settleFailedRun(
+      data,
+      ctx(ENFORCE, RETRYING),
+      new PermanentJobError("forbidden", "github_403"),
+    );
+    const e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: "error", revert_pr_number: null });
+    expect(e.comment_id).not.toBeNull();
+    expect(await countOpenReverts(t.db, REPO_ID, "00000000-0000-0000-0000-000000000000")).toBe(0);
   });
 
   it("I-REV-10e detected, then the clock passes GRAFT_GUARD_REVERT_MAX_AGE_HOURS, then confirmed now: plans and opens, not stale (step 5 review 2, finding B)", async () => {

@@ -168,7 +168,7 @@ Spec: [phase-1/step-6-mcp-server.md](phase-1/step-6-mcp-server.md). User page: [
 
 **The D13 merge.** `report_provenance` stores one `provenance` row with `source = 'mcp'` per (change, head), under the change lock, and enqueues `provenance.refresh` (trigger `mcp_report`). The job computes the trailers as before, then `mcpAgreement` (pure, `compute.ts`) against the MCP row for the head, and stores `change_provenance.mcp_report` (`none`, `agrees`, `disagrees`). `buildFacts` makes the author `unknown` when it is `disagrees`; the policy job then evaluates with that fact **and** with the trailers' author and keeps the stricter verdict (`evaluateWithReport`, `stricterVerdict` in `src/policy/evaluate.ts`), so a report can only add requirements. MCP values never replace trailer values; the comment shows them as unverified.
 
-**D19.** For a change with an `mcp_changes` row, the policy job lists the PR's commits (at most 250, logins only) and passes their lowercased author and committer logins (not `web-flow`) to `countApprovals` as `excludedLogins`; a commit with no author login or more than 250 commits excludes everyone and marks the count truncated (unmet in enforce mode).
+**D19.** For a change with an `mcp_changes` row, the policy job lists the PR's commits (at most 250, logins only) and passes their lowercased author and committer logins to `countApprovals` as `excludedLogins`; a commit with no author login or more than 250 commits excludes everyone and marks the count truncated (unmet in enforce mode). Since Phase 1 step 7 (D8), a commit that GitHub has not verified, or whose committer has no login or is `web-flow` (step 7 review 1, finding 2), excludes everyone too.
 
 ## Data model
 

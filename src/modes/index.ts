@@ -55,8 +55,12 @@ export function lowest<V extends string>(order: readonly [V, V], a: V, b: V): V 
  * Phase 1 step 7 (D2): the ceiling a process computes with is the lower of its own
  * `GRAFT_MODE_CEILING` and the value the last worker start stored in `service_state`. A missing row
  * (no worker ever started) means the process's value alone; any stored value other than `report` or
- * `enforce` means `report`. A worker start can therefore only lower the ceiling of every process
- * that runs this code, so a rolling restart that lowers it is safe once the first new worker starts.
+ * `enforce` means `report`. A process can therefore never compute a ceiling above the last stored
+ * value, so a rolling restart that lowers it takes effect everywhere once the first new worker
+ * starts. A worker start stores its own environment, raises included (step 7 review 1, finding 4):
+ * during a lowering roll, an old-config worker that restarts (for example a crash-looping pod of
+ * the old ReplicaSet) stores `enforce` again, and old processes compute `enforce` until the next
+ * new worker start or the end of the roll.
  */
 export function effectiveCeiling(env: Mode, stored: string | null | undefined): Mode {
   if (stored === null || stored === undefined) return env;

@@ -210,7 +210,7 @@ describe("listCommitLogins (Phase 1 step 7, D8)", () => {
             ? base.commit
             : { ...base.commit, verification: o.verification },
       author: o.author === null ? null : { login: o.author ?? "alice" },
-      committer: o.committer === null ? null : { login: o.committer ?? "web-flow" },
+      committer: o.committer === null ? null : { login: o.committer ?? "dave" },
     };
   };
   async function logins(commits: unknown[], count = commits.length) {
@@ -220,13 +220,20 @@ describe("listCommitLogins (Phase 1 step 7, D8)", () => {
     return listCommitLogins(octokit, { ...target, commits: count });
   }
 
-  it("U-FCT-1 all verified → logins (authors and committers, web-flow left out); unverified, absent verification and a null committer → unverified; 251 → too_many; a null author → no_author", async () => {
+  it("U-FCT-1 all verified with real committers → logins (authors and committers); a web-flow committer (step 7 review 1, finding 2), unverified, absent verification and a null committer → unverified; 251 → too_many; a null author → no_author", async () => {
+    expect(
+      await logins([
+        commit(1, { author: "Alice", committer: "Dave" }),
+        commit(2, { author: "bob", committer: "Carol" }),
+      ]),
+    ).toEqual({ logins: ["alice", "bob", "carol", "dave"] });
+    // A verified web-flow commit proves only that GitHub made it, not who asked for it.
     expect(
       await logins([
         commit(1, { author: "Alice", committer: "web-flow" }),
         commit(2, { author: "bob", committer: "Carol" }),
       ]),
-    ).toEqual({ logins: ["alice", "bob", "carol"] });
+    ).toEqual({ unknown: "unverified" });
     expect(await logins([commit(1), commit(2, { verification: { verified: false } })])).toEqual({
       unknown: "unverified",
     });

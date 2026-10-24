@@ -161,8 +161,9 @@ export const MAX_COMMIT_LOGINS = 250;
 const COMMIT_PAGE = 100;
 
 /**
- * Phase 1 step 7 (D8): on a PR opened through MCP, only verified commits let approvals count. A
- * pending product decision (HUMAN-TODO, step 7): `false` goes back to step 6's D19 alone.
+ * Phase 1 step 7 (D8): on a PR opened through MCP, only verified commits let approvals count.
+ * Decided by the spec, not a pending product decision (step 7 review 1, nit 8): `false` goes back
+ * to step 6's D19 alone, which reopens step 6 residual risk 2 and needs a new security review.
  */
 export const REQUIRE_VERIFIED_COMMITS = true;
 
@@ -174,11 +175,13 @@ export type CommitLogins = { logins: string[] } | { unknown: CommitLoginsUnknown
  * Phase 1 step 6 (D19): the lowercased author and committer logins of a PR's commits, for a PR
  * opened through MCP, or why Graft cannot tell who they are: more than 250 commits (`too_many`), a
  * commit with no author login (`no_author`), or, Phase 1 step 7 (D8), a commit GitHub has not
- * verified (`unverified`: `commit.verification.verified` is not `true`, or the committer has no
- * login and is not `web-flow`). Anyone who pushes chooses the author and committer emails; a
- * verified signature ties the committer to its account, so every committer is genuine.
- * GitHub's web committer `web-flow` is not a person and is skipped. Logins only: no message, no
- * SHA, nothing stored.
+ * verified (`unverified`: `commit.verification.verified` is not `true`, the committer has no
+ * login, or the committer is GitHub's `web-flow`). Anyone who pushes chooses the author and
+ * committer emails; a verified signature made with the committer's own key ties the committer to
+ * its account. A `web-flow` signature only proves that GitHub created the commit, not who asked
+ * it to, so such a commit is `unverified` too (step 7 review 1, finding 2; until the HUMAN-TODO
+ * real-GitHub check shows GitHub never signs a `web-flow` commit with an author the caller chose).
+ * Logins only: no message, no SHA, nothing stored.
  */
 export async function listCommitLogins(
   octokit: GitHubClient,
@@ -204,6 +207,9 @@ export async function listCommitLogins(
         // D8: only `verified: true` counts; absent, false or anything else is unverified.
         if (c.commit?.verification?.verified !== true) return { unknown: "unverified" };
         if (typeof committer !== "string" || committer === "") return { unknown: "unverified" };
+        // Step 7 review 1, finding 2: GitHub's `web-flow` signature proves only that GitHub made
+        // the commit, not who asked it to, so the author is not tied to an account.
+        if (committer === "web-flow") return { unknown: "unverified" };
       }
       logins.add(author.toLowerCase());
       if (typeof committer === "string" && committer !== "" && committer !== "web-flow") {

@@ -1432,7 +1432,7 @@ describe("MCP server (Phase 1 step 6)", () => {
       prNumber: PR_NUMBER,
       headSha: HEAD_SHA,
     });
-    const withLogins = (author: string | null, committer = "web-flow") => [
+    const withLogins = (author: string | null, committer = author ?? "alice") => [
       {
         ...makeCommit(HEAD_SHA, commitMessage("Fix", undefined, [["Graft-Agent", "claude-code"]])),
         author: author === null ? null : { login: author },
@@ -1498,7 +1498,7 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(api.find("GET", /\/pulls\/2\/commits$/).length).toBeGreaterThan(0);
   });
 
-  it("I-MCP-14b D8: an MCP-opened PR with one unverified commit → no approval counts, mcpExclusion unverified and the line; all verified → bob counts, alice (author) does not", async () => {
+  it("I-MCP-14b D8: an MCP-opened PR with one unverified commit → no approval counts, mcpExclusion unverified and the line; all verified with a real committer → bob counts, alice (author) and carol (committer) do not; one web-flow commit → unverified (step 7 review 1, finding 2)", async () => {
     const { id: tokenId } = await token();
     await seedPr();
     await insertMcpChange(t.db, {
@@ -1507,7 +1507,7 @@ describe("MCP server (Phase 1 step 6)", () => {
       prNumber: PR_NUMBER,
       headSha: HEAD_SHA,
     });
-    const commitOf = (verified: boolean | null, i: number) => {
+    const commitOf = (verified: boolean | null, i: number, committer = "carol") => {
       const c = makeCommit(
         fakeSha(0x700 + i),
         commitMessage("Fix", undefined, [["Graft-Agent", "claude-code"]]),
@@ -1517,18 +1517,20 @@ describe("MCP server (Phase 1 step 6)", () => {
         commit:
           verified === null ? c.commit : { ...c.commit, verification: { verified, reason: "x" } },
         author: { login: "alice" },
-        committer: { login: "web-flow" },
+        committer: { login: committer },
       };
     };
     for (const [login, id] of [
       ["alice", 601],
       ["bob", 602],
+      ["carol", 603],
     ] as const) {
       api.state.permissions.set(login, { id, role: "write" });
     }
     api.state.reviews.set(PR_NUMBER, [
       makeReview({ id: 1, login: "alice", userId: 601 }),
       makeReview({ id: 2, login: "bob", userId: 602 }),
+      makeReview({ id: 3, login: "carol", userId: 603 }),
     ]);
     const ctx = ctxFor();
     const LINE =
@@ -1551,6 +1553,13 @@ describe("MCP server (Phase 1 step 6)", () => {
       mcpExclusion: "commit_authors",
     });
     expect(policySummary()).not.toContain("Approvals do not count");
+
+    // A verified web-flow commit: GitHub made it, but nothing ties its author to the requester.
+    api.state.commits.set(PR_NUMBER, [commitOf(true, 1), commitOf(true, 2, "web-flow")] as never);
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    approvals = (await latestVerdict()).approvals as Record<string, unknown>;
+    expect(approvals).toMatchObject({ current: 0, mcpExclusion: "unverified" });
+    expect(policySummary()).toContain(LINE);
   });
 
   it("I-MCP-15 transfer (D12): the repository moves to another installation → every active token revoked by system, and the next call → 401; a re-add revokes too", async () => {

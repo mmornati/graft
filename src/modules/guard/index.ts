@@ -67,6 +67,7 @@ export {
   revertKey,
   runRevert,
   scheduleRevert,
+  settleFailedRun,
 } from "./revert.js";
 export {
   guardPullRequestClosed,
