@@ -102,7 +102,7 @@ Requests with an `Origin` header are refused (`403`) unless the origin is listed
 
 With N server processes the first two limits are N times higher.
 
-**Behind a proxy (Phase 1 step 7, D6).** The client IP is the connection's peer address unless that peer is listed in `GRAFT_TRUST_PROXY` (IP addresses or CIDR ranges): then it is the client address from `X-Forwarded-For`. Set it to the addresses of the proxy in front of `/mcp`, so each client has its own failed-auth bucket. `true`, hop counts and hostnames are refused: a client that is not the proxy can never choose its own address.
+**Behind a proxy (Phase 1 step 7, D6).** The client IP is the connection's peer address unless that peer is listed in `GRAFT_TRUST_PROXY` (IP addresses or CIDR ranges): then it is the client address from `X-Forwarded-For`. Set it to the addresses of the proxy in front of `/mcp`, so each client has its own failed-auth bucket. `true`, hop counts and hostnames are refused. This keeps a client from choosing its own address only while three things hold: the list holds only the proxy's own addresses (for example `10.0.0.5`), never a client network; the proxy appends the peer address to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`) or overwrites it; and Graft is reachable only through the proxy.
 
 **Order of the checks (D5).** The `Origin` check and the token are read from the headers before Fastify parses the body: an unauthenticated request is answered `401` (`403` for a foreign origin) whatever its media type or size. The per-token limit, `415` and `413` come after a valid token.
 
