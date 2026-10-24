@@ -1,4 +1,4 @@
-# Pilots and the Phase 0 gate
+# Pilots and the gates
 
 [Docs index](../README.md) · [Onboarding runbook](../pilots/onboarding.md) · [Intent cards](intent-cards.md)
 
@@ -68,6 +68,33 @@ flowchart TD
 ## Incidents
 
 **Incidents.** A PR carrying `GRAFT_INCIDENT_LABEL` (default `incident`; `off` disables) that is labeled or merged triggers `pilot.incident.detect`, which reads the **live** PR and accepts only `Reverts <owner>/<repo>#N` (the GitHub revert button) or a line `Graft-Culprit: #N` in the body (at most 5, never the PR itself); with no link it stores one row with no culprit, which `incident add --fix-pr` fills in place.
+
+## The Phase 1 gate
+
+Phase 1 ends with `pnpm graft gate report --phase 1` (step 7, D14 to D19). It reads the database only and computes every number from raw rows at report time; `--phase 0` (the default) prints the Phase 0 report above, unchanged. `--allow-file` is a Phase 0 option and a usage error with `--phase 1`. `--out` writes `gate-phase1-<until>.md` and `.json` (mode 0600); `--check` exits 0 on PASS, 1 on FAIL and 4 on INSUFFICIENT DATA.
+
+```sh
+pnpm graft baseline --period phase1 --repo acme/api --from 2026-12-01 --to 2027-01-26
+pnpm graft gate report --phase 1 --installation 123 --installation 456 --since 2026-12-01 [--until 2027-01-26] [--out dir] [--json] [--check]
+```
+
+**Measured and projected.** Every metric is computed twice. *Measured* uses only rows whose mode was `enforce`: the PR's merge-head verdict's `policy_mode`, or the guard event's `guard_mode`. *Projected* uses every row, with report-mode rows counted by what enforce would have done. The gate verdict uses measured values only; the projected values give a **preview** verdict, labelled as such, which never sets the exit code. The preview answers "if we enforced, would we pass", which is what the runbook's stage 2 needs.
+
+**The merged population.** PRs merged in the window, in active repositories of the installations, without the excluded authors (`GRAFT_METRICS_EXCLUDED_AUTHORS`) and without Graft's own revert PRs. Each one has the newest verdict for its head at merge (the *merge-head verdict*), and one class from that verdict's enforce reason: `auto` (approved by the policy alone), `human` (the required approvals were present), `break_glass`, `would_fail` (no or invalid policy, blocked, truncated reviews, changes requested, approvals missing), `pending` (the card was not ready), and `no_verdict`.
+
+**M1, share of PRs merged with no human (target at least 30%).** `auto` rows over all rows. Minimums for the measured value: 200 rows, at least 3 installations with 20 rows each, at least 14 days from the first to the last merge. A FAIL comes early when 50 rows already put the Wilson upper bound below 30% across at least 3 installations; from 400 rows the point estimate decides; below that a PASS also needs the Wilson lower bound at 25% or more. Also reported: the same share for agent PRs, the classes per mode, `auto` PRs a human approved anyway, and PRs merged in enforce mode while Graft's check failed or was pending (an admin bypass or a check that was not required).
+
+**M2, review minutes per agent PR (target at least 50% fewer).** The newest `phase1` and `baseline` review-time runs of the repositories that have both, merged agent PRs only. A PR's minutes are 0 when it merged without a review, else its minutes to first approval, else its minutes to merge. Measured: the `phase1` rows in enforce mode against the baseline rows of the same repositories. Projected: every `phase1` row, a report-mode `auto` row counting 0 minutes (enforce would have let it merge on the policy alone). The statistic is the change of the median; a baseline median of 0 gives no value. Minimum: 30 rows on each side, from at least 2 repositories.
+
+**M3, post-merge breakages caught (target at least 80%).** Guard events detected in the window. Open events, confirmed flakes, dismissed events and **unconfirmed flakes** (`flaky` with no reason: neither evidence for nor against the guard) are outside the ratio. Caught: a revert PR was opened. Would catch: a revert was planned in report mode. Missed: anything else (ambiguous, no culprit, needs a human, error, a skipped or failed revert). Measured: caught over caught, would catch and missed of the enforce events (a planned revert in enforce mode counts as missed). Projected: caught and would catch over the same sum, for every event. Minimum: 10 events in the ratio from at least 2 repositories. The denominator holds only breakages the guard detected.
+
+**M4, escaped defects (target: no rise).** PRs merged at least 14 days before `--until`, so an incident has time to be recorded; incidents are linked by culprit PR number. Two criteria against the baseline period: (a) all merged PRs, (b) PRs merged on the policy alone in enforce mode. A criterion FAILs only when its rate is above the baseline's **and** a one-sided exact conditional binomial test gives p < 0.05. Minimums: 100 window PRs and 100 baseline PRs for (a), 50 PRs for (b). Incidents with no culprit are reported as unlinked.
+
+**Gate verdict.** FAIL when any metric FAILs, PASS when all four PASS, otherwise INSUFFICIENT DATA. Pilot retention (installations at least 30 days old, active, with a delivery in the last 7 days; target 3 of 5) is reported and judged by the product owner, not part of the verdict.
+
+**Per repository.** `repositories[]` holds the numbers the [Phase 1 runbook](../pilots/phase-1-runbook.md) reads: the effective modes, when policy and guard enforce began, merged PRs by mode and class, would-be failures at merge by reason, invalid or missing policies, the last 7 days, break-glass uses, guard classes, MCP PRs opened and whether the repository is private.
+
+Every threshold lives in the `PHASE1` object of `src/pilot/gate-phase1.ts`. The report holds counts, ratios, minutes, ids, account and repository names, dates and reason codes; never a login, a title, a body, a path or YAML.
 
 ## Related
 

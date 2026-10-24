@@ -25,6 +25,8 @@ An argument the input schema refuses (an unknown key, a PR number of 0) is answe
 
 ### `report_provenance`: it can only make a verdict stricter
 
+Annotated `readOnlyHint: false, destructiveHint: false, idempotentHint: true` (Phase 1 step 7, D7): it stores a row, can make a verdict stricter and republishes the check and comment section, once per head.
+
 A report is compared with what the commit trailers say for the same head. It **agrees** when the trailers name an agent and it is the same agent (case does not matter). Otherwise it **disagrees**, and the policy treats the author as `unknown`, the strictest author fact: every `author` and `agent` condition of a `require` or `block` rule then matches (as uncertain). Graft also keeps the verdict the trailers alone would give and publishes the stricter of the two, so an unknown author can never trade the policy's `default` for a looser rule. A report never replaces a trailer value: model, task and session from MCP are shown as "reported through MCP (unverified)" in the managed comment and in `get_status`.
 
 One report per head: the same report again returns the stored result; a different one is `already_reported`. A new push gives a new head and allows a new report. A report for a head the PR no longer has is `stale_head`; on a closed PR it is `pr_closed`.
@@ -98,7 +100,11 @@ Requests with an `Origin` header are refused (`403`) unless the origin is listed
 | Failed authentications per client IP per minute (`GRAFT_MCP_AUTH_FAILURES_PER_MINUTE`) | 20 | **Per server process**. Past it, that IP gets `429` for the rest of the minute, before any database lookup, even with a valid token. |
 | `open_change` PRs per repository per rolling hour (`GRAFT_MCP_OPEN_CHANGE_PER_HOUR`) | 10 | All processes (counted in the database). `rate_limited`. |
 
-With N server processes the first two limits are N times higher. The client IP is the connection's peer address: behind a proxy every client shares the proxy's address (see [decisions.md](../decisions.md#phase-1-step-6-mcp-server)).
+With N server processes the first two limits are N times higher.
+
+**Behind a proxy (Phase 1 step 7, D6).** The client IP is the connection's peer address unless that peer is listed in `GRAFT_TRUST_PROXY` (IP addresses or CIDR ranges): then it is the client address from `X-Forwarded-For`. Set it to the addresses of the proxy in front of `/mcp`, so each client has its own failed-auth bucket. `true`, hop counts and hostnames are refused: a client that is not the proxy can never choose its own address.
+
+**Order of the checks (D5).** The `Origin` check and the token are read from the headers before Fastify parses the body: an unauthenticated request is answered `401` (`403` for a foreign origin) whatever its media type or size. The per-token limit, `415` and `413` come after a valid token.
 
 ## What `mcp_write` changes
 
@@ -126,5 +132,6 @@ A token holder cannot loosen a verdict, approve its own change, write to GitHub 
 
 - With `mcp_write` on, a token holder can open PRs from **any** existing branch of the repository, including one someone else pushed. The PR shows Graft's bot as author and that branch's commits; the commit authors' approvals do not count, and its review follows the policy like any PR.
 - A leaked token works until it expires or is revoked. Revocation is immediate; the per-token limit and the open cap bound the damage.
-- The per-token and failed-auth limits are per process. Behind a proxy that is not configured as trusted, every client shares the proxy's address, so anyone sending 20 bad tokens locks every client out for the rest of the minute.
-- The approval exclusion for MCP-opened PRs trusts git commit authors, which whoever pushes the branch chooses: a pusher who writes commits under someone else's name can approve the PR. Both are open items for the Phase 1 security review (step 7).
+- The per-token and failed-auth limits are per process.
+- **Resolved in step 7 (D6):** behind a proxy, `GRAFT_TRUST_PROXY` gives each client its own failed-auth bucket. Without it, every client shares the proxy's address, and anyone sending 20 bad tokens locks every client out for the rest of the minute.
+- **Resolved in step 7 (D8): verified commits.** On a PR opened through MCP, approvals count only when every commit is verified by GitHub (`commit.verification.verified`) and has a committer GitHub links to an account (or `web-flow`). Anyone who pushes chooses the author and committer emails; a verified signature ties the committer to its account, so the excluded committers are genuine. An unverified commit means no approval counts, and the policy section says so: "Approvals do not count: this PR was opened through MCP and has commits that GitHub has not verified." **Agents that use `open_change` must sign their commits** (an SSH or GPG signing key on the agent's GitHub account), or no approval on their PRs ever counts. A pusher who pushes someone else's genuine signed commits is reviewing someone else's work, which is a normal review: GitHub's API does not say who pushed a branch.
