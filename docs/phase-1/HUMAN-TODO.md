@@ -63,6 +63,7 @@ Things only a person can do. The developer agent never ticks these. Each item na
 - [ ] **Recruit three more pilot teams**, so five installations take part (development plan, "Where the 5 pilot teams come from"), and onboard each with Phase 0 onboarding and runbook stage 1. Who: product owner.
 - [ ] **Set `GRAFT_TRUST_PROXY`** to the proxy's addresses on every server process, and check with two clients that one's bad tokens do not lock the other out. Who: operator.
 - [ ] **Check on real GitHub** that `GET …/pulls/{n}/commits` returns `commit.verification.verified` for signed commits from an agent's SSH or GPG key, and `false` for unsigned ones (D8). Who: operator.
+- [ ] **Before any repository enters runbook stage 6, check `web-flow` on real GitHub** (step 7 review 1, finding 2): with a user token, create a commit through the contents API (`PUT /repos/{o}/{r}/contents/{path}`) with a custom `author` (another user's name and email), and record its `commit.verification.verified` and its committer login; do the same with no `author`, and through the web UI. Graft treats every `web-flow` commit on an MCP-opened PR as unverified. If GitHub never signs a `web-flow` commit whose author differs from the requester, record it in decisions.md: the rule can then be relaxed in a reviewed change. Who: operator.
 - [ ] **Have every agent that uses `open_change` sign its commits** (SSH signing key on the agent's GitHub account). Who: product owner, with each pilot.
 - [ ] **Run the runbook per pilot repository** ([phase-1-runbook.md](../pilots/phase-1-runbook.md)) and keep its stage record outside git. Who: operator, repo admin, tech lead.
 - [ ] **Weekly gate review**: `baseline --period phase1` per repository, `gate report --phase 1` for the five installations, the runbook's stage checks, a short note. Who: product owner and operator.
@@ -73,9 +74,9 @@ Things only a person can do. The developer agent never ticks these. Each item na
 
 ### Pending product decisions (step 7)
 
-The spec raised five questions a person has not answered yet. The build uses the spec's current values; each one is a one-line change where it lives in code.
+The spec raised five questions; D8 is decided (below), and four remain that a person has not answered yet. The build uses the spec's current values; each one is a one-line change where it lives in code.
 
-- [ ] **D8, verified commits on MCP-opened PRs.** Built as specified: any unverified commit means no approval counts. To turn it off (go back to step 6's D19 alone), set `REQUIRE_VERIFIED_COMMITS` to `false` in `src/modules/policy/facts.ts`. Who: product owner.
+- [x] ~~**D8, verified commits on MCP-opened PRs.**~~ Not a pending decision: decided by the spec (D8), and a `web-flow` commit counts as unverified too (step 7 review 1, finding 2). `REQUIRE_VERIFIED_COMMITS` in `src/modules/policy/facts.ts` is kept for tests and reading only; turning it off reopens step 6 residual risk 2 and needs a new security review. Who: product owner.
 - [ ] **The gate thresholds** (targets 30%, −50%, 80%, no rise; the minimums; the 14-day defect lag; p < 0.05; the point estimate from 400; the 0.05 slack). All in the `PHASE1` object of `src/pilot/gate-phase1.ts`. Who: product owner.
 - [ ] **The runbook numbers** (stage 2: 30 merged PRs, 14 days, at most 10% would-fail at merge). In `RUNBOOK_STAGE2` (`src/pilot/gate-phase1.ts`); the runbook quotes them and U-DOC-3 checks that it does, so a change is that constant plus the matching runbook line. The other stage criteria (14 days per stage, 3 reverts before stage 5, 7 days of MCP reads) are runbook text only. Who: product owner.
 - [ ] **Pilot retention** (reported, not decided: target 3 of 5; an installation counts when it is at least 30 days old and had a delivery in the last 7 days). `PHASE1.retention` in `src/pilot/gate-phase1.ts`. Who: product owner.

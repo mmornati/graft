@@ -173,7 +173,8 @@ Only after 14 days in stage 4 with `repositories[].guard.caught ≥ 3` and no wr
 
 2. The agents use the reads for at least 7 days.
 3. The agents that will call `open_change` sign their commits (step 7, D8): otherwise no approval on their PRs counts.
-4. Then:
+4. The HUMAN-TODO `web-flow` check on real GitHub is done and recorded (step 7 review 1, finding 2). Tell the team that a commit made on an MCP-opened PR in the web UI, or by "Update branch", is committed by `web-flow`, and then no approval on that PR counts.
+5. Then:
 
    ```sh
    pnpm graft mode set --repo <owner/repo> --mcp-write on --reason "pilot stage 6"
