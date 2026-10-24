@@ -130,9 +130,11 @@ Graft is down, or every check is stuck `in_progress`. **For one repository** (th
 
 **For every repository at once** (lowering the ceiling, slower): the ceiling turns `graft/policy` `neutral` on **every** enforcing repository, and `neutral` passes a required check, so a repository whose required reviewers were dropped (stage 3 step 5) would merge with no review.
 
-1. **Operator.** List every repository whose `repositories[].modes.policy.effective` is `enforce` (in the latest `pnpm graft gate report --phase 1 --installation <id> --since <day 0> --out <dir>`, or with `pnpm graft mode show --repo <owner/repo>` per repository).
+1. **Operator.** List every repository past stage 3 step 5, from the stage record. When the database is up, cross-check it: every repository whose `repositories[].modes.policy.effective` is `enforce`, in the latest `pnpm graft gate report --phase 1 --installation <id> --since <day 0> --out <dir>` for each installation, or with `pnpm graft mode show --repo <owner/repo>` per repository.
 2. **Repo admin, on every one of them.** Restore "Require approvals" (and Code Owners review if it was used). Check each one off in the stage record.
 3. **Operator, only then.** Set `GRAFT_MODE_CEILING=report` and restart. Once every process runs the step 7 build, a rolling restart is safe (step 7, D2): the first new worker's start lowers every process. Finish the roll: an old-config worker that restarts during it stores `enforce` again until the next new worker start (step 7 review 1, finding 4). Then check `pnpm graft mode show` on each repository.
+
+If Graft cannot be brought back up, the ceiling cannot publish `neutral`: use the per-repository path on each repository. Removing `graft/policy` from the required checks is the only thing that unblocks merges then.
 
 ## Stage 4: enforce `guard_mode` (not before 14 days in stage 3)
 
@@ -179,7 +181,7 @@ Only after 14 days in stage 4 with `repositories[].guard.caught ≥ 3` and no wr
 
 2. The agents use the reads for at least 7 days.
 3. The agents that will call `open_change` sign their commits (step 7, D8): otherwise no approval on their PRs counts.
-4. The HUMAN-TODO `web-flow` check on real GitHub is done and recorded (step 7 review 1, finding 2). Tell the team that a commit made on an MCP-opened PR in the web UI, or by "Update branch", is committed by `web-flow`, and then no approval on that PR counts.
+4. Tell the team that a commit made on an MCP-opened PR in the web UI, or by "Update branch", is committed by `web-flow`, and then no approval on that PR counts (step 7 review 1, finding 2). Recommended, not required: the HUMAN-TODO `web-flow` check on real GitHub is done and recorded. Graft already treats every `web-flow` commit as unverified, so the check is needed only before that rule is relaxed (step 7 review 2, nit F).
 5. Then:
 
    ```sh
