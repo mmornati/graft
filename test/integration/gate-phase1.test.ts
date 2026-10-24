@@ -28,7 +28,13 @@ import {
   P1_UNTIL,
   seedPhase1World,
 } from "../helpers/phase1-seed.js";
-import { addChange, addIncidentRow, addInstallation, SHA } from "../helpers/pilot-seed.js";
+import {
+  addChange,
+  addDelivery,
+  addIncidentRow,
+  addInstallation,
+  SHA,
+} from "../helpers/pilot-seed.js";
 import { seedWorld } from "../helpers/seed.js";
 
 let t: TestApp;
@@ -396,6 +402,100 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
     expect(repo.invalidOrMissingPolicy).toBe(1);
     expect(repo.last7).toMatchObject({ total: 2, wouldFailAtMerge: 1, invalidOrMissingPolicy: 1 });
     expect(repo.last7.byClass).toMatchObject({ auto: 1, would_fail: 1 });
+    // Step 7 review 1 (X30): enforce, then report (applied) → no enforceSince, although the newest
+    // change to enforce is still in mode_changes.
+    await change("report", "enforce", "2026-10-01T10:00:00Z");
+    await t.db.updateTable("repositories").set({ policy_mode: "report" }).execute();
+    const after = (await gather({ ids: [p.id] })).repositories[0];
+    expect(after?.enforceSince).toEqual({ policy: null, guard: null });
+  });
+
+  it("I-P1G-11 step 7 review 1 rules: the M2 measured baseline takes only repositories with measured rows; M3's window is on the detection time; retention needs a delivery in the last 7 days", async () => {
+    const [a, b, c, d] = P1_PILOTS as [
+      (typeof P1_PILOTS)[number],
+      (typeof P1_PILOTS)[number],
+      (typeof P1_PILOTS)[number],
+      (typeof P1_PILOTS)[number],
+    ];
+    const created = new Date(P1_UNTIL.getTime() - 60 * 86_400_000);
+    for (const p of [a, b, c, d]) {
+      await addInstallation(t.db, {
+        id: p.id,
+        login: p.login,
+        repos: [{ id: p.repo, name: "api" }],
+      });
+      await t.db
+        .updateTable("installations")
+        .set({ created_at: created })
+        .where("id", "=", p.id)
+        .execute();
+    }
+    const at = new Date("2026-09-10T12:00:00Z");
+    const agent = (pr: number, first: number) => ({
+      pr,
+      kind: "agent" as const,
+      first,
+      merge: 500,
+    });
+
+    // X40: a and b are both paired; only a has measured (enforce) phase1 rows.
+    await addMerged(t.db, { repo: a.repo, pr: 1, at, mode: "enforce", reason: "requirements_met" });
+    await addMerged(t.db, { repo: b.repo, pr: 1, at, mode: "report", reason: "requirements_met" });
+    for (const [p, base] of [
+      [a, 100],
+      [b, 7],
+    ] as const) {
+      await addRun(t.db, {
+        repo: p.repo,
+        period: "baseline",
+        extractedAt: new Date("2026-08-31T00:00:00Z"),
+        rows: [agent(900, base)],
+      });
+      await addRun(t.db, {
+        repo: p.repo,
+        period: "phase1",
+        extractedAt: new Date("2026-10-14T00:00:00Z"),
+        rows: [agent(1, 30)],
+      });
+    }
+    const m2 = (await gather({ ids: [a.id, b.id] })).metrics.m2;
+    expect(m2.pairedRepositories).toBe(2);
+    expect(m2.measured.baseline).toMatchObject({ n: 1, p50: 100 });
+    expect(m2.projected.baseline).toMatchObject({ n: 2 });
+
+    // X39: a caught event detected in the window but created before it → counted; a missed one
+    // detected before the window but created in it → not counted.
+    const event = async (detected: Date, createdAt: Date, caught: boolean) => {
+      await addGuardEvent(t.db, {
+        repo: c.repo,
+        status: caught ? "reverted" : "needs_human",
+        mode: "enforce",
+        at: detected,
+        ...(caught ? { revertPr: 8100, outcome: "opened" } : {}),
+      });
+      await sql`update guard_events set created_at = ${createdAt}
+        where detected_at = ${detected}`.execute(t.db);
+    };
+    await event(new Date("2026-09-03T00:00:00Z"), new Date("2026-08-25T00:00:00Z"), true);
+    await event(new Date("2026-08-25T00:00:00Z"), new Date("2026-09-03T00:00:00Z"), false);
+    const m3 = (await gather({ ids: [c.id] })).metrics.m3;
+    expect(m3.measured).toMatchObject({ caught: 1, missed: 0, denominator: 1 });
+
+    // X41: retention needs a delivery in the 7 days before until: c's last one is 8 days old,
+    // d's 6 days.
+    await addDelivery(t.db, {
+      id: "r-c",
+      installationId: c.id,
+      repositoryId: null,
+      at: new Date(P1_UNTIL.getTime() - 8 * 86_400_000),
+    });
+    await addDelivery(t.db, {
+      id: "r-d",
+      installationId: d.id,
+      repositoryId: null,
+      at: new Date(P1_UNTIL.getTime() - 6 * 86_400_000),
+    });
+    expect((await gather({ ids: [c.id, d.id] })).retention).toMatchObject({ retained: 1, of: 2 });
   });
 
   it("I-P1G-9 neither file nor stdout holds a seeded login, title, body or path; --out writes mode 0600", async () => {
@@ -510,5 +610,9 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
     ).toEqual(["phase1"]);
     await expect(migrateDownOne(t.db)).rejects.toThrow(/phase1 review time runs exist/);
     expect(await check()).toContain("phase1");
+    // Step 7 review 1 (X37): the refusal keeps the measured data.
+    expect(await t.db.selectFrom("review_time_runs").select("period").execute()).toEqual([
+      { period: "phase1" },
+    ]);
   });
 });
