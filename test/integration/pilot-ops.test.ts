@@ -957,13 +957,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0014_mcp"]);
+    expect(down).toEqual(["0015_mcp_open_claims"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0014_mcp"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0015_mcp_open_claims"]);
     }
   });
 });

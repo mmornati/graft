@@ -51,6 +51,11 @@ export function mcpRoutes(deps: ToolDeps) {
     // Only JSON (Fastify's own parser): any other media type is answered 415 in this scope.
     app.removeContentTypeParser("text/plain");
 
+    // D5: one response for every authentication failure, whatever the cause: same status, header
+    // and bytes.
+    const unauthorized = (reply: FastifyReply) =>
+      reply.code(401).header("www-authenticate", 'Bearer realm="graft"').send(UNAUTHORIZED);
+
     const tooMany = (reply: FastifyReply, seconds: number) =>
       reply.code(429).header("retry-after", String(seconds)).send({ error: "rate_limited" });
 
@@ -73,10 +78,7 @@ export function mcpRoutes(deps: ToolDeps) {
       const auth = token === null ? null : await authorizeToken(deps.db, token);
       if (auth === null) {
         failures.fail(ip);
-        return reply
-          .code(401)
-          .header("www-authenticate", 'Bearer realm="graft"')
-          .send(UNAUTHORIZED);
+        return unauthorized(reply);
       }
       req.mcpAuth = auth;
       await touchLastUsed(deps.db, auth.extra.tokenId);
@@ -84,7 +86,8 @@ export function mcpRoutes(deps: ToolDeps) {
 
     const rateLimit = async (req: FastifyRequest, reply: FastifyReply) => {
       const tokenId = req.mcpAuth?.extra.tokenId;
-      if (tokenId === undefined) return reply.code(401).send(UNAUTHORIZED);
+      // Unreachable while `authenticate` runs first; the same D5 answer if that ever changes.
+      if (tokenId === undefined) return unauthorized(reply);
       const verdict = perToken.take(tokenId);
       if (!verdict.ok) return tooMany(reply, verdict.retryAfterSeconds);
     };

@@ -339,6 +339,7 @@ describe("guard revert: schema", () => {
       "guard_events_one_revert_per_culprit",
       "guard_events_revert_open_idx",
     ]);
+    expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
     try {
@@ -350,18 +351,28 @@ describe("guard revert: schema", () => {
           values (${REPO_ID}, 'main', ${C(1)}, 'needs_human')`.execute(t.db),
       ).rejects.toThrow(/check constraint/);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0013_guard_revert", "0014_mcp"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0013_guard_revert",
+        "0014_mcp",
+        "0015_mcp_open_claims",
+      ]);
     }
     // A row with a new status blocks the rollback, which then changes nothing.
     await insertEvent({ failingSha: C(1), status: "revert_closed" });
+    expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     await expect(migrateDownOne(t.db)).rejects.toThrow();
     expect(await indexes()).toHaveLength(2);
-    expect(await migrateToLatest(t.db)).toEqual(["0014_mcp"]);
+    expect(await migrateToLatest(t.db)).toEqual(["0014_mcp", "0015_mcp_open_claims"]);
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
-    expect(await migrateToLatest(t.db)).toEqual(["0013_guard_revert", "0014_mcp"]);
+    expect(await migrateToLatest(t.db)).toEqual([
+      "0013_guard_revert",
+      "0014_mcp",
+      "0015_mcp_open_claims",
+    ]);
     // The CHECKs: a branch name and a commit SHA of the right shape only.
     await expect(
       insertEvent({ failingSha: C(2), status: "culprit_found", revert: { revert_branch: "main" } }),

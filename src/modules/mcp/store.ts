@@ -169,7 +169,10 @@ export async function insertMcpChange(
     .execute();
 }
 
-/** D9 (c): opens of a repository in the rolling hour, counted where every process sees them. */
+/**
+ * D9 (c): opens of a repository in the rolling hour, counted where every process sees them. A
+ * claimed slot (a row with no PR number yet) counts as an open.
+ */
 export async function opensInLastHour(ex: Executor, repositoryId: number): Promise<number> {
   const row = await ex
     .selectFrom("mcp_changes")
@@ -178,6 +181,76 @@ export async function opensInLastHour(ex: Executor, repositoryId: number): Promi
     .where("created_at", ">", sql<Date>`now() - interval '1 hour'`)
     .executeTakeFirst();
   return Number(row?.n ?? 0);
+}
+
+/**
+ * D9 (c) under concurrent calls (review 1, finding 7): count the rolling hour and claim a slot in
+ * one short transaction holding the repository row lock, as `createTokenRow` does. The claim is an
+ * `mcp_changes` row with no PR number, so every process counts it. No GitHub call runs inside the
+ * lock. Null when the cap is reached. A claim older than an hour (left by a crash between the claim
+ * and `settleOpenClaim`) is deleted here; until then it holds its slot.
+ */
+export async function claimOpenSlot(
+  db: Db,
+  o: { repositoryId: number; tokenId: string; perHour: number },
+): Promise<string | null> {
+  return db.transaction().execute(async (tx) => {
+    await tx
+      .selectFrom("repositories")
+      .select("id")
+      .where("id", "=", o.repositoryId)
+      .forUpdate()
+      .execute();
+    await tx
+      .deleteFrom("mcp_changes")
+      .where("repository_id", "=", o.repositoryId)
+      .where("pr_number", "is", null)
+      .where("created_at", "<=", sql<Date>`now() - interval '1 hour'`)
+      .execute();
+    if ((await opensInLastHour(tx, o.repositoryId)) >= o.perHour) return null;
+    const row = await tx
+      .insertInto("mcp_changes")
+      .values({
+        repository_id: o.repositoryId,
+        token_id: o.tokenId,
+        pr_number: null,
+        head_sha: null,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    return row.id;
+  });
+}
+
+/**
+ * The end of a claimed open: the claim becomes the PR's row (D18), or, with `pr` null, the slot is
+ * given back. The PR row is inserted with `ON CONFLICT DO NOTHING`: a concurrent call may have
+ * adopted the new PR first.
+ */
+export async function settleOpenClaim(
+  db: Db,
+  o: {
+    claimId: string;
+    repositoryId: number;
+    tokenId: string;
+    pr: { number: number; headSha: string } | null;
+  },
+): Promise<void> {
+  await db.transaction().execute(async (tx) => {
+    await tx
+      .deleteFrom("mcp_changes")
+      .where("id", "=", o.claimId)
+      .where("pr_number", "is", null)
+      .execute();
+    if (o.pr !== null) {
+      await insertMcpChange(tx, {
+        repositoryId: o.repositoryId,
+        tokenId: o.tokenId,
+        prNumber: o.pr.number,
+        headSha: o.pr.headSha,
+      });
+    }
+  });
 }
 
 export async function isMcpChange(
