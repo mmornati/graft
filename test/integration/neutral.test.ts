@@ -1218,8 +1218,10 @@ describe.each(PROFILES)("neutral regression suite, $label modes", (profile) => {
 
   if (profile.stored !== undefined) {
     vitestIt(
-      `N-17 [${profile.name}] a worker stored report while this process has ${profile.ceiling}: every scenario's mutating requests are the Phase 0 set (neutral check runs, the managed comment, guard comments); no guard or mcp client, no gate question, no refusal`,
+      `N-17 [${profile.name}] a worker stored report while this process has ${profile.ceiling}: every scenario's mutating requests (break-glass and MCP included) are the Phase 0 set (neutral check runs, the managed comment, guard comments); no guard or mcp client, no gate question, no refusal`,
       async () => {
+        // Step 7 review 1, finding 7: break-glass runs here too, so the old-worker case covers it.
+        await breakGlassScenario();
         await mcpScenario();
         const all = writes().filter((r) => !r.path.endsWith("/access_tokens"));
         expect(all.length).toBeGreaterThan(10);
@@ -1242,6 +1244,16 @@ describe.each(PROFILES)("neutral regression suite, $label modes", (profile) => {
         const modes = await t.db.selectFrom("policy_verdicts").select("policy_mode").execute();
         expect(new Set(modes.map((m) => m.policy_mode))).toEqual(new Set(["report"]));
         expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
+        // Break-glass is recorded in report mode, and never turns the check `success`.
+        const rows = await scenarioAudit();
+        expect(rows.map((r) => [r.kind, r.reason, r.actor_login, r.policy_mode])).toEqual([
+          ["applied", null, "maya", "report"],
+          ["ignored", "role_too_low", "tom", "report"],
+          ["removed", null, null, "report"],
+        ]);
+        for (const run of api.state.checkRuns.filter((c) => c.name === "graft/policy")) {
+          expect(run.conclusion, run.head_sha).not.toBe("success");
+        }
       },
     );
   }
