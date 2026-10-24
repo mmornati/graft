@@ -123,10 +123,16 @@ On any no-go above, or on request. **The order matters**, because a `neutral` ch
 
 ### Emergency
 
-Graft is down, or every check is stuck `in_progress`:
+Graft is down, or every check is stuck `in_progress`. **For one repository** (the fast path):
 
 1. **Repo admin.** Restore the required reviewers, and remove `graft/policy` from the required checks.
-2. **Operator.** Roll back as above, or for every repository at once set `GRAFT_MODE_CEILING=report` and restart. Once every process runs the step 7 build, a rolling restart is safe (step 7, D2): the first new worker's start lowers every process.
+2. **Operator.** Roll back as above.
+
+**For every repository at once** (lowering the ceiling, slower): the ceiling turns `graft/policy` `neutral` on **every** enforcing repository, and `neutral` passes a required check, so a repository whose required reviewers were dropped (stage 3 step 5) would merge with no review.
+
+1. **Operator.** List every repository whose `repositories[].modes.policy.effective` is `enforce` (in the latest `pnpm graft gate report --phase 1 --installation <id> --since <day 0> --out <dir>`, or with `pnpm graft mode show --repo <owner/repo>` per repository).
+2. **Repo admin, on every one of them.** Restore "Require approvals" (and Code Owners review if it was used). Check each one off in the stage record.
+3. **Operator, only then.** Set `GRAFT_MODE_CEILING=report` and restart. Once every process runs the step 7 build, a rolling restart is safe (step 7, D2): the first new worker's start lowers every process. Finish the roll: an old-config worker that restarts during it stores `enforce` again until the next new worker start (step 7 review 1, finding 4). Then check `pnpm graft mode show` on each repository.
 
 ## Stage 4: enforce `guard_mode` (not before 14 days in stage 3)
 

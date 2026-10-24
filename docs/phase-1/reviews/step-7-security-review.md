@@ -6,7 +6,7 @@ Reviewer: the developer agent (Claude Code, model `claude-opus-5-5`).
 
 Scope: branch `claude/phase-1-step-7-build`, from `b6c9d04` (the step 7 spec, the last commit before any hardening, on top of the step 6 review 1 fixes of PR #42) to the hardening commits `3925002` (H1), `805d420` (H2), `f88a5c6` (H3), `24781be` (H4 to H7), `1efa878` (H9), `00a6d2a` (the Phase 1 gate, which also carries the CLI part of H8), `63b0c62` (H8) and `93a9149` (the D21 enforce sandbox). The areas are those of spec §5: the mutation guard and the client factory, the ceiling and the modes, break-glass, the revert tree and the revert job, the MCP endpoint and its one write, and the Phase 1 permissions.
 
-Every blocker and major is fixed. H1 to H9 are listed as findings 1 to 9 and are fixed with tests. Three minors and two nits remain, each accepted or deferred below with a reason; none loosens report mode, an approval or a refusal. A person still has to sign this verdict off before any repository leaves runbook stage 2 (HUMAN-TODO, step 7).
+Every blocker and major is fixed. H1 to H9 are listed as findings 1 to 9 and are fixed with tests. Step 7 review 1 found two more, listed as findings 13 (a permanent error after the revert's writes began was never settled) and 14 (D8 trusted the author of a `web-flow` commit); both are fixed, and the Q-MD-1 rolling-restart residual is corrected. Three minors and two nits remain, each accepted or deferred below with a reason; none loosens report mode, an approval or a refusal. A person still has to sign this verdict off before any repository leaves runbook stage 2 (HUMAN-TODO, step 7).
 
 ## What was checked
 
@@ -81,11 +81,11 @@ Every Graft hit is a row of `ROUTES` or a GET; the e2e runner's writes go throug
 
 **Q-MD-1.** With `S` the stored value and `E` a process's environment:
 - **Lower, old worker first** (old `enforce` processes keep running, a new `report` worker starts): the new worker stores `report`; every old process computes `min(enforce, report) = report` from its next request (I-CEIL-1, N-17 [max]).
-- **Lower, new worker first**: the same; the old worker's start, if it restarts later with `enforce`, cannot raise `S` above what the next new start stores, and until then computes `min` with the stored `report`.
+- **Lower, new worker first**: the same, until an old-config worker restarts. Its start stores its own `enforce` (`casServiceState` overwrites `S`), and every old process computes `enforce` again until the next new worker start or the end of the roll (corrected after step 7 review 1, finding 4: the first version said an old worker's start could not raise `S`).
 - **Raise, old worker first** (old `report` processes, a new `enforce` worker): the new worker stores `enforce`; old processes compute `min(report, enforce) = report` until they restart (I-CEIL-3). Safe direction.
 - **Raise, new worker first**: the same.
 - **A server with no worker started**: no row, the process's value (I-CEIL-2). No rollback can have happened.
-The residual: an old process that never restarts keeps `E` until a worker publishes a lower value.
+The residuals: an old process that never restarts keeps `E` until a worker publishes a lower value; and during a lowering roll, a restarted old-config worker undoes the lowering for old processes until the next new worker start or the end of the roll. Both are bounded by the roll; the runbook's emergency path restores required reviewers before any ceiling drop (finding 3 of review 1).
 
 **Q-MD-2.** The only writers of `repositories.policy_mode`, `guard_mode`, `mcp_write` are `mode set` (`src/bin/graft-ops.ts`, with a `mode_changes` row) and the transfer/re-add reset in `upsertRepositories` (`src/modules/installations/store.ts`, a `system` row). No label or PR text is read for a mode, and a `mode` key in `graft.yaml` stays `unknown_key` (I-MODE-2).
 
