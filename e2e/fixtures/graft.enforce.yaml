@@ -1,0 +1,5 @@
+version: 1
+rules:
+  - name: e2e-enforce
+    match: { paths: ["graft-e2e/**"] }
+    require: { humans: 1 }

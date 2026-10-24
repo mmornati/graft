@@ -313,10 +313,12 @@ describe("dry run", () => {
       env.deps.ops = realOps;
     }
     expect(env.world.writes()).toEqual([]);
-    expect(calls).toEqual([]);
+    // Phase 1 step 7 (D21): the preflight's one read-only call, the sandbox's modes.
+    expect(calls).toEqual([["mode", "show", "--repo", "mmornati/graft-sandbox", "--json"]]);
     const text = env.out.join("");
     const printedActs = text.split("\n").filter((l) => l.startsWith("  act ")).length;
-    const planned = SCENARIOS.flatMap((def) =>
+    // The report sandbox's suite: e01 runs on an enforce sandbox only.
+    const planned = SCENARIOS.filter((def) => def.sandboxMode !== "enforce").flatMap((def) =>
       def
         .plan({
           runId: "e2e-20261015-abcdef",

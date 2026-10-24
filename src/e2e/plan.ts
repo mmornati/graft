@@ -47,6 +47,8 @@ export type Act =
   | { act: "react"; client: ActClient; comment: Ref; content: "+1" | "-1" }
   | { act: "requestReviewers"; client: ActClient; pr: Ref; reviewers: Or<string>[] }
   | { act: "review"; client: ActClient; pr: Ref; event: "APPROVE" | "COMMENT" }
+  /** Phase 1 step 7 (D21): the actor adds one label to a run PR (e01's break-glass). */
+  | { act: "addLabel"; client: "actor"; pr: Ref; label: string }
   | { act: "pushMain"; fixture: string; message: string; skipIfSame?: boolean }
   | { act: "redeliver"; delivery: Ref }
   | { act: "fork"; client: "outsider" }

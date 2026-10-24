@@ -12,7 +12,7 @@ import { sql } from "kysely";
 import { applyCronSchedules } from "../../src/app/crons.js";
 import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
 import { createLogger } from "../../src/core/logger.js";
-import { createDb } from "../../src/db/client.js";
+import { createDb, type Db } from "../../src/db/client.js";
 import { MARKER_PATH } from "../../src/e2e/guard.js";
 import { sandboxFiles } from "../../src/e2e/setup.js";
 import type { E2eDeps } from "../../src/e2e/types.js";
@@ -22,6 +22,7 @@ import { buildServer } from "../../src/http/server.js";
 import { agreeingVerifier, createFakeLlm, type FakeReply } from "../../src/llm/fake.js";
 import { unconfiguredLlm } from "../../src/llm/index.js";
 import type { LlmClient, LlmRequest } from "../../src/llm/types.js";
+import { mutationGate } from "../../src/modules/modes/index.js";
 import { startWorker } from "../../src/queue/worker.js";
 import { createTestApp, jobContext, postRaw, type TestApp } from "./app.js";
 import { TEST_PRIVATE_KEY, testConfig } from "./config.js";
@@ -155,7 +156,15 @@ export async function sandboxSeed(): Promise<Map<string, string>> {
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function createLiveEnv(
-  o: { llm?: LlmChoice; slug?: string | null; extraConfig?: Record<string, string> } = {},
+  o: {
+    llm?: LlmChoice;
+    slug?: string | null;
+    extraConfig?: Record<string, string>;
+    /** Phase 1 step 7 (D21): Graft's writes go through the real mode gate (enforce sandbox). */
+    realGate?: boolean;
+    /** Another repository root (its `e2e/sandboxes.json` and fixtures). */
+    rootDir?: string;
+  } = {},
 ): Promise<LiveEnv> {
   let logged = "";
   const stream = new Writable({
@@ -182,6 +191,7 @@ export async function createLiveEnv(
   let current: LlmClient = o.llm === "none" ? unconfiguredLlm() : fakeModel();
   const llm: LlmClient = { complete: (r) => current.complete(r) };
   const holder: { world: FakeGitHubWorld } = { world: undefined as unknown as FakeGitHubWorld };
+  const dbHolder: { db: Db | undefined } = { db: undefined };
   const worldFetch: typeof fetch = (input, init) => holder.world.fetch(input, init);
 
   const t = await createTestApp({
@@ -194,10 +204,11 @@ export async function createLiveEnv(
       appId: config.githubAppId,
       privateKey: TEST_PRIVATE_KEY,
       baseUrl: "https://api.github.com",
-      gate: refuseAllGate,
+      gate: o.realGate ? (q) => mutationGate(dbHolder.db as Db, config)(q) : refuseAllGate,
       fetch: worldFetch,
     }),
   });
+  dbHolder.db = t.db;
   await applyCronSchedules(t.deps.queue, config);
   const server = await buildServer(t.deps);
   await startWorker(t.deps.queue, t.deps.registry, jobContext(t), {
@@ -275,7 +286,7 @@ export async function createLiveEnv(
     },
     outDir,
     isTty: false,
-    rootDir: ROOT,
+    rootDir: o.rootDir ?? ROOT,
     mutationSpacingMs: 0,
     target: "offline",
     pid: process.pid,

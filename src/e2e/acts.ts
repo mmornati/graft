@@ -233,6 +233,16 @@ export async function performAct(sx: StepCtx, raw: Act): Promise<unknown> {
       });
       return { id: data.id };
     }
+    case "addLabel": {
+      const pr = a.pr as unknown as PrResult;
+      await run.clients.actor.rest.issues.addLabels({
+        owner: run.owner,
+        repo: run.repo,
+        issue_number: pr.number,
+        labels: [a.label],
+      });
+      return { ok: true };
+    }
     case "pushMain": {
       const t = target(sx, "actor");
       const text = run.fixtures.get(a.fixture);
