@@ -1901,6 +1901,32 @@ describe("guard revert: enforce", () => {
     expect(await countOpenReverts(t.db, REPO_ID, "00000000-0000-0000-0000-000000000000")).toBe(0);
   });
 
+  it("I-REV-10f crash after POST …/pulls, then a permanent error: the PR found by head is adopted, counted by the cap, no comment (step 7 review 2, finding B)", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/pulls$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    expect(await eventById(id)).toMatchObject({ revert_pr_number: null, revert_outcome: null });
+    await settleFailedRun(
+      data,
+      ctx(ENFORCE, RETRYING),
+      new PermanentJobError("forbidden", "github_403"),
+    );
+    expect(await eventById(id)).toMatchObject({
+      status: "revert_opened",
+      revert_outcome: "opened",
+      revert_pr_number: REVERT_PR,
+      comment_id: null,
+    });
+    expect(comments()).toEqual([]);
+    expect(await countOpenReverts(t.db, REPO_ID, "00000000-0000-0000-0000-000000000000")).toBe(1);
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+  });
+
   it("I-REV-10e detected, then the clock passes GRAFT_GUARD_REVERT_MAX_AGE_HOURS, then confirmed now: plans and opens, not stale (step 5 review 2, finding B)", async () => {
     await enforceMode();
     history(3);

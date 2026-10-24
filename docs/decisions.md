@@ -992,6 +992,19 @@ Finding → fix (review: `docs/phase-1/reviews/step-7-review-1.md`, CHANGES REQU
 
 **Verification.** `pnpm lint`, `pnpm typecheck` and `pnpm build` pass; `pnpm test` passes (113 files, 1,286 tests: I-REV-10f (two cases), the I-REV-10d lookup-failure variant and I-P1G-11 are new, the other cases extend existing tests); `pnpm eval:ci` exits 0 (`matchBaseline: 1`; its run directory was removed). The tests and mutations ran against a throwaway `postgres:18-alpine` (`graft-s7f1-pg`) on `127.0.0.1:55481`, removed afterwards; `pnpm db:up` was not run. On a scratch database `graft_s7f1_dod`: migrate applied `0001`..`0016`, rollback rolled back only `0016_phase1_gate`, migrate re-applied it. The equivalent mutations of the review (S11, S22, X31) still survive, as recorded there.
 
+### Review 2 fixes
+
+Findings from `docs/phase-1/reviews/step-7-review-2.md` (APPROVED, PR #48: two minors, four nits). Report mode is unchanged; the only source change is a comment.
+
+- **A. The orphan `graft-revert/` ref is never deleted** → the `settleBegunWrites` comment and security review finding 13 now say the ref is left in place, as before step 7: the branch is named after the event, a settled event never runs again, so no stale-branch rule reaches it. It has no PR, and a person can delete it; `graft guard list` shows the event as `error`. Review 1's own text is left as it was written.
+- **B. A permanent error that finds a PR had no pin** → a third **I-REV-10f** case: a crash after `POST …/pulls`, then `settleFailedRun` with a `PermanentJobError` (403): the PR is adopted (`revert_opened`, outcome `opened`), no comment, `countOpenReverts` 1, one `POST …/pulls`. **R4** (the `isRetryable(cause)` check moved before the lookup) is now killed by it, and by no other test.
+- **C. The spec no longer described the code** → spec D4 (a permanent error settles `error` with the comment), D8 (a `web-flow` committer is unverified) and U-FCT-1 amended as the review drafted. No decision changes, so no new spec review.
+- **D. Stale lines** → the security review's summary says one minor (finding 10) and two nits (11, 12) remain; its scope and "What was checked" name the re-check after the review 1 fixes; Q-MG-5 cites `guard/revert.ts:1134`. The HUMAN-TODO step 6 `trustProxy` line points at the step 7 `GRAFT_TRUST_PROXY` item.
+- **E. The deployment-wide emergency path depended on Graft** → its step 1 takes the repositories from the stage record first, and cross-checks with `gate report` per installation when the database is up; one sentence says that if Graft cannot come back up, the per-repository path (removing `graft/policy` from the required checks) is the only way to unblock merges.
+- **F. The stage 6 `web-flow` check** → kept, as recommended rather than required: the code already fails closed, so the HUMAN-TODO item is now "before the `web-flow` rule is relaxed (recommended before runbook stage 6)".
+
+**Verification.** `pnpm lint`, `pnpm typecheck`, `pnpm test` (113 files, 1,287 tests) and `pnpm build` pass against a throwaway `postgres:18-alpine` (`graft-s7f-pg`) on `127.0.0.1:55481`, removed afterwards. R4 was applied alone and `guard-revert.test.ts` run: only the new I-REV-10f case fails; the file was restored.
+
 ## Verifier file context and the unverifiable verdict (intent-v2)
 
 The verifier saw only GitHub's patches, which carry three lines of context per hunk. A card that said "scrolling does nothing during a journal replay" was marked unsupported because the diff added `if (state.replaying) return;` but not the unchanged lines that set the flag, so the card showed "the verifier disagrees" and the risk was raised to `logic` for a correct card.

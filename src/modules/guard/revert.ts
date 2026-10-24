@@ -488,7 +488,9 @@ async function findPr(
  * permanent error (a 422, 404 or 403) would fail again on every resumed run, hold a cap slot and
  * never be reported, so it looks the PR up once: a PR found is adopted, and otherwise (no PR, or
  * the lookup fails) this returns null and the caller settles `error` with a comment, as before
- * step 7. The ref left behind is deleted by the stale-branch rule of a later run.
+ * step 7. The ref is left in place, as before step 7: a settled event never runs again, so no
+ * stale-branch rule reaches it. It has no PR, and a person can delete it; `graft guard list` shows
+ * the event as `error` (step 7 review 2, finding A).
  * Returns null when the event's writes had not begun (the caller settles as before).
  */
 async function settleBegunWrites(
