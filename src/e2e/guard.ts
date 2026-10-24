@@ -37,6 +37,11 @@ export const sandboxEntrySchema = z.object({
   source: repoName,
   visibility: z.enum(["private", "public"]),
   defaultBranch: z.string().min(1).max(100),
+  /**
+   * Phase 1 step 7 (D21): an `enforce` sandbox runs only `e01` against `policy_mode: enforce`.
+   * The runner never changes a mode: the human sets it, and the preflight checks it.
+   */
+  mode: z.enum(["report", "enforce"]).default("report"),
 });
 export type SandboxEntry = z.infer<typeof sandboxEntrySchema>;
 
@@ -287,6 +292,10 @@ function outsiderMayUse(
     if (method === "POST" && rest === "/pulls") return true;
     if (ctx.visibility === "public") return method === "POST" && rest === "/forks";
     if (method === "POST" && /^\/pulls\/\d+\/requested_reviewers$/.test(rest)) return true;
+    // Phase 1 step 7 (D21, e01 b): the outsider approves a run PR; no other review event.
+    if (method === "POST" && /^\/pulls\/\d+\/reviews$/.test(rest)) {
+      return (body as { event?: unknown } | undefined)?.event === "APPROVE";
+    }
   }
   if (where === "fork" && method === "POST" && rest === "/merge-upstream") return true;
   if (where === "fork" || ctx.visibility === "private") {

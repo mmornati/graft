@@ -184,6 +184,20 @@ export async function opensInLastHour(ex: Executor, repositoryId: number): Promi
 }
 
 /**
+ * Phase 1 step 7 (D9 b): every claim older than an hour, in every repository. A crashed claim
+ * holds its slot for an hour; this lets the daily rollup drop it even in a repository where no
+ * later claim comes. PR rows are never touched. Returns how many claims were deleted.
+ */
+export async function purgeStaleClaims(ex: Executor): Promise<number> {
+  const res = await ex
+    .deleteFrom("mcp_changes")
+    .where("pr_number", "is", null)
+    .where("created_at", "<", sql<Date>`now() - interval '1 hour'`)
+    .executeTakeFirst();
+  return Number(res.numDeletedRows ?? 0);
+}
+
+/**
  * D9 (c) under concurrent calls (review 1, finding 7): count the rolling hour and claim a slot in
  * one short transaction holding the repository row lock, as `createTokenRow` does. The claim is an
  * `mcp_changes` row with no PR number, so every process counts it. No GitHub call runs inside the

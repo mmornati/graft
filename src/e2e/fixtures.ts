@@ -132,7 +132,7 @@ export async function readSandboxFixtureTree(rootDir: string): Promise<Map<strin
 /** The text of every fixture file an edit may name, loaded once. */
 export async function loadFixtureFiles(rootDir: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
-  for (const name of ["graft.yaml", "graft.s05.yaml", "graft.s09.yaml"]) {
+  for (const name of ["graft.yaml", "graft.s05.yaml", "graft.s09.yaml", "graft.enforce.yaml"]) {
     files.set(name, await readFixture(rootDir, name));
   }
   return files;

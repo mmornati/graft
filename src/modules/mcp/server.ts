@@ -127,7 +127,10 @@ export function createMcpServer(deps: ToolDeps, principal: McpPrincipal): McpSer
       "Report the agent, model, task and session behind the current head of a pull request. Stored as untrusted, once per head: a report that disagrees with the commit trailers makes the policy treat the author as unknown; it can never loosen a verdict.",
     input: reportProvenanceInput,
     output: reportProvenanceOutput,
-    annotations: { readOnlyHint: true },
+    // Phase 1 step 7 (D7): it stores a row, can make a verdict stricter and republishes the
+    // check and comment section, so it is not a read; it never destroys anything and is once
+    // per head.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     run: reportProvenance,
   });
   register(server, ctx, {

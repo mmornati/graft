@@ -63,6 +63,73 @@ export async function inv1(ctx: RunCtx, prNumbers: readonly number[]): Promise<I
 }
 
 // ---------------------------------------------------------------------------------------------
+// INV-1E: an enforce sandbox (Phase 1 step 7, D21)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Replaces INV-1 for an `enforce` sandbox: every Graft check on the current head of every open run
+ * PR is completed; `graft/provenance` and `graft/intent` are `neutral`; `graft/policy` is `success`
+ * or `failure`, equal to the scenario's last expectation for that PR (a PR with no expectation
+ * fails: the policy check must have been judged).
+ */
+export function evaluateInv1E(
+  perPr: readonly { number: number; checks: CheckObs[]; expected: string | undefined }[],
+): InvariantResult {
+  const problems: string[] = [];
+  for (const pr of perPr) {
+    const names = new Set(pr.checks.map((c) => c.name));
+    const missing = GRAFT_CHECKS.filter((n) => !names.has(n));
+    if (missing.length > 0) problems.push(`PR #${pr.number}: missing ${missing.join(", ")}`);
+    for (const c of pr.checks) {
+      if (c.status !== "completed") {
+        problems.push(`PR #${pr.number}: ${c.name} is ${c.status}`);
+        continue;
+      }
+      if (c.name === POLICY_CHECK) {
+        if (c.conclusion !== "success" && c.conclusion !== "failure") {
+          problems.push(
+            `PR #${pr.number}: ${c.name} is ${c.conclusion ?? "none"}, not success or failure`,
+          );
+        } else if (c.conclusion !== pr.expected) {
+          problems.push(
+            `PR #${pr.number}: ${c.name} is ${c.conclusion}, the scenario expected ${pr.expected ?? "nothing"}`,
+          );
+        }
+      } else if (c.conclusion !== "neutral") {
+        problems.push(`PR #${pr.number}: ${c.name} is ${c.conclusion ?? "none"}, not neutral`);
+      }
+    }
+  }
+  return problems.length === 0
+    ? ok("INV-1E", `${perPr.length} open PRs: checks completed, policy as expected, others neutral`)
+    : bad("INV-1E", problems.join("; "));
+}
+
+const POLICY_CHECK = GRAFT_CHECKS[2];
+
+export async function inv1e(
+  ctx: RunCtx,
+  prNumbers: readonly number[],
+  expected: Readonly<Record<string, string>>,
+): Promise<InvariantResult> {
+  const perPr: { number: number; checks: CheckObs[]; expected: string | undefined }[] = [];
+  for (const n of prNumbers) {
+    const { data: pull } = await ctx.actorOctokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: n,
+    });
+    if (pull.state !== "open") continue;
+    perPr.push({
+      number: n,
+      checks: await graftChecks(ctx, pull.head.sha),
+      expected: expected[String(n)],
+    });
+  }
+  return evaluateInv1E(perPr);
+}
+
+// ---------------------------------------------------------------------------------------------
 // INV-2: one Graft comment per PR
 // ---------------------------------------------------------------------------------------------
 
@@ -276,18 +343,27 @@ export async function inv3(
 // INV-4: pilot doctor
 // ---------------------------------------------------------------------------------------------
 
-export function allowedDoctorWarns(mode: LlmMode): Set<string> {
-  return new Set(mode === "none" ? ["rollup", "feedback", "cards"] : ["rollup", "feedback"]);
+export function allowedDoctorWarns(
+  mode: LlmMode,
+  sandboxMode: "report" | "enforce" = "report",
+): Set<string> {
+  const allowed = new Set(
+    mode === "none" ? ["rollup", "feedback", "cards"] : ["rollup", "feedback"],
+  );
+  // Phase 1 step 7 (D21): e01 applies a break-glass on purpose; the doctor lists every use.
+  if (sandboxMode === "enforce") allowed.add("break_glass");
+  return allowed;
 }
 
 export function evaluateInv4(
   doctor: { code: number; checks: { id: string; status: string }[] | null },
   mode: LlmMode,
+  sandboxMode: "report" | "enforce" = "report",
 ): InvariantResult {
   if (doctor.code !== 0 || doctor.checks === null) {
     return bad("INV-4", `pilot doctor exited ${doctor.code}`);
   }
-  const allowed = allowedDoctorWarns(mode);
+  const allowed = allowedDoctorWarns(mode, sandboxMode);
   const fails = doctor.checks.filter((c) => c.status === "FAIL").map((c) => c.id);
   const warns = doctor.checks
     .filter((c) => c.status === "WARN" && !allowed.has(c.id))
@@ -311,7 +387,7 @@ export async function inv4(ctx: RunCtx, mode: LlmMode): Promise<InvariantResult>
   } catch {
     checks = null;
   }
-  return evaluateInv4({ code: res.code, checks }, mode);
+  return evaluateInv4({ code: res.code, checks }, mode, ctx.sandbox.mode);
 }
 
 // ---------------------------------------------------------------------------------------------

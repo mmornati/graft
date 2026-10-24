@@ -59,6 +59,25 @@ pnpm graft e2e run [--interactive] [--capture] \
 
 The runner asks you to type the sandbox name (or pass `--confirm mmornati/graft-sandbox`). With `--interactive` it also asks you to click **Card is wrong** (as the outsider) and **Card is accurate** (as the actor) on the `graft/intent` check, and to say whether you see the buttons. `--llm none` forces the no-model mode, `--wait-cron` waits for the real 15-minute poll (A04; **needed to tick the `s3-outputs` item**, so do one run with `--interactive --wait-cron`, about 16 minutes longer), `--with-source-baseline` adds b2, `--scenario s03` runs one scenario and what it needs, `--timeout-scale 2` doubles every timeout.
 
+### The enforce sandbox (Phase 1 step 7, D21)
+
+One scenario, `e01`, checks `policy_mode: enforce` end to end. It runs only against a sandbox whose entry in `e2e/sandboxes.json` has `"mode": "enforce"` (the default is `"report"`), and nothing else runs there: `s01` to `s10`, `b1` and `b2` refuse an enforce sandbox, and `e01` refuses a report one (exit 2). It needs the outsider (a write collaborator of a private sandbox), else it is skipped.
+
+**The runner never changes a mode.** You set it, and the preflight checks it with the in-process, read-only `pnpm graft mode show --repo <sandbox> --json`:
+
+```sh
+# GRAFT_MODE_CEILING=enforce on every process, then restart them
+pnpm graft mode set --repo <sandbox> --policy enforce --reason "e2e enforce sandbox"
+pnpm graft e2e setup --sandbox <sandbox> --yes    # writes e2e/fixtures/graft.enforce.yaml as main:graft.yaml
+pnpm graft e2e run --sandbox <sandbox>
+```
+
+An enforce sandbox must have the worker's ceiling `enforce`, `policy_mode` effective `enforce`, `guard_mode` requested `report` and `mcp_write` `off`; a report sandbox must request report everywhere. Otherwise the preflight refuses (check `modes`) and prints the command to run. Its `graft.yaml` is `e2e/fixtures/graft.enforce.yaml`: one rule, `graft-e2e/**` requires one human approval, no team.
+
+`e01`: (a) an agent commit in `graft-e2e/` and its PR → `graft/policy` `failure`; (b) the outsider approves → `success`; (c) the actor pushes a second commit → `failure` (stale approval); (d) the actor adds `graft:break-glass` → `success`, and `pnpm graft audit list --repo <sandbox>` (in process, read-only) shows an `applied` row; (e) the actor pushes again → `failure`. Each step waits for the check on the new head. **INV-1E** replaces INV-1: every Graft check on the current head of each open run PR is completed, `graft/provenance` and `graft/intent` are `neutral`, and `graft/policy` is `success` or `failure`, as the scenario last expected. Afterwards roll the sandbox back: `pnpm graft mode set --repo <sandbox> --policy report --reason "e2e done"`.
+
+Guard and MCP enforce scenarios are not built: the sandbox has no CI by design, and MCP needs a token the runner must not hold. They stay manual checks in [HUMAN-TODO](../phase-1/HUMAN-TODO.md).
+
 ## 8. Read the report
 
 `e2e-runs/<runId>/report.md` has, in order: the header (mode, sandbox, Graft commit, duration, cost against the limit), the summary table, one section per scenario with an expected-versus-observed table (kinds: **system** always fails, **model** fails unless `--lenient-model`, **soft** only warns) and its invariants, the assumptions table, the sentinels, the HUMAN-TODO items that can be ticked, what was skipped, and one line of next steps per failure type. `report.json` is the same in a stable schema. `--capture` also saves redacted API exchanges and webhook payloads under `capture/`.

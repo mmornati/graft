@@ -61,6 +61,11 @@ export interface ScenarioDef {
   requiresOutsider?: boolean;
   /** Skipped when the LLM mode is none. */
   requiresLiveLlm?: boolean;
+  /**
+   * Phase 1 step 7 (D21): the sandbox mode the scenario runs against (default `report`). An
+   * `enforce` scenario never runs on a `report` sandbox, nor the reverse.
+   */
+  sandboxMode?: "report" | "enforce";
   /** Model runs the scenario is expected to cause (live mode), for the cost bound. */
   modelRuns: number;
   plan(pc: PlanContext): Step[];

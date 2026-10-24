@@ -17,6 +17,11 @@ export interface RepositoryModeRow {
   /** null: never read. */
   permissions: Record<string, PermissionLevel> | null;
   permissionsReadAt: Date | null;
+  /**
+   * Phase 1 step 7 (D2): `service_state('mode_ceiling')`, read in the same query; null when no
+   * worker has stored one. Kept raw: `effectiveCeiling` turns an unknown value into `report`.
+   */
+  storedCeiling: string | null;
 }
 
 function toRow(r: {
@@ -31,6 +36,7 @@ function toRow(r: {
   deleted_at: Date | null;
   permissions: Record<string, PermissionLevel>;
   permissions_read_at: Date | null;
+  stored_ceiling: string | null;
 }): RepositoryModeRow {
   return {
     repositoryId: r.id,
@@ -41,6 +47,7 @@ function toRow(r: {
     installationActive: r.suspended_at === null && r.deleted_at === null,
     permissions: r.permissions_read_at === null ? null : r.permissions,
     permissionsReadAt: r.permissions_read_at,
+    storedCeiling: r.stored_ceiling,
   };
 }
 
@@ -56,6 +63,10 @@ const COLUMNS = [
   "i.deleted_at",
   "i.permissions",
   "i.permissions_read_at",
+  // D2: a scalar subquery, so the mode and the worker's ceiling are read in one statement.
+  sql<string | null>`(select ss.value from service_state ss where ss.key = 'mode_ceiling')`.as(
+    "stored_ceiling",
+  ),
 ] as const;
 
 function base(ex: Executor) {

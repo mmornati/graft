@@ -15,6 +15,7 @@ import { createTestApp, jobContext, type TestApp } from "../helpers/app.js";
 import { testConfig } from "../helpers/config.js";
 import { truncateAll } from "../helpers/db.js";
 import { INSTALLATION_ID, REPO_ID } from "../helpers/github-builders.js";
+import { createTestToken } from "../helpers/mcp-client.js";
 import {
   addCard,
   addChange,
@@ -366,6 +367,30 @@ describe("daily rollup", () => {
     await t.db.updateTable("installations").set({ deleted_at: new Date() }).execute();
     await runRollup(ctx);
     expect(await t.db.selectFrom("metrics_daily").selectAll().execute()).toEqual([]);
+  });
+
+  it("I-ROLL-5 the rollup deletes a claim aged 61 minutes, keeps one aged 59 minutes and every PR row (Phase 1 step 7, D9 b)", async () => {
+    const { id: tokenId } = await createTestToken(t.db, { repositoryId: REPO_ID });
+    const ago = (min: number) => new Date(Date.now() - min * 60_000);
+    const add = (prNumber: number | null, createdAt: Date) =>
+      t.db
+        .insertInto("mcp_changes")
+        .values({
+          repository_id: REPO_ID,
+          token_id: tokenId,
+          pr_number: prNumber,
+          head_sha: prNumber === null ? null : "a".repeat(40),
+          created_at: createdAt,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+    const old = await add(null, ago(61));
+    const young = await add(null, ago(59));
+    const pr = await add(7, ago(600));
+    await runRollup({ ...jobContext(t), clock: { now: () => D("2026-10-14", "03:00:00") } });
+    const ids = (await t.db.selectFrom("mcp_changes").select("id").execute()).map((r) => r.id);
+    expect(ids).not.toContain(old.id);
+    expect(ids.sort()).toEqual([young.id, pr.id].sort());
   });
 
   it("I-ROLL-4 the worker schedules the rollup cron; off unschedules it", async () => {

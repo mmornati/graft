@@ -1,6 +1,7 @@
 import { b1 } from "./b1.js";
 import { b2 } from "./b2.js";
 import type { ScenarioDef } from "./common.js";
+import { e01 } from "./e01.js";
 import { s01 } from "./s01.js";
 import { s02 } from "./s02.js";
 import { s03 } from "./s03.js";
@@ -12,7 +13,7 @@ import { s08 } from "./s08.js";
 import { s09 } from "./s09.js";
 import { s10 } from "./s10.js";
 
-/** Fixed order: s01..s10, b1, then b2 on request. */
+/** Fixed order: s01..s10, b1, then b2 on request; e01 on an enforce sandbox only. */
 export const SCENARIOS: readonly ScenarioDef[] = [
   s01,
   s02,
@@ -26,6 +27,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   s10,
   b1,
   b2,
+  e01,
 ];
 
 export const SCENARIO_IDS: readonly string[] = SCENARIOS.map((s) => s.id);
@@ -36,11 +38,26 @@ export function scenarioById(id: string): ScenarioDef {
   return s;
 }
 
+/** Phase 1 step 7 (D21): a scenario asked for against a sandbox of the other mode. */
+export class ScenarioModeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScenarioModeError";
+  }
+}
+
+export const scenarioMode = (s: ScenarioDef): "report" | "enforce" => s.sandboxMode ?? "report";
+
 /**
  * The scenarios to run, in order: the selection plus its `needs` transitively (D19). With no
- * selection, s01..s10 and b1 (b2 only when `withB2`).
+ * selection, s01..s10 and b1 (b2 only when `withB2`) on a report sandbox, and e01 alone on an
+ * enforce sandbox (Phase 1 step 7, D21). A scenario of the other mode is refused.
  */
-export function selectScenarios(selected: readonly string[], withB2: boolean): ScenarioDef[] {
+export function selectScenarios(
+  selected: readonly string[],
+  withB2: boolean,
+  mode: "report" | "enforce" = "report",
+): ScenarioDef[] {
   const wanted = new Set<string>();
   const add = (id: string) => {
     if (wanted.has(id)) return;
@@ -48,10 +65,19 @@ export function selectScenarios(selected: readonly string[], withB2: boolean): S
     for (const n of scenarioById(id).needs) add(n);
   };
   if (selected.length === 0) {
-    for (const s of SCENARIOS) if (s.id !== "b2") add(s.id);
+    for (const s of SCENARIOS) {
+      if (s.id !== "b2" && scenarioMode(s) === mode) add(s.id);
+    }
   } else {
     for (const id of selected) add(id);
   }
   if (withB2) add("b2");
-  return SCENARIOS.filter((s) => wanted.has(s.id));
+  const out = SCENARIOS.filter((s) => wanted.has(s.id));
+  const wrong = out.filter((s) => scenarioMode(s) !== mode);
+  if (wrong.length > 0) {
+    throw new ScenarioModeError(
+      `${wrong.map((s) => s.id).join(", ")} cannot run against a ${mode} sandbox (they need a ${mode === "report" ? "enforce" : "report"} one)`,
+    );
+  }
+  return out;
 }

@@ -11,9 +11,13 @@
  * `policy` feature client (step 2), the guard opens exactly one revert pull request through
  * the `guard` feature client (step 5), and MCP's `open_change` opens one pull request through the
  * `mcp` feature client (step 6).
+ *
+ * Phase 1 step 7 (N-17, D2): both profiles run once more with `service_state('mode_ceiling')` at
+ * `report` while the process keeps its profile's ceiling: the old-worker case of a rolling restart
+ * that lowered the ceiling. Every scenario runs again and only N-17 is asserted on those runs.
  */
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it as vitestIt } from "vitest";
 import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
 import {
   classifyWrite,
@@ -80,6 +84,9 @@ const ACTIONS_APP = 15368;
 
 interface Profile {
   name: "default" | "max";
+  /** N-17: the ceiling a (new) worker stored; the process keeps `ceiling`. */
+  stored?: "report";
+  label: string;
   ceiling: "report" | "enforce";
   /** What the API reports for the installation. */
   permissions: Record<string, string>;
@@ -87,6 +94,7 @@ interface Profile {
 const PROFILES: Profile[] = [
   {
     name: "default",
+    label: "default",
     ceiling: "report",
     permissions: {
       metadata: "read",
@@ -100,6 +108,7 @@ const PROFILES: Profile[] = [
   },
   {
     name: "max",
+    label: "max",
     ceiling: "enforce",
     permissions: {
       metadata: "read",
@@ -112,8 +121,15 @@ const PROFILES: Profile[] = [
     },
   },
 ];
+// N-17: the same two profiles, with a worker that stored `report`.
+for (const p of [...PROFILES]) {
+  PROFILES.push({ ...p, stored: "report", label: `${p.name}, stored ceiling report` });
+}
 
-describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
+describe.each(PROFILES)("neutral regression suite, $label modes", (profile) => {
+  // The N-17 runs assert N-17 only: the other tests are not registered for them.
+  const it =
+    profile.stored === undefined ? vitestIt : ((() => undefined) as unknown as typeof vitestIt);
   let t: TestApp;
   let api: FakeGitHubApi;
   let server: Awaited<ReturnType<typeof buildServer>>;
@@ -208,6 +224,13 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       config: { GRAFT_MODE_CEILING: profile.ceiling, GRAFT_GUARD_OBSERVE_DELAY_SECONDS: "0" },
     });
     await truncateAll(t.db);
+    // N-17 (D2): a new worker stored `report`; this process still has its profile's ceiling.
+    if (profile.stored !== undefined) {
+      await t.db
+        .insertInto("service_state")
+        .values({ key: "mode_ceiling", value: profile.stored, updated_at: FIXED_NOW })
+        .execute();
+    }
     clearPolicyCache();
     api = createFakeGitHubApi();
     const real = mutationGate(t.db, config());
@@ -1192,4 +1215,34 @@ describe.each(PROFILES)("neutral regression suite, $name modes", (profile) => {
       expect(r.accept ?? "", where).not.toMatch(/diff|patch/);
     }
   });
+
+  if (profile.stored !== undefined) {
+    vitestIt(
+      `N-17 [${profile.name}] a worker stored report while this process has ${profile.ceiling}: every scenario's mutating requests are the Phase 0 set (neutral check runs, the managed comment, guard comments); no guard or mcp client, no gate question, no refusal`,
+      async () => {
+        await mcpScenario();
+        const all = writes().filter((r) => !r.path.endsWith("/access_tokens"));
+        expect(all.length).toBeGreaterThan(10);
+        for (const r of all) {
+          expect(["phase0", "auth"], `${r.method} ${r.path}`).toContain(
+            classifyWrite(r.method, r.path).kind,
+          );
+        }
+        for (const r of checkWrites()) expect(nonNeutral(r), JSON.stringify(r.body)).toBe(false);
+        // The guard commented its plan (report), and opened nothing.
+        const ev = await t.db.selectFrom("guard_events").selectAll().executeTakeFirstOrThrow();
+        expect(ev).toMatchObject({ revert_outcome: "planned", revert_pr_number: null });
+        expect(ev.guard_mode).toBe("report");
+        expect(mcp.results.open?.out).toEqual({ error: "mcp_write_off", detail: "ceiling" });
+        expect(featureClients).not.toContain("guard");
+        expect(featureClients).not.toContain("mcp");
+        expect(gateCalls).toEqual([]);
+        expect(refused.map((e) => e.message)).toEqual([]);
+        // Every stored verdict says report, and the policy check is neutral on every head.
+        const modes = await t.db.selectFrom("policy_verdicts").select("policy_mode").execute();
+        expect(new Set(modes.map((m) => m.policy_mode))).toEqual(new Set(["report"]));
+        expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
+      },
+    );
+  }
 });

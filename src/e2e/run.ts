@@ -18,13 +18,22 @@ import { mayStart, PRICING_VERIFIED_AT, runCostBoundUsd } from "./cost.js";
 import { executeSteps, printPlan, RUN_PRS_KEY } from "./executor.js";
 import { loadFixtureFiles } from "./fixtures.js";
 import { GuardRefusal, RUN_ID_RE } from "./guard.js";
-import { evaluateInv5, inv1, inv2, inv3, inv4, spendFacts as inv5Facts } from "./invariants.js";
+import {
+  evaluateInv5,
+  inv1,
+  inv1e,
+  inv2,
+  inv3,
+  inv4,
+  spendFacts as inv5Facts,
+} from "./invariants.js";
 import { Scope } from "./plan.js";
 import { Abort, openSession, type Session } from "./preflight.js";
 import { buildReport, scenarioFails, writeReport } from "./report.js";
 import type { InvariantResult, ScenarioResult, SkipReason } from "./report-schema.js";
 import type { PlanContext, ScenarioDef } from "./scenarios/common.js";
-import { selectScenarios } from "./scenarios/index.js";
+import { E01_EXPECTED_KEY } from "./scenarios/e01.js";
+import { ScenarioModeError, selectScenarios } from "./scenarios/index.js";
 import { addIdentityToken, describeError, SecretRegistry, safeIo } from "./secrets.js";
 import { newSentinels } from "./sentinels.js";
 import { loadState, newRunId, type RunState, runDirOf, saveState } from "./state.js";
@@ -96,7 +105,13 @@ export async function runInvariants(
     }
   };
   const results: InvariantResult[] = [];
-  results.push(await guarded("INV-1", () => inv1(run, prs)));
+  // Phase 1 step 7 (D21): an enforce sandbox replaces INV-1 with INV-1E.
+  if (run.sandbox.mode === "enforce") {
+    const expected = scope.get<Record<string, string>>(E01_EXPECTED_KEY) ?? {};
+    results.push(await guarded("INV-1E", () => inv1e(run, prs, expected)));
+  } else {
+    results.push(await guarded("INV-1", () => inv1(run, prs)));
+  }
   results.push(await guarded("INV-2", () => inv2(run, prs)));
   const sentinels = Object.values(state.sentinels).flatMap((s) => [s.T, s.B, s.C, s.D]);
   let hits: ReturnType<typeof classified> = [];
@@ -355,7 +370,13 @@ async function runWithSession(
 
   const existing = opts.runId ? await loadState(deps.outDir, runId) : null;
   const strong = s.config.llmModelStrong;
-  let selected = selectScenarios(opts.scenarios, opts.withSourceBaseline);
+  let selected: ReturnType<typeof selectScenarios>;
+  try {
+    selected = selectScenarios(opts.scenarios, opts.withSourceBaseline, s.sandbox.mode);
+  } catch (e) {
+    if (e instanceof ScenarioModeError) throw new Abort(2, e.message);
+    throw e;
+  }
   if (existing) {
     // Reuse the PRs of an earlier run: needs that already passed are not run again.
     const done = new Set(existing.scenarios.filter((x) => x.status === "pass").map((x) => x.id));

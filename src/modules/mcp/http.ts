@@ -111,7 +111,12 @@ export function mcpRoutes(deps: ToolDeps) {
       method: ["POST", "GET", "DELETE"],
       url: MCP_PATH,
       bodyLimit: MCP_BODY_LIMIT,
-      preHandler: [originCheck, authenticate, rateLimit],
+      // Phase 1 step 7 (D5): the Origin check and the token read headers only, so they run in
+      // `onRequest`, before Fastify parses or bounds the body: an unauthenticated request costs a
+      // header read (401, or 403 for a foreign origin, never 413 or 415). The per-token bucket
+      // stays after parsing.
+      onRequest: [originCheck, authenticate],
+      preHandler: [rateLimit],
       handler: serve,
     });
   };

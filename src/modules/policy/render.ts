@@ -94,6 +94,28 @@ export interface PolicyView {
   approvers?: ApproverFacts | null;
   /** Phase 1 step 3: the break-glass state of this head. Absent or null: nothing to say. */
   breakGlass?: BreakGlassView | null;
+  /**
+   * Phase 1 step 7 (D8): who an MCP-opened PR's approvals exclude. `commit_authors`: the commit
+   * authors and committers; the other values: everyone, with a line saying why. Absent or null:
+   * not an MCP-opened PR.
+   */
+  mcpExclusion?: McpExclusion | null;
+}
+
+export type McpExclusion = "commit_authors" | "too_many" | "no_author" | "unverified";
+
+/** D8 (§11): the line for each exclusion that makes every approval not count. */
+export const MCP_EXCLUSION_TEXT: Record<Exclude<McpExclusion, "commit_authors">, string> = {
+  unverified:
+    "Approvals do not count: this PR was opened through MCP and has commits that GitHub has not verified.",
+  too_many: "Approvals do not count: this PR was opened through MCP and has more than 250 commits.",
+  no_author:
+    "Approvals do not count: this PR was opened through MCP and has commits that GitHub cannot link to an account.",
+};
+
+function mcpExclusionLine(v: PolicyView): string | null {
+  const e = v.mcpExclusion;
+  return e === undefined || e === null || e === "commit_authors" ? null : MCP_EXCLUSION_TEXT[e];
 }
 
 export function viewOutcome(v: Pick<PolicyView, "state" | "verdict">): PolicyOutcome {
@@ -553,6 +575,8 @@ export function renderPolicySection(v: PolicyView): string {
   if (a && !(verdict.outcome === "would_approve" && a.current + a.stale + requested === 0)) {
     tail.push(approvalsLine(a, v.approvers));
   }
+  const exclusion = mcpExclusionLine(v);
+  if (exclusion !== null) tail.push(exclusion);
   tail.push(
     `Policy \`graft.yaml\` on ${base} at \`${short(v.commitSha)}\` · head \`${head}\` · ${footer(v)}`,
   );

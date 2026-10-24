@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { z } from "zod";
 import {
   type AnthropicFederation,
@@ -155,6 +156,41 @@ const originList = z
     { message: "must be comma-separated origins like https://app.example.com (no path)" },
   );
 
+/**
+ * Phase 1 step 7 (D6): one entry of `GRAFT_TRUST_PROXY`, an IPv4 or IPv6 address, or a CIDR range
+ * with a prefix the address family allows. `true`, hop counts and hostnames are not entries.
+ */
+export function validProxyEntry(entry: string): boolean {
+  const slash = entry.indexOf("/");
+  const addr = slash < 0 ? entry : entry.slice(0, slash);
+  const family = isIP(addr);
+  if (family === 0) return false;
+  if (slash < 0) return true;
+  const prefix = entry.slice(slash + 1);
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (family === 4 ? 32 : 128);
+}
+
+/** D6: comma-separated proxy addresses; a bad entry is named by its index, never its value. */
+const proxyList = z
+  .string()
+  .transform((v) =>
+    v
+      .split(",")
+      .map((x) => x.trim())
+      .filter((x) => x !== ""),
+  )
+  .superRefine((l, ctx) => {
+    l.forEach((entry, i) => {
+      if (!validProxyEntry(entry)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `entry ${i + 1} must be an IP address or a CIDR range`,
+        });
+      }
+    });
+  });
+
 const EnvSchema = z.object({
   NODE_ENV: withDefault(z.enum(["development", "test", "production"]), "development"),
   HOST: withDefault(z.string().min(1), "0.0.0.0"),
@@ -222,6 +258,7 @@ const EnvSchema = z.object({
   GRAFT_MCP_AUTH_FAILURES_PER_MINUTE: withDefault(intString(1, 600), "20"),
   GRAFT_MCP_OPEN_CHANGE_PER_HOUR: withDefault(intString(1, 100), "10"),
   GRAFT_MCP_MAX_TOKENS_PER_REPO: withDefault(intString(1, 50), "10"),
+  GRAFT_TRUST_PROXY: withDefault(proxyList, ""),
 });
 
 export interface Config {
@@ -328,6 +365,11 @@ export interface Config {
   readonly mcpOpenChangePerHour: number;
   /** Phase 1 step 6 (D11): active MCP tokens per repository. */
   readonly mcpMaxTokensPerRepo: number;
+  /**
+   * Phase 1 step 7 (D6): the proxies whose `X-Forwarded-For` is trusted (IPs or CIDR ranges).
+   * Empty: Fastify's `trustProxy` is off and `req.ip` is the connection's peer.
+   */
+  readonly trustProxy: readonly string[];
 }
 
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
@@ -417,7 +459,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     smeeUrl: d.SMEE_URL,
     agentLogins: Object.freeze([...d.GRAFT_AGENT_LOGINS]),
     agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
-    githubAppSlug: d.GITHUB_APP_SLUG,
+    // Phase 1 step 7 (D9 c): compared with `<slug>[bot]` logins, which GitHub lowercases.
+    githubAppSlug: d.GITHUB_APP_SLUG?.toLowerCase(),
     anthropicApiKey: d.ANTHROPIC_API_KEY,
     anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
     anthropicFederation: federationFrom(d),
@@ -456,5 +499,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     mcpAuthFailuresPerMinute: d.GRAFT_MCP_AUTH_FAILURES_PER_MINUTE,
     mcpOpenChangePerHour: d.GRAFT_MCP_OPEN_CHANGE_PER_HOUR,
     mcpMaxTokensPerRepo: d.GRAFT_MCP_MAX_TOKENS_PER_REPO,
+    trustProxy: Object.freeze([...d.GRAFT_TRUST_PROXY]),
   });
 }

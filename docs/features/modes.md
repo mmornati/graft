@@ -61,7 +61,11 @@ pnpm graft mode set --repo acme/payments --policy report --reason "rollback"
 
 The CLI only writes the request. The worker's `modes.apply` job (every minute by default, `GRAFT_MODE_APPLY_CRON`) picks it up and re-evaluates every open PR of the repository, so each `graft/policy` check is republished within about a minute plus the stagger of the fan-out (5 seconds per ten PRs, at most 100 PRs), without a webhook. Changing `GRAFT_MODE_CEILING` and restarting the worker does the same for every repository.
 
-**Lowering the ceiling needs a full stop, not a rolling restart.** Each worker trusts its own environment's ceiling. During a rolling deploy that lowers `GRAFT_MODE_CEILING` to `report`, an old worker still running with `enforce` can publish a `success` or `failure` after the new worker has republished `neutral`, and that conclusion stays until the PR's next trigger. Stop every worker, then start the new ones.
+**Lowering the ceiling with a rolling restart (Phase 1 step 7, D2).** Every process computes with the lower of its own `GRAFT_MODE_CEILING` and the value the last worker start stored in `service_state('mode_ceiling')`, read in the same query as the repository's modes, at every request. So during a rolling deploy that lowers the ceiling to `report`, the first new worker's start stores `report`, and from the next request on every process, the old ones included, computes `report`: an old worker can no longer publish a `success` or `failure` after the rollback. A missing row means no worker ever started, so the process's own value applies. A raise is the safe direction: an old `report` process stays at `report` until it restarts.
+
+**Until every process runs the step 7 build**, lower `GRAFT_MODE_CEILING` with a full stop: an old build trusts its own environment only. **Residual:** an old process that never restarts keeps its environment's ceiling until a worker publishes a lower one.
+
+**Public repositories (step 7, D10).** `pnpm graft mode set --policy enforce` on a repository whose `private` flag is `false` is refused (exit 1, nothing written) unless `--public` is given: 21 or more change requests from outsiders block the check (fail closed), and Phase 1 pilots do not enforce on public repositories ([runbook](../pilots/phase-1-runbook.md), stage 2). `pnpm graft pilot doctor` warns (`public_enforce`) about a public repository that requests policy enforce. `guard_mode` and `mcp_write` are not affected.
 
 ## "Requested but not effective"
 

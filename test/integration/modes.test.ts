@@ -103,6 +103,7 @@ describe("modes: schema", () => {
   it("I-MODE-1 migration 0008 down removes exactly what it added, then up restores it", async () => {
     await truncateAll(t.db);
     // Steps 2 to 5's migrations (and step 3 review 1's) sit on top of 0008.
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -130,6 +131,7 @@ describe("modes: schema", () => {
         "0013_guard_revert",
         "0014_mcp",
         "0015_mcp_open_claims",
+        "0016_phase1_gate",
       ]);
     }
     await seedWorld(t.db);
@@ -1068,5 +1070,69 @@ describe("modes: Phase 1 step 2", () => {
     ceiling = "report";
     expect((await run("mode", "show", "--repo", FULL_NAME)).out).not.toContain(NOTE);
     expect((await doctor()).checks.find((c) => c.id === "teams")?.status).toBe("OK");
+  });
+});
+
+describe("modes: Phase 1 step 7, public repositories (D10)", () => {
+  const makePublic = () =>
+    t.db.updateTable("repositories").set({ private: false }).where("id", "=", REPO_ID).execute();
+
+  it("I-MODE-PUB-1 --policy enforce on a public repository → exit 1 and no row; with --public → the row; --guard enforce needs no flag", async () => {
+    await makePublic();
+    const refused = await set("--policy", "enforce", "--reason", "pilot");
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe(
+      "public repository: read the Phase 1 runbook, stage 3; pass --public to enforce anyway\n",
+    );
+    expect(refused.out).toBe("");
+    expect(await rows()).toEqual([]);
+    expect((await repoRow()).policy_mode).toBe("report");
+    // With other keys in the same call, nothing is written either.
+    expect((await set("--policy", "enforce", "--guard", "enforce", "--reason", "r")).code).toBe(1);
+    expect(await rows()).toEqual([]);
+
+    expect((await set("--guard", "enforce", "--reason", "pilot")).code).toBe(0);
+    expect((await rows()).map((r) => [r.key, r.to_value])).toEqual([["guard_mode", "enforce"]]);
+
+    const ok = await set("--policy", "enforce", "--reason", "pilot", "--public");
+    expect(ok.code).toBe(0);
+    expect((await rows()).map((r) => [r.key, r.to_value, r.reason])).toEqual([
+      ["guard_mode", "enforce", "pilot"],
+      ["policy_mode", "enforce", "pilot"],
+    ]);
+    expect((await repoRow()).policy_mode).toBe("enforce");
+    // --public changes nothing else: the reason is still required.
+    expect((await set("--policy", "report", "--public")).code).toBe(2);
+    // Back to report needs no flag.
+    expect((await set("--policy", "report", "--reason", "rollback")).code).toBe(0);
+  });
+
+  it("I-DOC-5 doctor: public_enforce WARN for a public repository requesting policy enforce; OK otherwise; exit 0", async () => {
+    await addDelivery(t.db, {
+      id: "dl-pub",
+      installationId: INSTALLATION_ID,
+      repositoryId: null,
+      at: new Date(FIXED_NOW.getTime() - 3_600_000),
+    });
+    const doctor = async () => {
+      const res = await run("pilot", "doctor", "--installation", String(INSTALLATION_ID), "--json");
+      return {
+        code: res.code,
+        check: (
+          JSON.parse(res.out).checks as { id: string; status: string; detail: string }[]
+        ).find((c) => c.id === "public_enforce"),
+      };
+    };
+    expect(await doctor()).toMatchObject({ code: 0, check: { status: "OK" } });
+    // A private repository enforcing: still OK.
+    expect((await set("--policy", "enforce", "--reason", "r")).code).toBe(0);
+    expect(await doctor()).toMatchObject({ code: 0, check: { status: "OK" } });
+    await makePublic();
+    const warned = await doctor();
+    expect(warned.code).toBe(0);
+    expect(warned.check).toMatchObject({
+      status: "WARN",
+      detail: expect.stringContaining(`public repository: ${FULL_NAME}`),
+    });
   });
 });

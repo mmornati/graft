@@ -1,16 +1,20 @@
 import type { Config } from "../../config/index.js";
 import type { Db } from "../../db/client.js";
 import type { MutationGate } from "../../github/mutation-guard.js";
-import { type EffectiveModes, effectiveModes } from "../../modes/index.js";
+import { type EffectiveModes, effectiveCeiling, effectiveModes } from "../../modes/index.js";
 import {
   findActiveRepositoryByName,
   getRepositoryModeRow,
   type RepositoryModeRow,
 } from "./store.js";
 
+/**
+ * The effective modes of one row. `ceiling` is this process's (or, for `mode show`, the resolved)
+ * ceiling; D2 lowers it to the worker's stored value read with the row.
+ */
 export function modesOf(row: RepositoryModeRow, ceiling: Config["modeCeiling"]): EffectiveModes {
   return effectiveModes({
-    ceiling,
+    ceiling: effectiveCeiling(ceiling, row.storedCeiling),
     requested: row.requested,
     permissions: row.permissions,
     installationActive: row.installationActive,

@@ -35,6 +35,7 @@ import {
   HEAD_SHA,
   INSTALLATION_ID,
   makeCommit,
+  makePull,
   makeReview,
   OWNER,
   PR_NUMBER,
@@ -308,6 +309,11 @@ afterEach(async () => {
   allRequests.push(...api.requests);
 });
 
+/** A pull request shaped like the fake's, for PRs a test adds by hand. */
+function makePullLike() {
+  return makePull({ number: 1, state: "open" });
+}
+
 /** PR 2 as the provenance and policy jobs leave it: a change, trailers, a verdict. */
 async function seedPr(cfg: Record<string, string> = {}): Promise<string> {
   const ctx = ctxFor(cfg);
@@ -354,6 +360,7 @@ describe("MCP server (Phase 1 step 6)", () => {
         .values({ repository_id: REPO_ID, token_id: tokenId, pr_number: 5, head_sha: null })
         .execute(),
     ).rejects.toThrow(/check constraint/);
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await t.db.selectFrom("mcp_changes").selectAll().execute()).toEqual([]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
@@ -367,7 +374,11 @@ describe("MCP server (Phase 1 step 6)", () => {
         .execute();
       expect(mcpRows).toEqual([]);
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0014_mcp", "0015_mcp_open_claims"]);
+      expect(await migrateToLatest(t.db)).toEqual([
+        "0014_mcp",
+        "0015_mcp_open_claims",
+        "0016_phase1_gate",
+      ]);
     }
     expect(await tables()).toEqual(["mcp_changes", "mcp_tokens"]);
     // The CHECKs: a hex hash, an 8-character prefix, expiry after creation, revoked iff by.
@@ -382,6 +393,48 @@ describe("MCP server (Phase 1 step 6)", () => {
         values (${REPO_ID}, 'x', ${"a".repeat(64)}, 'abcdEFGH', 'a', now() + interval '1 day', now())`.execute(
         t.db,
       ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("I-MCP-1b the 0015 down keeps PR rows: one PR row and one claim → exactly the PR row after, and pr_number and head_sha are NOT NULL again (step 6 review 2, finding A)", async () => {
+    const { id: tokenId } = await token();
+    await insertMcpChange(t.db, {
+      repositoryId: REPO_ID,
+      tokenId,
+      prNumber: PR_NUMBER,
+      headSha: HEAD_SHA,
+    });
+    await t.db
+      .insertInto("mcp_changes")
+      .values({ repository_id: REPO_ID, token_id: tokenId, pr_number: null, head_sha: null })
+      .execute();
+    const nullable = async () =>
+      (
+        await sql<{ c: string; n: string }>`select column_name as c, is_nullable as n
+          from information_schema.columns where table_name = 'mcp_changes'
+          and column_name in ('pr_number', 'head_sha') order by 1`.execute(t.db)
+      ).rows;
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
+    try {
+      const rows = await t.db.selectFrom("mcp_changes").selectAll().execute();
+      expect(rows.map((r) => [r.pr_number, r.head_sha])).toEqual([[PR_NUMBER, HEAD_SHA]]);
+      expect(await nullable()).toEqual([
+        { c: "head_sha", n: "NO" },
+        { c: "pr_number", n: "NO" },
+      ]);
+    } finally {
+      expect(await migrateToLatest(t.db)).toEqual(["0015_mcp_open_claims", "0016_phase1_gate"]);
+    }
+  });
+
+  it("I-MCP-1c a row with a null pr_number and a head is a CHECK violation (step 6 review 2, nit D)", async () => {
+    const { id: tokenId } = await token();
+    await expect(
+      t.db
+        .insertInto("mcp_changes")
+        .values({ repository_id: REPO_ID, token_id: tokenId, pr_number: null, head_sha: HEAD_SHA })
+        .execute(),
     ).rejects.toThrow(/check constraint/);
   });
 
@@ -434,14 +487,17 @@ describe("MCP server (Phase 1 step 6)", () => {
       expect(tool.outputSchema, tool.name).toMatchObject({ type: "object" });
     }
     const byName = new Map(tools.map((x) => [x.name, x]));
-    for (const read of ["get_status", "get_policy", "report_provenance"]) {
-      expect(byName.get(read)?.annotations, read).toMatchObject({ readOnlyHint: true });
+    // Phase 1 step 7 (D7, I-MCP-2 amended): the annotations of all four tools.
+    for (const read of ["get_status", "get_policy"]) {
+      expect(byName.get(read)?.annotations, read).toEqual({ readOnlyHint: true });
     }
-    expect(byName.get("open_change")?.annotations).toMatchObject({
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-    });
+    for (const write of ["report_provenance", "open_change"]) {
+      expect(byName.get(write)?.annotations, write).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    }
 
     const status = await call(c, "get_status", { repository: FULL, pr: PR_NUMBER });
     expect(status.isError).toBe(false);
@@ -743,6 +799,61 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(await injectPost(server2, LIST_TOOLS, auth, ip3)).toBe(200);
     expect(await injectPost(server2, LIST_TOOLS, bad, ip3), "the 20th failure").toBe(401);
     expect(await injectPost(server2, LIST_TOOLS, bad, ip3), "the 21st").toBe(429);
+  });
+
+  it("I-MCP-6b D5: unauthenticated text/plain → 401 (not 415), a 70 KiB body → 401 (not 413); a foreign Origin with text/plain → 403; with a valid token text/plain → 415 and 70 KiB → 413", async () => {
+    const { token: tok } = await token();
+    const auth = { authorization: `Bearer ${tok}` };
+    const url = await start({ GRAFT_MCP_ALLOWED_ORIGINS: "https://ok.example" });
+    const big = { ...LIST_TOOLS, pad: "x".repeat(70 * 1024) };
+    const plainAnon = await rawPost(url, "hello", { "content-type": "text/plain" });
+    expect(plainAnon.status).toBe(401);
+    expect(plainAnon.headers.get("www-authenticate")).toBe('Bearer realm="graft"');
+    expect((await rawPost(url, big, {})).status).toBe(401);
+    const bad = { authorization: `Bearer graft_mcp_${"C".repeat(43)}` };
+    expect((await rawPost(url, big, bad)).status).toBe(401);
+    expect(
+      (
+        await rawPost(url, "hello", {
+          "content-type": "text/plain",
+          origin: "https://evil.example",
+        })
+      ).status,
+    ).toBe(403);
+    expect((await rawPost(url, "hello", { ...auth, "content-type": "text/plain" })).status).toBe(
+      415,
+    );
+    expect((await rawPost(url, big, auth)).status).toBe(413);
+  });
+
+  it("I-MCP-7b D6: with GRAFT_TRUST_PROXY=127.0.0.1 two clients behind the proxy have separate failed-auth buckets; from an untrusted peer X-Forwarded-For is ignored", async () => {
+    await start({ GRAFT_TRUST_PROXY: "127.0.0.1" });
+    const server = servers.at(-1) as AppServer;
+    const bad = { authorization: `Bearer graft_mcp_${"D".repeat(43)}` };
+    const via = (xff: string) => ({ ...bad, "x-forwarded-for": xff });
+    for (let i = 0; i < 20; i++) {
+      expect(await injectPost(server, LIST_TOOLS, via("10.0.0.2"), "127.0.0.1"), `a ${i}`).toBe(
+        401,
+      );
+    }
+    expect(await injectPost(server, LIST_TOOLS, via("10.0.0.2"), "127.0.0.1")).toBe(429);
+    // The other client behind the same proxy is not locked out.
+    expect(await injectPost(server, LIST_TOOLS, via("10.0.0.3"), "127.0.0.1")).toBe(401);
+    // An untrusted peer: its X-Forwarded-For is ignored, so changing it does not escape.
+    for (let i = 0; i < 20; i++) {
+      expect(
+        await injectPost(server, LIST_TOOLS, via(`10.1.0.${i + 1}`), "192.0.2.9"),
+        `b ${i}`,
+      ).toBe(401);
+    }
+    expect(await injectPost(server, LIST_TOOLS, via("10.1.0.99"), "192.0.2.9")).toBe(429);
+    // Without the setting, the proxy's address is every client's address (the step 6 default).
+    await start();
+    const plain = servers.at(-1) as AppServer;
+    for (let i = 0; i < 20; i++) {
+      await injectPost(plain, LIST_TOOLS, via(`10.2.0.${i + 1}`), "127.0.0.1");
+    }
+    expect(await injectPost(plain, LIST_TOOLS, via("10.2.0.99"), "127.0.0.1")).toBe(429);
   });
 
   it("I-MCP-8 report_provenance: stale head, closed PR, invalid session URL; a disagreeing report makes the codex rule match uncertain (would_require); once per head; an agreeing report changes nothing; a new push allows a new report", async () => {
@@ -1105,6 +1216,69 @@ describe("MCP server (Phase 1 step 6)", () => {
     ).toEqual([n, 777]);
   });
 
+  it("I-MCP-11b a 422 whose lookup returns a renovate[bot] PR → existing: true, no row; a graft[bot] PR with the slug graft-dev → no row (step 6 review 2, nit E)", async () => {
+    await setMcpWrite("on");
+    const { token: tok } = await token();
+    const url = await start(ENFORCE_APP);
+    const c = await connect(url, tok);
+    const template = makePullLike();
+    let k = 0;
+    for (const login of ["renovate[bot]", "graft[bot]"]) {
+      k++;
+      const branch = `feat/race-${k}`;
+      const sha = fakeSha(0xa00 + k);
+      api.state.branches.set(branch, sha);
+      api.afterNext("GET", /\/pulls$/, async () => {
+        api.state.pulls.set(880 + k, {
+          ...template,
+          number: 880 + k,
+          node_id: `PR_fake88${k}`,
+          user: { id: 90 + k, login, type: "Bot" },
+          head: { sha, ref: branch },
+        });
+      });
+      const res = await call(c, "open_change", { repository: FULL, head: branch, title: "x" });
+      expect(res.out, login).toMatchObject({ prNumber: 880 + k, existing: true });
+      expect(await t.db.selectFrom("mcp_changes").selectAll().execute(), login).toEqual([]);
+    }
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(2);
+  });
+
+  it("I-MCP-12c a claim aged 59 minutes counts (the next call at the cap is rate_limited) and is not deleted (step 6 review 2, nit C)", async () => {
+    await setMcpWrite("on");
+    const { token: tok, id: tokenId } = await token();
+    const url = await start(ENFORCE);
+    const c = await connect(url, tok);
+    for (let i = 1; i <= 9; i++) {
+      await insertMcpChange(t.db, {
+        repositoryId: REPO_ID,
+        tokenId,
+        prNumber: 300 + i,
+        headSha: fakeSha(0x3000 + i),
+      });
+    }
+    await t.db
+      .insertInto("mcp_changes")
+      .values({
+        repository_id: REPO_ID,
+        token_id: tokenId,
+        pr_number: null,
+        head_sha: null,
+        created_at: new Date(Date.now() - 59 * 60_000),
+      })
+      .execute();
+    expect(
+      (await call(c, "open_change", { repository: FULL, head: "feat/mcp", title: "x" })).out,
+    ).toEqual({ error: "rate_limited" });
+    const claims = await t.db
+      .selectFrom("mcp_changes")
+      .select("id")
+      .where("pr_number", "is", null)
+      .execute();
+    expect(claims).toHaveLength(1);
+    expect(api.find("POST", /\/pulls$/)).toEqual([]);
+  });
+
   it("I-MCP-12 open_change refusals with no write: invalid_head (default branch, graft-revert/x), head_not_found, base_not_found (missing, or an existing graft-revert/ branch), the hourly cap (the 11th open, two server instances)", async () => {
     await setMcpWrite("on");
     const { token: tok } = await token();
@@ -1322,6 +1496,61 @@ describe("MCP server (Phase 1 step 6)", () => {
     expect(await approvals()).toMatchObject({ current: 0, truncated: true });
     // Logins only were read: the commits listing, never a commit's content.
     expect(api.find("GET", /\/pulls\/2\/commits$/).length).toBeGreaterThan(0);
+  });
+
+  it("I-MCP-14b D8: an MCP-opened PR with one unverified commit → no approval counts, mcpExclusion unverified and the line; all verified → bob counts, alice (author) does not", async () => {
+    const { id: tokenId } = await token();
+    await seedPr();
+    await insertMcpChange(t.db, {
+      repositoryId: REPO_ID,
+      tokenId,
+      prNumber: PR_NUMBER,
+      headSha: HEAD_SHA,
+    });
+    const commitOf = (verified: boolean | null, i: number) => {
+      const c = makeCommit(
+        fakeSha(0x700 + i),
+        commitMessage("Fix", undefined, [["Graft-Agent", "claude-code"]]),
+      );
+      return {
+        ...c,
+        commit:
+          verified === null ? c.commit : { ...c.commit, verification: { verified, reason: "x" } },
+        author: { login: "alice" },
+        committer: { login: "web-flow" },
+      };
+    };
+    for (const [login, id] of [
+      ["alice", 601],
+      ["bob", 602],
+    ] as const) {
+      api.state.permissions.set(login, { id, role: "write" });
+    }
+    api.state.reviews.set(PR_NUMBER, [
+      makeReview({ id: 1, login: "alice", userId: 601 }),
+      makeReview({ id: 2, login: "bob", userId: 602 }),
+    ]);
+    const ctx = ctxFor();
+    const LINE =
+      "Approvals do not count: this PR was opened through MCP and has commits that GitHub has not verified.";
+    const policySummary = () =>
+      String(api.state.checkRuns.filter((c) => c.name === "graft/policy").at(-1)?.output.summary);
+
+    api.state.commits.set(PR_NUMBER, [commitOf(true, 1), commitOf(false, 2)] as never);
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    let approvals = (await latestVerdict()).approvals as Record<string, unknown>;
+    expect(approvals).toMatchObject({ current: 0, mcpExclusion: "unverified" });
+    expect(policySummary()).toContain(LINE);
+
+    api.state.commits.set(PR_NUMBER, [commitOf(true, 1), commitOf(null, 2)] as never);
+    await evaluatePolicyJobRun({ ...POLICY_RUN, trigger: "review" }, ctx);
+    approvals = (await latestVerdict()).approvals as Record<string, unknown>;
+    expect(approvals).toMatchObject({
+      current: 1,
+      users: ["bob"],
+      mcpExclusion: "commit_authors",
+    });
+    expect(policySummary()).not.toContain("Approvals do not count");
   });
 
   it("I-MCP-15 transfer (D12): the repository moves to another installation → every active token revoked by system, and the next call → 401; a re-add revokes too", async () => {

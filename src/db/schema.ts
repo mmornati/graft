@@ -480,7 +480,8 @@ export interface ReviewerCheckDenialsTable {
 export interface ReviewTimeRunsTable {
   id: Generated<string>;
   repository_id: number;
-  period: "baseline" | "shadow";
+  /** Phase 1 step 7 (D16): `phase1` runs feed M2 of the Phase 1 gate. */
+  period: "baseline" | "shadow" | "phase1";
   from_date: ColumnType<string, string | Date, string | Date>;
   to_date: ColumnType<string, string | Date, string | Date>;
   base_ref: string;

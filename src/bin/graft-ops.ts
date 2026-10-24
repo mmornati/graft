@@ -97,6 +97,12 @@ import {
 } from "../pilot/baseline.js";
 import { doctorFailed, runDoctor } from "../pilot/doctor.js";
 import { GateUsageError, gatherGate } from "../pilot/gate.js";
+import { gatherPhase1Gate, Phase1GateUsageError } from "../pilot/gate-phase1.js";
+import {
+  type Phase1GateReport,
+  phase1GateReportSchema,
+  renderPhase1Markdown,
+} from "../pilot/gate-phase1-render.js";
 import { gateReportSchema, renderGateMarkdown } from "../pilot/gate-render.js";
 import {
   addIncident,
@@ -154,18 +160,19 @@ const USAGE = `usage:
   graft pilot sweep-feedback --installation <id>
   graft pilot allow-list resolve <file> --installation <id>
   graft pilot purge --installation <id> --confirm <account login> [--dry-run] [--even-if-active]
-  graft baseline --repo <owner/repo> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--period baseline|shadow]
+  graft baseline --repo <owner/repo> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--period baseline|shadow|phase1]
                  [--base <branch>] [--max-requests <n>] [--max-wait <15m>] [--dry-run]
                  [--auth app|token]   (token: dry run only, reads GRAFT_BASELINE_GITHUB_TOKEN)
-  graft gate report --installation <id> [--installation <id> ...] --since <YYYY-MM-DD>
+  graft gate report [--phase 0|1] --installation <id> [--installation <id> ...] --since <YYYY-MM-DD>
                     [--until <YYYY-MM-DD>] [--allow-file <path>] [--out <dir>] [--json] [--check]
+                    (--allow-file is Phase 0 only)
   graft metrics rollup --installation <id> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
   graft incident add --repo <owner/repo> --pr <n> [--fix-pr <n>] [--occurred-at <ISO>] [--severity 1-4]
   graft incident list --installation <id> [--json]
   graft incident remove --id <uuid>
   graft mode show (--repo <owner/repo> | --installation <id>) [--json]
   graft mode set --repo <owner/repo> [--policy report|enforce] [--guard report|enforce]
-                 [--mcp-write off|on] --reason "<text>" [--actor <name>]
+                 [--mcp-write off|on] --reason "<text>" [--actor <name>] [--public]
   graft mode history --repo <owner/repo> [--limit <1..200>] [--json]
   graft mode refresh-permissions --installation <id>
   graft audit list --repo <owner/repo> [--since <ISO date>] [--kind applied|ignored|stale|removed]
@@ -175,6 +182,10 @@ const USAGE = `usage:
   graft mcp-token list --repo <owner/repo> [--all] [--json]
   graft mcp-token revoke --id <uuid> --reason "<text>" [--actor <name>]
 `;
+
+/** Phase 1 step 7 (D10): `mode set --policy enforce` on a public repository without `--public`. */
+export const PUBLIC_REFUSAL =
+  "public repository: read the Phase 1 runbook, stage 3; pass --public to enforce anyway";
 
 class UsageError extends Error {
   constructor(message?: string) {
@@ -229,6 +240,84 @@ function args<T extends Record<string, { type: "string" | "boolean"; multiple?: 
   }
 }
 
+/**
+ * Phase 1 step 7 (U-DOC-3): the options of the commands the runbooks name, in one table, so a
+ * runbook's `pnpm graft …` lines are checked with the parser the commands use.
+ */
+export const OPS_OPTIONS = {
+  "pilot doctor": { installation: { type: "string" }, json: { type: "boolean" } },
+  baseline: {
+    repo: { type: "string" },
+    from: { type: "string" },
+    to: { type: "string" },
+    period: { type: "string" },
+    base: { type: "string" },
+    "max-requests": { type: "string" },
+    "max-wait": { type: "string" },
+    "dry-run": { type: "boolean" },
+    auth: { type: "string" },
+  },
+  "gate report": {
+    installation: { type: "string", multiple: true },
+    since: { type: "string" },
+    until: { type: "string" },
+    "allow-file": { type: "string" },
+    out: { type: "string" },
+    json: { type: "boolean" },
+    check: { type: "boolean" },
+    phase: { type: "string" },
+  },
+  "incident add": {
+    repo: { type: "string" },
+    pr: { type: "string" },
+    "fix-pr": { type: "string" },
+    "occurred-at": { type: "string" },
+    severity: { type: "string" },
+  },
+  "mode show": {
+    repo: { type: "string" },
+    installation: { type: "string" },
+    json: { type: "boolean" },
+  },
+  "mode set": {
+    repo: { type: "string" },
+    policy: { type: "string" },
+    guard: { type: "string" },
+    "mcp-write": { type: "string" },
+    reason: { type: "string" },
+    actor: { type: "string" },
+    public: { type: "boolean" },
+  },
+  "mode refresh-permissions": { installation: { type: "string" } },
+  "mcp-token create": {
+    repo: { type: "string" },
+    name: { type: "string" },
+    "expires-in": { type: "string" },
+    actor: { type: "string" },
+  },
+  "mcp-token revoke": {
+    id: { type: "string" },
+    reason: { type: "string" },
+    actor: { type: "string" },
+  },
+} as const satisfies Record<
+  string,
+  Record<string, { type: "string" | "boolean"; multiple?: boolean }>
+>;
+
+/**
+ * Checks a command line (without `pnpm graft`) with the same parser as `main`, without opening the
+ * database: the group and sub-command must be in `OPS_OPTIONS` and every flag must parse. Throws
+ * on anything else. Values are not validated (that needs the database or the clock).
+ */
+export function parseOpsArgs(argv: readonly string[]): void {
+  const [group, sub, ...rest] = argv;
+  const key = group === "baseline" ? "baseline" : `${group} ${sub}`;
+  if (!Object.hasOwn(OPS_OPTIONS, key)) throw new UsageError(`unknown command ${key}`);
+  const flags = group === "baseline" ? [sub ?? "", ...rest].filter((x) => x !== "") : rest;
+  args(flags, OPS_OPTIONS[key as keyof typeof OPS_OPTIONS]);
+}
+
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
 /** A job queue that refuses to be used: CLI-run jobs must not enqueue anything. */
@@ -277,7 +366,7 @@ interface Run {
 
 async function pilot(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   if (sub === "doctor") {
-    const v = args(rest, { installation: { type: "string" }, json: { type: "boolean" } });
+    const v = args(rest, OPS_OPTIONS["pilot doctor"]);
     const checks = await runDoctor(r.db, r.config, {
       installationId: parseInstallation(str(v.installation)),
       now: r.deps.now(),
@@ -424,17 +513,7 @@ async function pilot(sub: string | undefined, rest: string[], r: Run): Promise<n
 }
 
 async function baseline(rest: string[], r: Run): Promise<number> {
-  const v = args(rest, {
-    repo: { type: "string" },
-    from: { type: "string" },
-    to: { type: "string" },
-    period: { type: "string" },
-    base: { type: "string" },
-    "max-requests": { type: "string" },
-    "max-wait": { type: "string" },
-    "dry-run": { type: "boolean" },
-    auth: { type: "string" },
-  });
+  const v = args(rest, OPS_OPTIONS.baseline);
   const repo = str(v.repo);
   if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     throw new UsageError("--repo must be owner/repo");
@@ -442,8 +521,8 @@ async function baseline(rest: string[], r: Run): Promise<number> {
   const from = parseDate("--from", str(v.from));
   const to = parseDate("--to", str(v.to));
   const period = str(v.period) ?? "baseline";
-  if (period !== "baseline" && period !== "shadow") {
-    throw new UsageError("--period must be baseline or shadow");
+  if (period !== "baseline" && period !== "shadow" && period !== "phase1") {
+    throw new UsageError("--period must be baseline, shadow or phase1");
   }
   const dryRun = v["dry-run"] === true;
   const auth = str(v.auth) ?? "app";
@@ -500,21 +579,29 @@ async function baseline(rest: string[], r: Run): Promise<number> {
 
 async function gate(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   if (sub !== "report") throw new UsageError();
-  const v = args(rest, {
-    installation: { type: "string", multiple: true },
-    since: { type: "string" },
-    until: { type: "string" },
-    "allow-file": { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    check: { type: "boolean" },
-  });
+  const v = args(rest, OPS_OPTIONS["gate report"]);
+  const phase = str(v.phase) ?? "0";
+  if (phase !== "0" && phase !== "1") throw new UsageError("--phase must be 0 or 1");
   const list = (v.installation as string[] | undefined) ?? [];
   if (list.length === 0) throw new UsageError("--installation is required");
   const installationIds = list.map((x) => parseInstallation(x));
   const since = parseDate("--since", str(v.since));
   const until =
     str(v.until) === undefined ? startOfUtcDay(r.deps.now()) : parseDate("--until", str(v.until));
+  if (phase === "1") {
+    // Phase 1 step 7 (D14): the allow-list is a Phase 0 vote rule; it has no meaning here.
+    if (str(v["allow-file"]) !== undefined) {
+      throw new UsageError("--allow-file is for the Phase 0 gate only");
+    }
+    return gatePhase1(r, {
+      installationIds,
+      since,
+      until,
+      out: str(v.out),
+      json: v.json === true,
+      check: v.check === true,
+    });
+  }
   let allow: AllowList | null = null;
   const allowFile = str(v["allow-file"]);
   if (allowFile !== undefined) {
@@ -559,6 +646,44 @@ async function gate(sub: string | undefined, rest: string[], r: Run): Promise<nu
   return 0;
 }
 
+/** Phase 1 step 7 (D14, §10): the Phase 1 gate report. The preview never sets the exit code. */
+async function gatePhase1(
+  r: Run,
+  o: {
+    installationIds: number[];
+    since: Date;
+    until: Date;
+    out: string | undefined;
+    json: boolean;
+    check: boolean;
+  },
+): Promise<number> {
+  let report: Phase1GateReport;
+  try {
+    report = await gatherPhase1Gate(r.db, r.config, o);
+  } catch (e) {
+    if (e instanceof Phase1GateUsageError) throw new UsageError(e.message);
+    throw e;
+  }
+  const markdown = renderPhase1Markdown(report);
+  const json = `${JSON.stringify(phase1GateReportSchema.parse(report), null, 2)}\n`;
+  if (o.out !== undefined) {
+    const base = path.join(o.out, `gate-phase1-${report.window.until}`);
+    await mkdir(o.out, { recursive: true, mode: 0o700 });
+    await writeFile(`${base}.md`, markdown, { mode: 0o600 });
+    await writeFile(`${base}.json`, json, { mode: 0o600 });
+    await chmod(`${base}.md`, 0o600);
+    await chmod(`${base}.json`, 0o600);
+    r.out(
+      `wrote ${base}.md and ${base}.json\nverdict: ${report.verdict}\npreview: ${report.preview.verdict}\n`,
+    );
+  } else {
+    r.out(o.json ? json : markdown);
+  }
+  if (o.check) return report.verdict === "PASS" ? 0 : report.verdict === "FAIL" ? 1 : 4;
+  return 0;
+}
+
 async function metrics(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   if (sub !== "rollup") throw new UsageError();
   const v = args(rest, {
@@ -579,13 +704,7 @@ async function metrics(sub: string | undefined, rest: string[], r: Run): Promise
 async function incident(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   try {
     if (sub === "add") {
-      const v = args(rest, {
-        repo: { type: "string" },
-        pr: { type: "string" },
-        "fix-pr": { type: "string" },
-        "occurred-at": { type: "string" },
-        severity: { type: "string" },
-      });
+      const v = args(rest, OPS_OPTIONS["incident add"]);
       const repo = str(v.repo);
       if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
         throw new UsageError("--repo must be owner/repo");
@@ -660,11 +779,7 @@ function parseRepo(v: string | undefined): string {
 /** The `mode` group (Phase 1 step 1, spec §8). Nothing here enqueues or calls GitHub (D6). */
 async function mode(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   if (sub === "show") {
-    const v = args(rest, {
-      repo: { type: "string" },
-      installation: { type: "string" },
-      json: { type: "boolean" },
-    });
+    const v = args(rest, OPS_OPTIONS["mode show"]);
     const repo = str(v.repo);
     const inst = str(v.installation);
     if ((repo === undefined) === (inst === undefined)) {
@@ -701,14 +816,7 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     return 0;
   }
   if (sub === "set") {
-    const v = args(rest, {
-      repo: { type: "string" },
-      policy: { type: "string" },
-      guard: { type: "string" },
-      "mcp-write": { type: "string" },
-      reason: { type: "string" },
-      actor: { type: "string" },
-    });
+    const v = args(rest, OPS_OPTIONS["mode set"]);
     const repo = parseRepo(str(v.repo));
     const wanted: { key: ModeKey; value: string }[] = [];
     const pick = (flag: string, key: ModeKey, allowed: readonly string[]) => {
@@ -736,7 +844,7 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     const changed = await r.db.transaction().execute(async (tx) => {
       const matches = await tx
         .selectFrom("repositories")
-        .select(["id", "installation_id", "policy_mode", "guard_mode", "mcp_write"])
+        .select(["id", "installation_id", "policy_mode", "guard_mode", "mcp_write", "private"])
         .where(sql<string>`lower(full_name)`, "=", repo.toLowerCase())
         .where("removed_at", "is", null)
         .forUpdate()
@@ -751,6 +859,14 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
         if (from !== w.value) {
           changes.push({ repositoryId: locked.id, key: w.key, from, to: w.value, actor, reason });
         }
+      }
+      // Phase 1 step 7 (D10): enforcing the policy on a public repository is a deliberate act.
+      if (
+        locked.private === false &&
+        v.public !== true &&
+        changes.some((c) => c.key === "policy_mode" && c.to === "enforce")
+      ) {
+        return { repositoryId: locked.id, count: 0, ambiguous: undefined, publicRefused: true };
       }
       if (changes.length > 0) {
         await insertModeChanges(tx, changes, now);
@@ -770,6 +886,10 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
       r.err(
         `ambiguous repository: ${changed.ambiguous.length} active rows match (installations ${changed.ambiguous.join(", ")}); nothing changed\n`,
       );
+      return 1;
+    }
+    if ("publicRefused" in changed && changed.publicRefused) {
+      r.err(`${PUBLIC_REFUSAL}\n`);
       return 1;
     }
     if (changed.count === 0) {
@@ -832,7 +952,7 @@ async function mode(sub: string | undefined, rest: string[], r: Run): Promise<nu
     return 0;
   }
   if (sub === "refresh-permissions") {
-    const v = args(rest, { installation: { type: "string" } });
+    const v = args(rest, OPS_OPTIONS["mode refresh-permissions"]);
     const installationId = parseInstallation(str(v.installation));
     const ctx = cliContext(r.config, r.db, r.deps.github(r.config), r.deps.now);
     try {
@@ -936,12 +1056,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
  */
 async function mcpToken(sub: string | undefined, rest: string[], r: Run): Promise<number> {
   if (sub === "create") {
-    const v = args(rest, {
-      repo: { type: "string" },
-      name: { type: "string" },
-      "expires-in": { type: "string" },
-      actor: { type: "string" },
-    });
+    const v = args(rest, OPS_OPTIONS["mcp-token create"]);
     const repo = parseRepo(str(v.repo));
     const name = str(v.name);
     if (name === undefined || !validTokenName(name)) {
@@ -987,11 +1102,7 @@ async function mcpToken(sub: string | undefined, rest: string[], r: Run): Promis
     return 0;
   }
   if (sub === "revoke") {
-    const v = args(rest, {
-      id: { type: "string" },
-      reason: { type: "string" },
-      actor: { type: "string" },
-    });
+    const v = args(rest, OPS_OPTIONS["mcp-token revoke"]);
     const id = str(v.id);
     if (id === undefined || !UUID.test(id)) throw new UsageError("--id must be a token id (uuid)");
     const reason = str(v.reason);

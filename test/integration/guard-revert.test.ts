@@ -26,6 +26,7 @@ import {
   runRevert,
   trackDefaultBranch,
 } from "../../src/modules/guard/index.js";
+import { countOpenReverts } from "../../src/modules/guard/store.js";
 import { apiTreeReader } from "../../src/modules/guard/trees.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { runDoctor } from "../../src/pilot/doctor.js";
@@ -339,6 +340,7 @@ describe("guard revert: schema", () => {
       "guard_events_one_revert_per_culprit",
       "guard_events_revert_open_idx",
     ]);
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -355,16 +357,23 @@ describe("guard revert: schema", () => {
         "0013_guard_revert",
         "0014_mcp",
         "0015_mcp_open_claims",
+        "0016_phase1_gate",
       ]);
     }
     // A row with a new status blocks the rollback, which then changes nothing.
     await insertEvent({ failingSha: C(1), status: "revert_closed" });
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     await expect(migrateDownOne(t.db)).rejects.toThrow();
     expect(await indexes()).toHaveLength(2);
-    expect(await migrateToLatest(t.db)).toEqual(["0014_mcp", "0015_mcp_open_claims"]);
+    expect(await migrateToLatest(t.db)).toEqual([
+      "0014_mcp",
+      "0015_mcp_open_claims",
+      "0016_phase1_gate",
+    ]);
     await t.db.deleteFrom("guard_events").execute();
+    expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
     expect(await migrateDownOne(t.db)).toEqual(["0015_mcp_open_claims"]);
     expect(await migrateDownOne(t.db)).toEqual(["0014_mcp"]);
     expect(await migrateDownOne(t.db)).toEqual(["0013_guard_revert"]);
@@ -372,6 +381,7 @@ describe("guard revert: schema", () => {
       "0013_guard_revert",
       "0014_mcp",
       "0015_mcp_open_claims",
+      "0016_phase1_gate",
     ]);
     // The CHECKs: a branch name and a commit SHA of the right shape only.
     await expect(
@@ -1750,6 +1760,140 @@ describe("guard revert: enforce", () => {
     expect((await ops(["mode", "show", "--repo", FULL_NAME])).out).not.toContain(
       "guard reverts are off",
     );
+  });
+
+  it("I-REV-10c crash after POST …/pulls, then the installation token fails on the last attempt: the PR is adopted by the lookup, counted by the cap, labelled by the next run; one PR", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/pulls$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    await expect(runRevert(data, ctx(ENFORCE, RETRYING))).rejects.toThrow();
+    expect(await eventById(id)).toMatchObject({ revert_pr_number: null, revert_outcome: null });
+    const real = t.deps.github;
+    let failures = 1;
+    t.deps.github = {
+      ...real,
+      forInstallation: async (...args: Parameters<typeof real.forInstallation>) => {
+        if (failures > 0) {
+          failures--;
+          throw Object.assign(new Error("token service down"), { status: 500 });
+        }
+        return real.forInstallation(...args);
+      },
+    };
+    await expect(guardRevertJob.handle(data, ctx(ENFORCE, LAST_ATTEMPT))).rejects.toThrow();
+    t.deps.github = real;
+    let e = await eventById(id);
+    expect(e).toMatchObject({
+      status: "revert_opened",
+      revert_outcome: "opened",
+      revert_pr_number: REVERT_PR,
+      revert_labelled: false,
+      comment_id: null,
+    });
+    // Counted by the cap (D4): another event sees one open revert.
+    expect(await countOpenReverts(t.db, REPO_ID, "00000000-0000-0000-0000-000000000000")).toBe(1);
+    expect(comments()).toEqual([]);
+    // The next run resumes the label and auto-merge steps, and writes the comment.
+    expect(await runRevert(data, ctx(ENFORCE, RETRYING))).toBe("commented");
+    e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: "opened", revert_labelled: true });
+    expect(e.comment_id).not.toBeNull();
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+    expect(api.find("POST", /\/issues\/\d+\/labels$/)).toHaveLength(1);
+  });
+
+  it("I-REV-10d the ref is created, no PR exists, the last attempt fails: no outcome; the next observe re-sends guard.revert, which resumes and opens one PR", async () => {
+    await enforceMode();
+    const id = await culprit(ENFORCE);
+    api.afterNext("POST", /\/git\/refs$/, async () => {
+      throw new Error("worker crashed");
+    });
+    const [data] = await takeReverts();
+    if (!data) throw new Error("no job");
+    expect(await runRevert(data, ctx(ENFORCE, LAST_ATTEMPT))).toBe("stopped");
+    let e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: null, revert_pr_number: null, comment_id: null });
+    expect(e.revert_commit_sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(comments()).toEqual([]);
+    expect(api.find("POST", /\/pulls$/)).toEqual([]);
+    // The job row has expired (taken out above): the next observe sends guard.revert again.
+    advance(2 * 3600);
+    await observeOnly(C(3), ENFORCE);
+    const again = await takeReverts();
+    expect(again.map((d) => d.eventId)).toEqual([id]);
+    for (const d of again) await runRevert(d, ctx(ENFORCE, RETRYING));
+    e = await eventById(id);
+    expect(e).toMatchObject({ revert_outcome: "opened", revert_pr_number: REVERT_PR });
+    expect(e.comment_id).not.toBeNull();
+    expect(api.find("POST", /\/pulls$/)).toHaveLength(1);
+    expect(
+      [...api.state.pulls.values()].filter((p) => p.head.ref?.startsWith("graft-revert/")),
+    ).toHaveLength(1);
+  });
+
+  it("I-REV-10e detected, then the clock passes GRAFT_GUARD_REVERT_MAX_AGE_HOURS, then confirmed now: plans and opens, not stale (step 5 review 2, finding B)", async () => {
+    await enforceMode();
+    history(3);
+    mergedPull(7, C(2));
+    mergedPull(8, C(3));
+    await track(C(3), null, ENFORCE);
+    run(C(1), "test", "success");
+    await observeOnly(C(1), ENFORCE);
+    advance(60);
+    run(C(2), "test", "failure");
+    await observeOnly(C(2), ENFORCE);
+    advance(25 * 3600);
+    run(C(3), "test", "failure");
+    await observeOnly(C(3), ENFORCE);
+    const e0 = (await events()).find((x) => x.failing_sha === C(2));
+    if (!e0) throw new Error("no event");
+    expect(e0.status).toBe("culprit_found");
+    expect(now.getTime() - (e0.detected_at as Date).getTime()).toBeGreaterThan(24 * 3_600_000);
+    await runReverts(ENFORCE);
+    expect(await eventById(e0.id)).toMatchObject({
+      revert_outcome: "opened",
+      revert_pr_number: REVERT_PR,
+    });
+  });
+
+  it("U-RVC-1 guard.revert_closed: the event becomes reverted between the job's read and its update → settled, reverted_at unchanged (step 5 review 2, nit C)", async () => {
+    const id = await culprit();
+    const merged = new Date("2026-10-14T12:00:00Z");
+    await t.db
+      .updateTable("guard_events")
+      .set({ status: "revert_opened", revert_outcome: "opened", revert_pr_number: REVERT_PR })
+      .where("id", "=", id)
+      .execute();
+    api.state.pulls.set(
+      REVERT_PR,
+      makePull({
+        number: REVERT_PR,
+        node_id: "PR_rvc",
+        state: "closed",
+        merged: true,
+        merged_at: "2026-10-14T13:00:00Z",
+        closed_at: "2026-10-14T13:00:00Z",
+        head: { sha: fakeSha(0xe500), ref: `graft-revert/${id}` },
+      }),
+    );
+    // guard.track marks it reverted while the job is between its read and its update.
+    api.afterNext("GET", new RegExp(`/pulls/${REVERT_PR}$`), async () => {
+      await t.db
+        .updateTable("guard_events")
+        .set({ status: "reverted", reverted_at: merged })
+        .where("id", "=", id)
+        .execute();
+    });
+    expect(await revertClosed({ repositoryId: REPO_ID, prNumber: REVERT_PR }, ctx())).toBe(
+      "settled",
+    );
+    const e = await eventById(id);
+    expect(e.status).toBe("reverted");
+    expect(e.reverted_at?.toISOString()).toBe(merged.toISOString());
   });
 
   it("I-REV-20 no code read: across this file no request to contents (other than graft.yaml), blobs, compare, a REST commit, or a diff or patch media type", () => {

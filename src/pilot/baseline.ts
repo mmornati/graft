@@ -22,7 +22,8 @@ export const EXTRACTOR_VERSION = 1;
 export const MAX_TIMELINE_PAGES = 10;
 const DAY_MS = 86_400_000;
 
-export type Period = "baseline" | "shadow";
+/** Phase 1 step 7 (D16): `phase1` runs feed M2 of the Phase 1 gate. */
+export type Period = "baseline" | "shadow" | "phase1";
 export type AuthorKind = "agent" | "human";
 export type Bucket = "S" | "M" | "L" | "XL";
 export type ExcludedReason = "excluded_author" | "timeline_truncated" | "commits_truncated";

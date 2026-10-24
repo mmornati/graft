@@ -45,6 +45,7 @@ import { type BreakGlassFacts, type BreakGlassState, resolveBreakGlass } from ".
 import { buildFacts, listChangedPaths, listCommitLogins, listReviews } from "./facts.js";
 import {
   type BreakGlassView,
+  type McpExclusion,
   POLICY_CHECK_NAME,
   type PolicyView,
   policyTitle,
@@ -368,15 +369,22 @@ export async function evaluatePolicyJobRun(
       );
       // Phase 1 step 6 (D19): a PR opened through MCP is authored by Graft's bot, so the people
       // whose commits it holds are excluded like a PR author; unknown authors exclude everyone.
+      // Phase 1 step 7 (D8): an unverified commit is a commit whose committer may be anyone.
       let excludedLogins: readonly string[] | "everyone" | undefined;
       if (await openedThroughMcp(ctx.db, data.repositoryId, data.prNumber)) {
-        excludedLogins =
-          (await listCommitLogins(octokit, {
-            owner: data.owner,
-            repo: data.repo,
-            prNumber: data.prNumber,
-            commits: pull.commits,
-          })) ?? "everyone";
+        const who = await listCommitLogins(octokit, {
+          owner: data.owner,
+          repo: data.repo,
+          prNumber: data.prNumber,
+          commits: pull.commits,
+        });
+        if ("logins" in who) {
+          excludedLogins = who.logins;
+          view.mcpExclusion = "commit_authors";
+        } else {
+          excludedLogins = "everyone";
+          view.mcpExclusion = who.unknown;
+        }
       }
       view.approvals = countApprovals(reviews, {
         headSha,
@@ -579,7 +587,12 @@ export async function evaluatePolicyJobRun(
       policyFileChanged: view.verdict?.policyFileChanged ?? view.addsPolicyFile,
       rulesMatched: storedRules(view),
       required: storedRequired(view),
-      approvals: storedApprovals(view.approvals, view.approvers ?? null, enforced),
+      approvals: storedApprovals(
+        view.approvals,
+        view.approvers ?? null,
+        enforced,
+        view.mcpExclusion ?? null,
+      ),
       errors: view.errors.map(({ key: _key, ...rest }) => rest),
       policyMode: modes.policy.effective,
       enforcedConclusion: enforced.conclusion,
@@ -926,11 +939,14 @@ function storedApprovals(
   a: ApprovalCount | null,
   approvers: ApproverFacts | null,
   enforced: Enforced,
+  mcpExclusion: McpExclusion | null,
 ): Record<string, unknown> {
   if (a === null) return {};
   const { currentApprovers: _all, changesRequested: _req, ...phase0 } = a;
   return {
     ...phase0,
+    // Phase 1 step 7 (D8): why approvals on an MCP-opened PR are limited; null for any other PR.
+    mcpExclusion,
     counted: approvers?.counted.length ?? 0,
     notCounted: approvers?.notCounted.length ?? 0,
     changesRequested: approvers?.changesRequestedBy.length ?? 0,

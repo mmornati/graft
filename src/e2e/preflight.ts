@@ -401,11 +401,21 @@ export async function openSession(
       if (Number(stale.rows[0]?.n ?? 0) > 0) {
         throw failed("stale_jobs", "queued jobs older than 2 minutes: is the worker running?");
       }
-      // 12. graft.yaml on main is the starter.
-      const starter = await readFixture(deps.rootDir, "graft.yaml");
+      // 12. graft.yaml on main is the starter (the enforce starter on an enforce sandbox).
+      const starter = await readFixture(deps.rootDir, starterFixture(sandbox));
       const onMain = await readText(clients, owner, repo, "graft.yaml", sandbox.defaultBranch);
       if (onMain !== starter)
         throw failed("policy_drift", "main:graft.yaml differs; run setup --yes to restore");
+    }
+    // 12b. Phase 1 step 7 (D21): the modes match the sandbox's mode. Read-only: the in-process
+    // `mode show --json`. The runner never calls `mode set`; the human does.
+    if (needsGraft && needsSandbox) {
+      const shown = await deps.ops(["mode", "show", "--repo", sandbox.repo, "--json"]);
+      const problem =
+        shown.code === 0
+          ? modeProblem(sandbox, parseModeShow(shown.out))
+          : "pnpm graft mode show failed";
+      if (problem !== null) throw failed("modes", problem);
     }
     // 13. The actor is not an agent login.
     if (config.agentLogins.includes(actor.login.toLowerCase())) {
@@ -428,7 +438,7 @@ export async function openSession(
     const lock = await holdLock(deps, o.acquireLock === true);
 
     const fixtures = new Map<string, string>();
-    for (const name of ["graft.yaml", "graft.s05.yaml", "graft.s09.yaml"]) {
+    for (const name of ["graft.yaml", "graft.s05.yaml", "graft.s09.yaml", "graft.enforce.yaml"]) {
       fixtures.set(name, await readFixture(deps.rootDir, name));
     }
     return {
@@ -456,6 +466,63 @@ export async function openSession(
     await closeAll();
     throw e;
   }
+}
+
+/** Phase 1 step 7 (D21): the `graft.yaml` setup writes and the preflight expects on main. */
+export const starterFixture = (sandbox: Pick<SandboxEntry, "mode">): string =>
+  sandbox.mode === "enforce" ? "graft.enforce.yaml" : "graft.yaml";
+
+/** What the preflight reads of `mode show --json` for one repository. */
+export interface ModeShowView {
+  ceiling: string;
+  ceilingSource: string;
+  policy: { requested: string; effective: string };
+  guard: { requested: string; effective: string };
+  mcpWrite: { requested: string; effective: string };
+}
+
+export function parseModeShow(out: string): ModeShowView | null {
+  try {
+    const json = JSON.parse(out) as { repositories?: ModeShowView[] };
+    return json.repositories?.length === 1 ? (json.repositories[0] as ModeShowView) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * D21: null when the modes fit the sandbox, otherwise what is wrong and the command the human
+ * must run. A report sandbox: every mode requested report (mcp_write off). An enforce sandbox:
+ * the worker's ceiling `enforce`, `policy_mode` effective `enforce`, `guard_mode` requested
+ * `report` and `mcp_write` `off`.
+ */
+export function modeProblem(
+  sandbox: Pick<SandboxEntry, "repo" | "mode">,
+  v: ModeShowView | null,
+): string | null {
+  if (v === null) return "cannot read the sandbox's modes (pnpm graft mode show --json)";
+  const r = sandbox.repo;
+  const reportAll = `pnpm graft mode set --repo ${r} --policy report --guard report --mcp-write off --reason "e2e report sandbox"`;
+  if (sandbox.mode === "report") {
+    if (
+      v.policy.requested !== "report" ||
+      v.guard.requested !== "report" ||
+      v.mcpWrite.requested !== "off"
+    ) {
+      return `a report sandbox must request report for every mode; run: ${reportAll}`;
+    }
+    return null;
+  }
+  if (v.ceilingSource !== "worker" || v.ceiling !== "enforce") {
+    return "the worker's GRAFT_MODE_CEILING is not enforce; set GRAFT_MODE_CEILING=enforce and restart every process";
+  }
+  if (v.guard.requested !== "report" || v.mcpWrite.requested !== "off") {
+    return `an enforce sandbox runs policy only; run: pnpm graft mode set --repo ${r} --guard report --mcp-write off --reason "e2e enforce sandbox"`;
+  }
+  if (v.policy.effective !== "enforce") {
+    return `policy_mode is not effective enforce; run: pnpm graft mode set --repo ${r} --policy enforce --reason "e2e enforce sandbox"`;
+  }
+  return null;
 }
 
 const statusText = (e: unknown): string => {

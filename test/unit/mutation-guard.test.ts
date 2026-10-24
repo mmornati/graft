@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createGitHubClientFactory } from "../../src/github/client-factory.js";
 import {
+  checkRunWrite,
   classifyWrite,
   ENABLE_AUTO_MERGE_MUTATION,
   guardBodyAllowed,
@@ -19,7 +20,7 @@ const SHA = "a".repeat(40);
 const EVENT = "3f0c1a52-b6d8-4e0f-8a7d-2c4b1e5f6a30";
 
 describe("mutation guard: classification", () => {
-  it("U-MG-1 each route of the table classifies as listed; trailing slash, query string and case are handled", () => {
+  it("U-MG-1 each route of the table classifies as listed; trailing slash and case are handled; a query string is unknown (step 7, D3)", () => {
     const p0 = { kind: "phase0" };
     const rows: [string, string, unknown][] = [
       ["POST", "/app/installations/45/access_tokens", { kind: "auth" }],
@@ -62,7 +63,10 @@ describe("mutation guard: classification", () => {
     for (const [method, path, want] of rows) {
       expect(classifyWrite(method, path), `${method} ${path}`).toEqual(want);
       expect(classifyWrite(method, `${path}/`), `${method} ${path}/`).toEqual(want);
-      expect(classifyWrite(method, `${path}?x=1&y=2`), `${method} ${path}?x`).toEqual(want);
+      // Phase 1 step 7 (D3): a write path with a query is refused on every route.
+      expect(classifyWrite(method, `${path}?x=1&y=2`), `${method} ${path}?x`).toEqual({
+        kind: "unknown",
+      });
       expect(classifyWrite(method.toLowerCase(), path), `lower ${method} ${path}`).toEqual(want);
     }
     expect(classifyWrite("get", "/repos/o/r/pulls")).toEqual({ kind: "read" });
@@ -1084,5 +1088,106 @@ describe("mutation guard: the mcp feature's one write (Phase 1 step 6, §9)", ()
       const c = classifyWrite(method, path);
       expect(c.kind === "phase1" && c.features, path).toEqual(["guard"]);
     }
+  });
+});
+
+describe("mutation guard: writes with a query string (Phase 1 step 7, D3)", () => {
+  type Client = Awaited<ReturnType<ReturnType<typeof fakeGitHubFactory>["forInstallation"]>>;
+  const BRANCH = `graft-revert/${EVENT}`;
+  const P = `/repos/${OWNER}/${REPO}`;
+  /** Every write route of the table, each with a body its own rule accepts, and a query. */
+  const routes: [string, string, Record<string, unknown>][] = [
+    [
+      "POST",
+      `${P}/check-runs?x=1`,
+      { name: "graft/x", head_sha: SHA, status: "completed", conclusion: "neutral" },
+    ],
+    ["PATCH", `${P}/check-runs/12?x=1`, { status: "completed", conclusion: "neutral" }],
+    ["POST", `${P}/issues/3/comments?x=1`, { body: "b" }],
+    ["PATCH", `${P}/issues/comments/9?x=1`, { body: "b" }],
+    ["POST", `${P}/git/trees?x=1`, { tree: [] }],
+    ["POST", `${P}/git/commits?x=1`, { message: "m", tree: SHA, parents: [SHA] }],
+    ["POST", `${P}/git/refs?x=1`, { ref: `refs/heads/${BRANCH}`, sha: SHA }],
+    ["DELETE", `${P}/git/refs/heads/${BRANCH}?x=1`, {}],
+    ["POST", `${P}/pulls?x=1`, { head: BRANCH, base: "main", title: "t" }],
+    ["POST", `${P}/issues/3/labels?x=1`, { labels: ["graft:revert"] }],
+  ];
+  const send = (c: Client, method: string, path: string, body: Record<string, unknown>) =>
+    c.request(`${method} ${path}`, { ...body, headers: {} } as never);
+
+  it("U-MG-21 a query on every write route is unknown_route for the default, policy, guard and mcp clients; the step 5 review 2 probe is refused", async () => {
+    const api = createFakeGitHubApi();
+    const asked: unknown[] = [];
+    const gate: MutationGate = async (q) => {
+      asked.push(q);
+      return { allowed: true };
+    };
+    const factory = fakeGitHubFactory(api, gate);
+    const clients: [string, Client][] = [
+      ["default", await factory.forInstallation(1)],
+      ["policy", await factory.forInstallation(1, { feature: "policy" })],
+      ["guard", await factory.forInstallation(1, { feature: "guard" })],
+      ["mcp", await factory.forInstallation(1, { feature: "mcp" })],
+    ];
+    for (const [name, c] of clients) {
+      for (const [method, path, body] of routes) {
+        const e = await refusal(send(c, method, path, body));
+        expect(e.refusal, `${name} ${method} ${path}`).toBe("unknown_route");
+        expect(e.message, path).not.toContain("x=1");
+      }
+    }
+    // The step 5 review 2 probe: a valid guard body, and the query names other branches.
+    const guard = clients[2]?.[1] as Client;
+    const probe = await refusal(
+      guard.request(`POST ${P}/pulls?head=main&base=release`, {
+        head: BRANCH,
+        base: "main",
+        title: "Revert",
+      } as never),
+    );
+    expect(probe.refusal).toBe("unknown_route");
+    // The rules read the same path: none of them accepts a query.
+    expect(guardBodyAllowed("POST", `${P}/pulls?head=main`, { head: BRANCH, base: "main" })).toBe(
+      false,
+    );
+    expect(
+      mcpBodyAllowed("POST", `${P}/pulls?head=main`, { head: "feat/x", base: "main", title: "t" }),
+    ).toBe(false);
+    expect(checkRunWrite("PATCH", `${P}/check-runs/12?x=1`)).toBeNull();
+    // Without the query the same route still classifies.
+    expect(classifyWrite("POST", `${P}/pulls`).kind).toBe("phase1");
+    const sent = api.requests.filter(
+      (r) => r.method !== "GET" && !r.path.endsWith("/access_tokens"),
+    );
+    expect(sent).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it("U-MG-22 a GET with a query passes; a guard client's pulls.list by head still records node ids, and its GraphQL write is allowed", async () => {
+    const api = createFakeGitHubApi();
+    api.state.pulls.set(
+      501,
+      makePull({ number: 501, node_id: "PR_q", head: { sha: SHA, ref: BRANCH } as never }),
+    );
+    const factory = fakeGitHubFactory(api, allowAll);
+    const guard = await factory.forInstallation(1, { feature: "guard" });
+    const listed = await guard.rest.pulls.list({
+      owner: OWNER,
+      repo: REPO,
+      head: `${OWNER}:${BRANCH}`,
+      state: "all",
+    });
+    expect(listed.data.map((p) => p.number)).toEqual([501]);
+    expect(classifyWrite("GET", `${P}/pulls?head=x&state=all`)).toEqual({ kind: "read" });
+    // The node id was recorded from the listing: the auto-merge write for #501 is allowed.
+    const sent = await guard
+      .graphql(ENABLE_AUTO_MERGE_MUTATION, {
+        pullRequestId: "PR_q",
+        mergeMethod: "SQUASH",
+        clientMutationId: `graft-guard:${OWNER}/${REPO}#501`,
+      })
+      .catch((e: unknown) => e);
+    expect(sent).not.toBeInstanceOf(MutationRefusedError);
+    expect(api.requests.some((r) => r.method === "POST" && r.path === "/graphql")).toBe(true);
   });
 });

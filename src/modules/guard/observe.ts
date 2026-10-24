@@ -31,7 +31,7 @@ import { loadBasePolicy } from "../../policy/load.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { getActiveInstallation, getActiveRepository } from "../installations/index.js";
-import { getRepositoryModeRow } from "../modes/index.js";
+import { getRepositoryModeRow, modesOf } from "../modes/index.js";
 import { githubWebBase, safeHtmlUrl } from "./comment.js";
 import { scheduleRevert } from "./revert.js";
 import {
@@ -306,6 +306,11 @@ interface DetectContext {
   now: Date;
   /** The event whose last `guard.confirm` attempt this is: still undecided, it settles (finding 4). */
   finalEventId?: string | undefined;
+  /**
+   * Phase 1 step 7 (D13): the effective guard mode, read once per run before the lock. Stored on
+   * every event this run settles, when the event has none yet.
+   */
+  guardMode: "report" | "enforce";
 }
 
 /** Opens an event for a new transition, or adds the key to the event it belongs to (D8). */
@@ -387,6 +392,8 @@ async function recordTransition(
     confirmedAt: confirm ? null : now,
     confirmReason: confirm ? null : "off",
   });
+  // D13: with confirmation off the event is settled at once, so it records its mode now.
+  if (!confirm) await updateEvent(tx, event.id, { guardMode: d.guardMode }, now);
   d.ctx.log.info(
     { eventId: event.id, status: event.status, candidates: t.candidates.length },
     "guard event opened",
@@ -478,7 +485,18 @@ async function confirmOpenEvents(d: DetectContext): Promise<string[]> {
     // and not green: a cancelled re-run, say): the failure did not persist, so it is not
     // confirmed. It settles `flaky` with no reason rather than staying open for good.
     const status = step.step === "confirmed" ? classifyStored(e.candidates).status : "flaky";
-    await updateEvent(tx, e.id, { status, confirmedAt: now, confirmReason: step.reason }, now);
+    await updateEvent(
+      tx,
+      e.id,
+      {
+        status,
+        confirmedAt: now,
+        confirmReason: step.reason,
+        // D13: the mode it settled under; a value `guard.revert` already stored is kept.
+        ...(e.guard_mode === null ? { guardMode: d.guardMode } : {}),
+      },
+      now,
+    );
     d.ctx.log.info({ eventId: e.id, status, reason: step.reason }, "guard event settled");
     if (status === "culprit_found") reached.push(e.id);
   }
@@ -555,6 +573,9 @@ export async function observeCommit(
   const webBase = githubWebBase(ctx.config.githubApiUrl);
   const observed = await readCheckRuns(octokit, ctx, data, webBase);
   const modeRow = await getRepositoryModeRow(ctx.db, data.repositoryId);
+  // Phase 1 step 7 (D13): read once per run, before the lock; an unknown row is report.
+  const settledGuardMode: "report" | "enforce" =
+    modeRow === undefined ? "report" : modesOf(modeRow, ctx.config.modeCeiling).guard.effective;
   if (hasStatusesRead(modeRow?.permissions)) {
     observed.push(...(await readStatuses(octokit, data, webBase)));
   }
@@ -610,6 +631,7 @@ export async function observeCommit(
           branch: branch ?? "unknown",
           now,
           finalEventId: o.finalEventId,
+          guardMode: settledGuardMode,
         };
         const missing = new Set<string>();
         if (red.length > 0) {

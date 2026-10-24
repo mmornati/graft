@@ -161,16 +161,30 @@ export const MAX_COMMIT_LOGINS = 250;
 const COMMIT_PAGE = 100;
 
 /**
+ * Phase 1 step 7 (D8): on a PR opened through MCP, only verified commits let approvals count. A
+ * pending product decision (HUMAN-TODO, step 7): `false` goes back to step 6's D19 alone.
+ */
+export const REQUIRE_VERIFIED_COMMITS = true;
+
+/** Why Graft cannot tell who wrote an MCP-opened PR (Phase 1 step 6 D19, step 7 D8). */
+export type CommitLoginsUnknown = "too_many" | "no_author" | "unverified";
+export type CommitLogins = { logins: string[] } | { unknown: CommitLoginsUnknown };
+
+/**
  * Phase 1 step 6 (D19): the lowercased author and committer logins of a PR's commits, for a PR
- * opened through MCP, or null when Graft cannot tell who they are (more than 250 commits, or a
- * commit with no author login). GitHub's web committer `web-flow` is not a person and is skipped.
- * Logins only: no message, no SHA, nothing stored.
+ * opened through MCP, or why Graft cannot tell who they are: more than 250 commits (`too_many`), a
+ * commit with no author login (`no_author`), or, Phase 1 step 7 (D8), a commit GitHub has not
+ * verified (`unverified`: `commit.verification.verified` is not `true`, or the committer has no
+ * login and is not `web-flow`). Anyone who pushes chooses the author and committer emails; a
+ * verified signature ties the committer to its account, so every committer is genuine.
+ * GitHub's web committer `web-flow` is not a person and is skipped. Logins only: no message, no
+ * SHA, nothing stored.
  */
 export async function listCommitLogins(
   octokit: GitHubClient,
   o: { owner: string; repo: string; prNumber: number; commits: number },
-): Promise<string[] | null> {
-  if (o.commits > MAX_COMMIT_LOGINS) return null;
+): Promise<CommitLogins> {
+  if (o.commits > MAX_COMMIT_LOGINS) return { unknown: "too_many" };
   const logins = new Set<string>();
   let seen = 0;
   for (let page = 1; page <= Math.ceil(MAX_COMMIT_LOGINS / COMMIT_PAGE); page++) {
@@ -184,15 +198,20 @@ export async function listCommitLogins(
     for (const c of res.data) {
       seen++;
       const author = c.author?.login;
-      if (typeof author !== "string" || author === "") return null;
-      logins.add(author.toLowerCase());
+      if (typeof author !== "string" || author === "") return { unknown: "no_author" };
       const committer = c.committer?.login;
+      if (REQUIRE_VERIFIED_COMMITS) {
+        // D8: only `verified: true` counts; absent, false or anything else is unverified.
+        if (c.commit?.verification?.verified !== true) return { unknown: "unverified" };
+        if (typeof committer !== "string" || committer === "") return { unknown: "unverified" };
+      }
+      logins.add(author.toLowerCase());
       if (typeof committer === "string" && committer !== "" && committer !== "web-flow") {
         logins.add(committer.toLowerCase());
       }
     }
     if (res.data.length < COMMIT_PAGE) break;
   }
-  if (seen > MAX_COMMIT_LOGINS) return null;
-  return [...logins].sort();
+  if (seen > MAX_COMMIT_LOGINS) return { unknown: "too_many" };
+  return { logins: [...logins].sort() };
 }

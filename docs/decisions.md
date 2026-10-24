@@ -880,6 +880,82 @@ Finding → fix (review: `docs/phase-1/reviews/step-6-review-1.md`, CHANGES REQU
 
 **Verification.** `pnpm lint`, `pnpm typecheck` and `pnpm build` pass; `pnpm test` passes (106 files, 1,226 tests: I-MCP-8b and I-MCP-12b are new, the other cases extend existing tests). The shared `scionhub-postgres-1` container on port 55432 was stopped by another session, so the tests and mutations ran against a throwaway `postgres:18-alpine` on `127.0.0.1:55447` (`TEST_DATABASE_URL=…/graft_test`), removed afterwards; `pnpm db:up` was not run. On a scratch database `graft_s6fix_dod`: migrate applied `0001`..`0015`, rollback rolled back only `0015_mcp_open_claims`, migrate re-applied it.
 
+## Phase 1 step 7: security review, pilots, gate
+
+Spec: [phase-1/step-7-security-pilots-gate.md](phase-1/step-7-security-pilots-gate.md). Decisions D1 to D21 are in the spec; what follows is what the spec left open, where the build differs from it, the accepted items and the residual risks. The security review is [phase-1/reviews/step-7-security-review.md](phase-1/reviews/step-7-security-review.md) (verdict READY FOR PILOT ENFORCEMENT, to be signed off by a person); the runbook is [pilots/phase-1-runbook.md](pilots/phase-1-runbook.md); the gate is described in [features/pilots-and-gate.md](features/pilots-and-gate.md#the-phase-1-gate).
+
+**Choices where the spec is silent**
+
+- **D2, `mode show`.** It still computes with the resolved ceiling (the worker's stored value when there is one, else the shell's), so I-CEIL-3's "mode show reports the worker's `enforce`" holds; the process-level rule applies to every process that serves or works (`getEffectiveModes`, `mutationGate`, the guard's settlement).
+- **D3.** `writePath` is applied to the raw path after the API base is removed. A GraphQL request with a query string is not the GraphQL URL any more, so it falls to `classifyWrite`, which refuses it too.
+- **D4.** The lookup uses the run's default client in `failed()` and a fresh default client in `settleFailedRun` (the installation token may be what failed). A lookup error is logged by class and treated as "not found".
+- **D6.** The list is passed to Fastify as one comma-joined string (proxy-addr's syntax). An entry is an IPv4 or IPv6 address (`node:net` `isIP`) with an optional prefix of at most 32 or 128; the message is `entry <n> must be an IP address or a CIDR range`.
+- **D8.** Within a commit the author is checked first (`no_author`), then the verification, then the committer. A pending product decision is held in `REQUIRE_VERIFIED_COMMITS` (`src/modules/policy/facts.ts`); `false` restores step 6's rule. The line is part of the policy section of the comment and of the check summary (the section text), so the facts hash changes with it.
+- **D9 (b).** The purge uses the database clock (`now() - interval '1 hour'`), as the cap's own stale delete does, and runs before the rollup computes.
+- **D10.** The refusal is checked inside `mode set`'s transaction, only when the call would change `policy_mode` to `enforce`; any other key in the same call is not written either. The doctor check reads the requested value.
+- **D13.** The mode is computed with `modesOf` on the row observe already reads for `statuses:read` (one query, before the lock), rather than a second `getEffectiveModes`. An event settled at once with `GRAFT_GUARD_CONFIRM=off` records it at insert.
+- **D14 to D19.** Reasons carry `{ metric, code, value, required }`. Per-repository `enforceSince` is the `applied_at` date of the newest applied change to `enforce`. `last7` is the last 7 days before `--until`. M2's "from at least 2 repositories" counts the repositories with measured `phase1` rows (projected: with any `phase1` row). The M1 span is first to last `merged_at` of the side's rows, in days with two decimals, plus one day (as Phase 0). M3's `missedBy` lists, for the measured view, a `planned` outcome in enforce mode too. Per-repository effective modes use `resolveCeiling`, like `mode show`. Retention counts an installation created at least 30 days before `--until`, not deleted or suspended, with a delivery in its last 7 days.
+- **D14, reason codes.** The spec's list has no code for a FAIL of M2 or M3 decided by the value; `m2_above_target` and `m3_below_target` are added. M4 criterion (b) has no baseline minimum in the spec; with no baseline rows at all it is INSUFFICIENT DATA (`m4_below_min_baseline`), since there is nothing to compare with.
+- **D20, U-DOC-3.** The commands the runbooks name take their options from one table, `OPS_OPTIONS` in `src/bin/graft-ops.ts`, which the commands themselves use; `parseOpsArgs` checks a command line with it without the database. `RUNBOOK_STAGE2` holds the stage 2 numbers and the test checks that the runbook quotes them.
+- **D21.** The preflight's mode check runs only for `run` and `verify` (the commands that need a running Graft). e01's commits carry `Graft-Agent` and `Graft-Model` but no `Graft-Task`: it runs alone, without the run issue the report scenarios create. It waits for everything Graft publishes on the first head (the standard settle wait, which also decides the LLM mode), then for each expectation. The outsider may now `POST …/pulls/{n}/reviews` with `event: APPROVE` (private mode); the actor gets an `addLabel` act. INV-4 allows the doctor's `break_glass` WARN on an enforce sandbox, where e01 applies one on purpose.
+- **N-17** runs both neutral profiles a second time with the stored ceiling `report` (the other tests are not registered for those runs). "No feature client" is read as no `guard` or `mcp` client: the policy job builds its `policy` client for every evaluation since step 2 (as N-14 records).
+- **Tests placed differently.** U-RVC-1 needs the database, so it lives in `test/integration/guard-revert.test.ts`; U-P1G-11 runs the ops CLI on a seeded database, so it lives in `test/integration/gate-phase1.test.ts`.
+
+**Deviations from the spec**
+
+- **D4: no comment when the writes began.** The spec says "the comment is published as today". A published comment sets `comment_id`, and both `runRevert` (step 2 of the job) and observe's re-send (`eventsAwaitingComment`) skip such an event, so the comment would stop the resumption D4 exists for. In the two D4 cases (adopted, resumable) the run returns without a comment; the resumed run writes it as its last step. What remains (security review, finding 10): until the next observe of the repository, an adopted PR has no label and no auto-merge, and a resumable event holds its claimed cap slot. Both fail closed.
+- **`docs/features/guard.md`'s "a revert whose writes already began is finished whatever its age"** is now true after a failed last attempt as well (D4 with the step 5 review 1 stale exemption).
+
+**Accepted, no code**
+
+- **D11**: the 1,000-event cap on break-glass fails closed (`actor_unknown`); the runbook's stage 0 requires the label-lag and `Link: rel="last"` measurements.
+- **D12**: the guard's framing boundary, re-read in the security review (Q-RV-8): a review requirement on `.github/workflows/` is the team's control; auto-merged reverts only as `[trivial]`, after stage 4 conditions.
+- Security review findings 11 (the outsider's approval route in the runner) and 12 (an equivalent mutation).
+
+**Residual risks** (also in `docs/features/modes.md`, `mcp.md` and `guard.md`)
+
+- An old process that never restarts keeps its environment's ceiling until a worker publishes a lower one.
+- On a public repository with `--public`, 21 or more outsider change requests block the check.
+- A framing workflow already merged on the default branch can still get a revert opened; auto-merge of that revert needs the D12 conditions.
+- Agents that use `open_change` must sign their commits, or approvals on their PRs never count.
+- D4 in a quiet repository (finding 10).
+
+**Mutation checks (§15), run by the developer.** Each mutation was applied alone by a script, the named test files were run against a throwaway database (`graft_mut` on `127.0.0.1:55491`), and the file was restored; `git status` was clean afterwards. 26 of 27 are killed; the survivor is equivalent.
+
+| Mutation (as applied) | Result |
+| --- | --- |
+| The gate ignores the stored ceiling (`modesOf` passes the process ceiling alone) | Killed: I-CEIL-1, N-17 |
+| A missing `service_state` row read as `report` | Killed: I-CEIL-2 |
+| The stored ceiling wins over a lower process ceiling (`effectiveCeiling` returns the stored value) | Killed: I-CEIL-3, U-CEIL-1 |
+| `writePath` drops the query again | Killed: U-MG-1, U-MG-21 |
+| `recordPulls` uses `writePath` (the list by head no longer recorded) | Killed: U-MG-19, U-MG-22 |
+| `settleFailedRun` settles `error` after writes began (`settleBegunWrites` returns null) | Killed: I-REV-10c, I-REV-10d |
+| `isStale` measures from `detected_at` | Killed: I-REV-10e |
+| `authenticate` back in `preHandler` | Killed: I-MCP-6b |
+| `trustProxy: true` in the server | Killed: I-MCP-7b |
+| `GRAFT_TRUST_PROXY` accepts `true` (the config side of the same mutation) | Killed: U-CFG-40 |
+| An unverified commit ignored (`REQUIRE_VERIFIED_COMMITS = false`) | Killed: U-FCT-1, I-MCP-14b |
+| The MCP PR count without `pr_number IS NOT NULL` | **Survives, equivalent**: the count joins `changes` on `pr_number`, and a claim's null never matches (security review, finding 12) |
+| The MCP PR count timed by `mcp_changes.created_at` | Killed: I-P1G-7 |
+| The rollup purge deletes claims of any age | Killed: I-ROLL-5 |
+| `--public` not required | Killed: I-MODE-PUB-1 |
+| Observe does not store `guard_mode` (the confirm path) | Killed: I-GRD-MODE-1 |
+| `flaky` with a null `confirm_reason` counted as a flake | Killed: U-P1G-6 |
+| `flaky` with a null `confirm_reason` counted as a breakage (missed) | Killed: U-P1G-6 |
+| M1 counts `requirements_met` as no-human | Killed: U-P1G-1, I-P1G-1 |
+| M1 counts `break_glass` as no-human | Killed: U-P1G-1 |
+| The merge-head verdict is the oldest | Killed: I-P1G-3 |
+| The merge-head verdict of any head | Killed: I-P1G-3 |
+| Graft revert PRs counted in M1 | Killed: I-P1G-4 |
+| The M2 projection applied to enforce rows | Killed: U-P1G-5 |
+| M4 without the 14-day lag | Killed: I-P1G-6 |
+| The gate verdict computed from projected values | Killed: I-P1G-2, U-P1G-9 |
+| INV-1E accepts a neutral `graft/policy` | Killed: U-LIVE-ENF-2 |
+
+**Other test changes**: the migration step-down tests in `db`, `modes`, `policy-enforce`, `break-glass`, `guard`, `guard-revert`, `mcp` and `pilot-ops` step through `0016_phase1_gate`; I-DOC-1 and I-DOC-3 count 22 doctor checks (`public_enforce`); U-MG-1 expects a write with a query to be unknown (D3); I-MCP-2 asserts the annotations of all four tools (D7); U-LIVE-PLAN-1's plan snapshot gains e01, and U-LIVE-PLAN-2 expects the preflight's one read-only `mode show --json` call and plans the report sandbox's scenarios only.
+
+**Verification.** `pnpm lint`, `pnpm typecheck`, `pnpm build` and `pnpm eval:ci` (exit 0, `matchBaseline: 1`; its run directory was removed) pass; `pnpm test` passes (113 files, 1,282 tests). The shared container on port 55432 was not running and the local Docker engine (OrbStack) hung once during the build and was restarted, so the tests and mutations ran against a throwaway `postgres:18-alpine` (`graft-step7-pg`) on `127.0.0.1:55491`, removed afterwards; `pnpm db:up` was not run. On a scratch database `graft_s7_dod`: migrate applied `0001`..`0016`, rollback rolled back only `0016_phase1_gate`, migrate re-applied it; the database was dropped. The DoD greps of §15 find nothing, the review's verdict line is present once, and 68 test lines carry the §13 IDs. Not run: the manual smoke test of §15 and the enforce sandbox against live GitHub (HUMAN-TODO).
+
 ## Verifier file context and the unverifiable verdict (intent-v2)
 
 The verifier saw only GitHub's patches, which carry three lines of context per hunk. A card that said "scrolling does nothing during a journal replay" was marked unsupported because the diff added `if (state.replaying) return;` but not the unchanged lines that set the flag, so the card showed "the verifier disagrees" and the risk was raised to `logic` for a correct card.

@@ -5,7 +5,7 @@ import { classifyGitHubError } from "../github/errors.js";
 import { writeFileAtomic } from "../pilot/atomic-write.js";
 import { commitIdentity, readFixture, readSandboxFixtureTree } from "./fixtures.js";
 import { assertMarker, GuardRefusal, MARKER_PATH } from "./guard.js";
-import { Abort, openSession, type Session } from "./preflight.js";
+import { Abort, openSession, type Session, starterFixture } from "./preflight.js";
 import { ensurePrivateDir } from "./report.js";
 import { abortCode } from "./run.js";
 import { readInstallationFacts, scopeMessage, scopeProblems } from "./scope.js";
@@ -26,9 +26,13 @@ const LABEL = "graft-e2e";
 const SOURCE_DROPS = [".github/workflows/", ".circleci/"];
 
 /** The files setup puts in the sandbox: the starter policy and the `graft-e2e/` fixtures. */
-export async function sandboxFiles(rootDir: string): Promise<Map<string, string>> {
+export async function sandboxFiles(
+  rootDir: string,
+  mode: "report" | "enforce" = "report",
+): Promise<Map<string, string>> {
   const files = new Map<string, string>();
-  files.set("graft.yaml", await readFixture(rootDir, "graft.yaml"));
+  // Phase 1 step 7 (D21): an enforce sandbox gets the enforce starter as its graft.yaml.
+  files.set("graft.yaml", await readFixture(rootDir, starterFixture({ mode })));
   for (const [p, text] of await readSandboxFixtureTree(rootDir)) files.set(p, text);
   return files;
 }
@@ -71,7 +75,7 @@ async function doSetup(deps: E2eDeps, rawIo: IoLike, s: Session, o: SetupOptions
   const io = safeIo(rawIo, s.secrets);
   const { owner, repo, sandbox } = s;
   const write = !o.dryRun;
-  const files = await sandboxFiles(deps.rootDir);
+  const files = await sandboxFiles(deps.rootDir, sandbox.mode);
 
   // 2. Does the repository exist?
   let exists = true;

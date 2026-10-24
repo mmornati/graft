@@ -165,7 +165,7 @@ const ROUTES: readonly Route[] = [
 ];
 
 /**
- * The one path normalisation every rule of this file uses: the query string is dropped, and so is
+ * The path normalisation every rule of this file builds on: the query string is dropped, and so is
  * one trailing slash. A path with a fragment (`#`), a percent escape or a backslash, or one that
  * does not start with `/`, is null (step 5 review 1, finding 1: a `#` once classified as a route
  * while its body rule saw another path). Nothing is decoded, so a path cannot be made to look like
@@ -181,13 +181,24 @@ function normalisedPath(rawPath: string): string | null {
 }
 
 /**
+ * Phase 1 step 7 (D3): the path of a write. No Graft write carries a query string, so a write path
+ * with `?` is null (an `unknown_route` on every route, Phase 0 routes included); otherwise it is
+ * `normalisedPath`. Reads keep `normalisedPath`: the guard's `pulls.list` by head is a GET with a
+ * query whose node ids must still be recorded (step 5 review 2, nit D).
+ */
+export function writePath(rawPath: string): string | null {
+  if (rawPath.includes("?")) return null;
+  return normalisedPath(rawPath);
+}
+
+/**
  * Classifies a request by method and path (no host; the API base path already removed). A write
  * with a dot segment, an empty segment, a fragment or a percent escape is `unknown`.
  */
 export function classifyWrite(method: string, rawPath: string): WriteClass {
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD") return { kind: "read" };
-  const path = normalisedPath(rawPath);
+  const path = writePath(rawPath);
   if (path === null) return { kind: "unknown" };
   const segments = path.slice(1).split("/");
   if (segments.some((s) => s === "" || s === "." || s === "..")) return { kind: "unknown" };
@@ -221,7 +232,7 @@ export function checkRunWrite(
   rawPath: string,
 ): { owner: string; repo: string } | null {
   const m = method.toUpperCase();
-  const path = normalisedPath(rawPath);
+  const path = writePath(rawPath);
   if (path === null) return null;
   for (const w of CHECK_RUN_WRITES) {
     if (w.method !== m) continue;
@@ -289,7 +300,7 @@ const PLAIN_BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
  * listed by name. The path is normalised as `classifyWrite` does it.
  */
 export function guardBodyAllowed(method: string, path: string, body: unknown): boolean {
-  const p = normalisedPath(path);
+  const p = writePath(path);
   if (p === null) return false;
   const m = method.toUpperCase();
   if (m === "POST" && new RegExp(`${OWNER_REPO}/git/refs$`).test(p)) {
@@ -325,7 +336,7 @@ const MCP_PULL_KEYS = new Set(["title", "body", "head", "base", "draft", "mainta
  * closed: the only route is `POST …/pulls`; anything else, or any other body, is refused.
  */
 export function mcpBodyAllowed(method: string, path: string, body: unknown): boolean {
-  const p = normalisedPath(path);
+  const p = writePath(path);
   if (p === null || method.toUpperCase() !== "POST") return false;
   if (!new RegExp(`${OWNER_REPO}/pulls$`).test(p)) return false;
   const b = plainObject(body);
@@ -567,10 +578,10 @@ export function installMutationGuard(
         if (!cls.features.includes(o.feature)) throw refusal("feature_not_allowed");
         // §12: the body rules of the guard's routes; step 6 §9: the `mcp` feature's pulls. Read
         // before the gate, so a bad body never queries the database.
-        const writePath = parsed.url.slice(base.length);
+        const rawPath = parsed.url.slice(base.length);
         if (
-          (o.feature === "guard" && !guardBodyAllowed(method, writePath, parsed.body)) ||
-          (o.feature === "mcp" && !mcpBodyAllowed(method, writePath, parsed.body))
+          (o.feature === "guard" && !guardBodyAllowed(method, rawPath, parsed.body)) ||
+          (o.feature === "mcp" && !mcpBodyAllowed(method, rawPath, parsed.body))
         ) {
           throw refusal("feature_not_allowed", " (body)");
         }
