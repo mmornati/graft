@@ -869,7 +869,8 @@ export async function gatherPhase1Gate(
       });
       return {
         fullName: row.fullName,
-        private: priv.get(id) ?? true,
+        // Step 7 review 1, nit 10: missing data fails toward public, so stage 2 criterion 6 fails.
+        private: priv.get(id) ?? false,
         modes: {
           policy: view(modes.policy),
           guard: view(modes.guard),
