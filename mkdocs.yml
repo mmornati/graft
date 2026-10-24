@@ -119,6 +119,7 @@ nav:
   - Videos:
     - Graft, explained: video.md
     - What a reviewer sees: video-reviewer-tour.md
+    - Enforce mode, step by step: video-enforce-tour.md
   - Getting started:
     - getting-started.md
     - GitHub App: github-app.md

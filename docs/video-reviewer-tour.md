@@ -1,6 +1,6 @@
 # What a reviewer sees (video)
 
-[Docs index](README.md) · [Graft, explained](video.md) · [Intent cards](features/intent-cards.md) · [Modes](features/modes.md)
+[Docs index](README.md) · [Graft, explained](video.md) · [Enforce mode, step by step](video-enforce-tour.md) · [Intent cards](features/intent-cards.md) · [Modes](features/modes.md)
 
 A narrated tour, in about two and a quarter minutes, of a pull request once Graft is installed: the managed comment (intent card, provenance, policy), the three neutral check runs with the **Card is accurate** and **Card is wrong** buttons, and how card ratings are counted. It walks through four pull requests, from an agent typo fix that would be auto-approved to a description that tries to instruct AI reviewers.
 

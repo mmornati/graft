@@ -2,7 +2,7 @@
 
 [Back to the project README](../README.md)
 
-New to Graft? Start with the [two-and-a-half-minute video](video.md): how it works, who is involved and what changes for reviewers and agents. Then [What a reviewer sees](video-reviewer-tour.md) shows the comment, the checks and the ratings on four simulated pull requests.
+New to Graft? Start with the [two-and-a-half-minute video](video.md): how it works, who is involved and what changes for reviewers and agents. Then [What a reviewer sees](video-reviewer-tour.md) shows the comment, the checks and the ratings on four simulated pull requests, and [Enforce mode, step by step](video-enforce-tour.md) shows Phase 1: modes, counted approvals, break-glass, the post-merge guard and its revert pull requests, and the MCP server.
 
 ## Use and run Graft
 
@@ -20,12 +20,13 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | --- | --- |
 | [features/provenance.md](features/provenance.md) | `Graft-*` trailers, agent or human, precedence, the commit hook. |
 | [features/intent-cards.md](features/intent-cards.md) | How a card is written and verified, the risk floor, rating cards, feedback internals. |
-| [features/policy.md](features/policy.md) | `graft.yaml` in Phase 0 (report only), the CLI and the CI lint workflow. |
+| [features/policy.md](features/policy.md) | `graft.yaml`: how a verdict is decided, report and enforce mode, approvals, the CLI and the CI lint workflow. |
 | [graft-yaml.md](graft-yaml.md) | The full `graft.yaml` v1 reference. Example: [examples/graft.yaml](examples/graft.yaml). |
 | [features/evaluation.md](features/evaluation.md) | `pnpm eval`: case sets, encryption, labeling, live runs, the synthetic CI baseline. |
 | [features/modes.md](features/modes.md) | Report and enforce modes, `pnpm graft mode`, the ceiling, rollback, the mutation guard. |
-| [features/guard.md](features/guard.md) | The post-merge guard: default-branch history, CI result classes, the culprit rule, confirmation, the report-mode comment, `guard.checks`, `pnpm graft guard list`. |
-| [features/pilots-and-gate.md](features/pilots-and-gate.md) | Pilot CLI, the Phase 0 gate, review-time baseline, rollup, incidents. |
+| [features/guard.md](features/guard.md) | The post-merge guard: default-branch history, CI result classes, the culprit rule, confirmation, the report-mode comment, revert pull requests and opt-in auto-merge, `guard.checks`, `pnpm graft guard list`. |
+| [features/mcp.md](features/mcp.md) | The MCP server for agents: tokens, `get_status`, `get_policy`, `report_provenance`, `open_change`, verified commits. |
+| [features/pilots-and-gate.md](features/pilots-and-gate.md) | Pilot CLI, the Phase 0 and Phase 1 gates, review-time baseline, rollup, incidents. |
 | [e2e.md](e2e.md) | The live end-to-end runner against a real sandbox repository. |
 
 ## Internals
@@ -47,6 +48,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | [e2e/live-scenarios-spec.md](e2e/live-scenarios-spec.md) | Design of the live scenarios. Reviews: [e2e/reviews/](e2e/reviews/). |
 | [phase-0/labeling-guide.md](phase-0/labeling-guide.md) | How to label pull requests for the evaluation set. |
 | [phase-0/HUMAN-TODO.md](phase-0/HUMAN-TODO.md) | Things only a person can do (App registration, keys, pilots, real-GitHub checks). |
+| [phase-1/HUMAN-TODO.md](phase-1/HUMAN-TODO.md) | The Phase 1 equivalent: permissions to accept, labels, sandbox smoke tests, real-GitHub checks, pending product decisions. |
 
 ## Product and planning
 
@@ -60,4 +62,4 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | [phase-1/README.md](phase-1/README.md) | The Phase 1 plan (enforce), with report mode as the default so it can be tried without changing outcomes. |
 | Phase 1 step specs | [1 Modes and safety rails](phase-1/step-1-modes.md) · [2 Approvals Graft can enforce](phase-1/step-2-approvals.md) · [3 Break-glass and audit log](phase-1/step-3-break-glass.md) · [4 Guard detection](phase-1/step-4-guard-detection.md) · [5 Revert PRs](phase-1/step-5-revert-prs.md) · [6 MCP server](phase-1/step-6-mcp-server.md) · [7 Security review, pilots and gate](phase-1/step-7-security-pilots-gate.md) |
 
-Security reports: see [SECURITY.md](../SECURITY.md).
+Releases: see the [changelog](../CHANGELOG.md). Security reports: see [SECURITY.md](../SECURITY.md).

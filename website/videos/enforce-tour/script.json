@@ -1,0 +1,92 @@
+{
+  "_doc": "Scenes and narration of 'Enforce mode, step by step' (Phase 1). One entry per scene; each language is a list of sentences (cues). Write numbers in words. Then run narrate.py on this folder. The organisation, repository, people and pull requests shown are fictional (acme).",
+  "langs": ["en"],
+  "engine": "kokoro",
+  "voices": {"kokoro": {"en": {"voice": "af_heart"}}},
+  "scenes": [
+    {
+      "id": "title", "min": 9, "lead": 1.4,
+      "chapter": {"en": "Enforce mode"},
+      "en": [
+        "Phase one of Graft is built: it can count approvals, watch main, and talk to agents.",
+        "But it still starts in report mode, and nothing enforces until an operator says so."
+      ]
+    },
+    {
+      "id": "modes", "min": 15,
+      "chapter": {"en": "Modes and the ceiling"},
+      "en": [
+        "Each repository has three keys: policy mode, guard mode, and M C P write.",
+        "The operator sets them with the Graft command line, never in graft dot yaml.",
+        "Above them sits a server ceiling, which defaults to report, and the lower of the two wins.",
+        "Any GitHub write that the effective mode does not allow is refused."
+      ]
+    },
+    {
+      "id": "approvals", "min": 15,
+      "chapter": {"en": "Approvals that count"},
+      "en": [
+        "In report mode, the policy check stays neutral, and says what enforce mode would conclude.",
+        "In enforce mode, Graft counts real approvals: write access, on the current head, from verified team members.",
+        "A new push makes earlier approvals stale.",
+        "The check turns green only when the policy is met."
+      ]
+    },
+    {
+      "id": "breakglass", "min": 14,
+      "chapter": {"en": "Break-glass"},
+      "en": [
+        "When something must merge now, a maintainer adds the break-glass label.",
+        "The check passes for that one commit, and the next push needs the label again.",
+        "A label from someone with triage rights is ignored.",
+        "Every bypass is written to the audit log."
+      ]
+    },
+    {
+      "id": "guard", "min": 15,
+      "chapter": {"en": "The post-merge guard"},
+      "en": [
+        "After a merge, the guard watches the checks on main.",
+        "When a check goes red, it waits for the next commit to confirm the failure, so a flaky test is not blamed.",
+        "Then it names the culprit, in a comment on the pull request that broke main."
+      ]
+    },
+    {
+      "id": "revert", "min": 16,
+      "chapter": {"en": "Revert pull requests"},
+      "en": [
+        "In enforce mode, the guard opens a revert pull request.",
+        "It builds the revert from file versions alone, without reading any code.",
+        "If a later commit touched the same files, it stops, and asks a human.",
+        "Auto-merge is opt-in for trivial and logic reverts, never for sensitive ones, and branch protection still decides."
+      ]
+    },
+    {
+      "id": "mcp", "min": 16,
+      "chapter": {"en": "The MCP server"},
+      "en": [
+        "Agents can talk to Graft directly, through an M C P server with four tools.",
+        "Each token is scoped to one repository, and stored only as a hash.",
+        "Provenance an agent reports can tighten a verdict, never loosen it.",
+        "Open change can open a pull request, only when M C P write is on, and only signed commits let approvals count."
+      ]
+    },
+    {
+      "id": "rollout", "min": 17,
+      "chapter": {"en": "Rollout and the gate"},
+      "en": [
+        "A runbook takes each pilot repository through the stages, one at a time.",
+        "Install in report mode, watch for two weeks, then enforce the policy, then the guard.",
+        "The Phase one gate measures four things, across five pilots.",
+        "Thirty percent of pull requests merged with no human, half the review minutes, eighty percent of breakages caught, and no rise in escaped defects."
+      ]
+    },
+    {
+      "id": "close", "min": 9,
+      "en": [
+        "Report first, then enforce one repository at a time.",
+        "Every step, and its rollback, is in the docs."
+      ]
+    }
+  ]
+}

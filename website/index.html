@@ -58,7 +58,7 @@
       <a class="btn btn--ghost btn--video" href="videos/graft-explained/"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>Watch the video</a>
       <a class="btn btn--ghost" href="https://github.com/mmornati/graft">View on GitHub</a>
     </div>
-    <p class="status"><a class="textlink" href="videos/reviewer-tour/">Video: what a reviewer sees on a pull request</a></p>
+    <p class="status"><a class="textlink" href="videos/reviewer-tour/">Video: what a reviewer sees on a pull request</a> · <a class="textlink" href="videos/enforce-tour/">Video: enforce mode, step by step</a></p>
     <p class="status"><span class="status__dot" aria-hidden="true"></span>Phase 0, shadow mode: one managed comment and three check runs per pull request, and every check concludes <code>neutral</code>. Graft reports; it never enforces.</p>
   </div>
 
@@ -397,9 +397,9 @@
     <div class="fieldnote">
       <p class="fieldnote__stamp" aria-hidden="true">Report only</p>
       <h2 id="phase-title">A field note on shadow mode.</h2>
-      <p>Graft is in <strong>shadow mode</strong>. It reports and never enforces: every Graft check concludes <code>neutral</code>, a "would approve" is not an approval, and team membership is not checked. Keep your branch protection as it is.</p>
+      <p>Graft starts in <strong>shadow mode</strong>. Out of the box it reports and never enforces: every Graft check concludes <code>neutral</code>, a "would approve" is not an approval, and the post-merge guard only comments. Keep your branch protection as it is.</p>
       <p>Phase 0 ends at a gate measured from data: at least <strong>90%</strong> of eligible reviewer votes must say the intent cards are accurate, with enough votes, voters, installations and days behind the number, decided with a Wilson interval. The steps are built; the gate awaits pilot data from two pilot teams.</p>
-      <p>Phase 1 is partly built: modes and safety rails, approvals Graft can enforce, break-glass with an audit log, and post-merge guard detection. All of it defaults to report mode, and nothing enforces until an operator raises the server ceiling and sets a repository to enforce. Revert PRs, the MCP server and the security review, pilots and gate are not built. See <a class="textlink" href="docs/features/modes/">Modes</a> and <a class="textlink" href="docs/features/guard/">the post-merge guard</a>.</p>
+      <p>Phase 1 is built: approvals Graft can enforce, break-glass with an audit log, a post-merge guard that names the commit that broke <code>main</code> and can open a revert pull request, and an MCP server for agents. All of it defaults to report mode, and nothing enforces until an operator raises the server ceiling and sets one repository to enforce, following a staged rollout runbook. Its gate counts PRs merged with no human, review minutes, breakages caught and escaped defects across five pilots. See <a class="textlink" href="docs/features/modes/">Modes</a>, <a class="textlink" href="docs/features/guard/">the post-merge guard</a>, <a class="textlink" href="docs/features/mcp/">MCP</a> and <a class="textlink" href="videos/enforce-tour/">the enforce mode video</a>.</p>
       <a class="textlink" href="docs/plan/development-plan/">The development plan</a>
     </div>
   </div>
@@ -438,6 +438,7 @@ curl localhost:3000/readyz
       <a class="btn btn--primary" href="docs/">Read the docs</a>
       <a class="btn btn--ghost btn--video" href="videos/graft-explained/"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>Watch the video</a>
       <a class="btn btn--ghost btn--video" href="videos/reviewer-tour/"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>What a reviewer sees</a>
+      <a class="btn btn--ghost btn--video" href="videos/enforce-tour/"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>Enforce mode</a>
       <a class="btn btn--ghost" href="https://github.com/mmornati/graft">View on GitHub</a>
     </div>
   </div>

@@ -6,16 +6,26 @@
 #
 # mmornati/graft belongs to a user account, so team constraints could never be verified here
 # (Phase 1 step 2: `owner_not_org`). The rules count humans only.
+#
+# The repository is public, so the Phase 1 runbook keeps its `policy_mode` in report (step 7 D10).
+# Modes are set by the operator with `pnpm graft mode set`, never in this file.
 version: 1
 
 # Changes here raise the intent card's risk floor to `sensitive`: the code that decides what Graft
-# may write to GitHub, verifies webhooks, sets modes, evaluates policy, or holds secrets at deploy.
+# may write to GitHub, verifies webhooks, sets modes, evaluates policy, builds revert trees,
+# authenticates MCP clients, keeps the audit log, or holds secrets at deploy.
 sensitive_paths:
   - "src/github/**"
   - "src/webhooks/**"
   - "src/modes/**"
   - "src/modules/modes/**"
   - "src/policy/**"
+  - "src/modules/policy/**"
+  - "src/guard/**"
+  - "src/modules/guard/**"
+  - "src/mcp/**"
+  - "src/modules/mcp/**"
+  - "src/modules/audit/**"
   - "src/db/migrations/**"
   - "github/**"
   - ".github/workflows/**"
@@ -46,10 +56,16 @@ rules:
 
   # The safety core and the deployment: always one human.
   - name: safety-core
-    match: { paths: ["src/github/**", "src/webhooks/**", "src/modes/**", "src/modules/modes/**", "src/policy/**", "github/**", ".github/workflows/**", "Dockerfile", "compose.coolify.yaml", "deploy/**"] }
+    match: { paths: ["src/github/**", "src/webhooks/**", "src/modes/**", "src/modules/modes/**", "src/policy/**", "src/modules/policy/**", "src/guard/**", "src/modules/guard/**", "src/mcp/**", "src/modules/mcp/**", "src/modules/audit/**", "github/**", ".github/workflows/**", "Dockerfile", "compose.coolify.yaml", "deploy/**"] }
     require: { humans: 1 }
 
   # Large agent-written changes: one human (the repository has one maintainer).
   - name: agent-large
     match: { author: agent, size: { min_lines: 1000 } }
     require: { humans: 1 }
+
+# The post-merge guard watches `main`. Only the CI job `check` (lint, types, tests, eval, build) can
+# open a guard event; the docs site's `build` and `deploy` jobs cannot. No `auto_merge_reverts`:
+# the repository does not allow auto-merge, and a revert of this repository is merged by a human.
+guard:
+  checks: [check]

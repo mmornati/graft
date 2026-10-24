@@ -1,0 +1,5 @@
+{
+  "_doc": "Pronunciation fixes, applied to the spoken text only (subtitles keep the original). Keys are whole words, case-sensitive. A [[\u2026]] value is raw IPA (Kokoro, Azure). '<lang>@<engine>' entries override '<lang>' for one engine. Use the narration-lexicon skill to find and verify entries.",
+  "en": {},
+  "_notes": "Verified with narration-lexicon (Whisper small) on 2026-10-24 after one rewrite ('Report first, enforce' was elided to 'and force'; now 'then enforce'). No entry needed for Kokoro af_heart. Diffs left: 'M C P write' heard as 'MCP right' and 'main' as 'Maine', 'docs' as 'docks', 'runbook' as 'run book' (homophones); 'Graft' as 'graph' (the same prior noted for the other two videos); 'GitHub' as 'get hub' only inside its sentence (alone, every spelling comes back 'GitHub')."
+}
