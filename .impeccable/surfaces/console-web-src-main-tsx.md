@@ -1,19 +1,19 @@
 ---
 version: 1
-slug: "console-mockup-index-html"
-primary_target: "console/mockup/index.html"
-related_targets: []
+slug: "console-web-src-main-tsx"
+primary_target: "console/web/src/main.tsx"
+related_targets: ["console/web/src/journal.tsx","console/web/src/styles.css"]
 ---
 
-# Surface brief: operator console mockup (console/mockup/index.html)
+# Surface brief: operator console (console/web)
 
 Scope: a read-only operator console for Graft, deployed as its own container next to server and worker, reading
-Postgres through a read-only role. This file is the high-fidelity mockup that proposes it.
+Postgres through a read-only role. Built from the approved Field Journal mockup (PR 52, first version).
 Visitor mode: Operate.
 
 Audience: the operator running Graft (today the owner), daily. Job: a morning check of what Graft handled since
 yesterday, and digging in when something looks wrong. Task: see what needs a human, read the day, open one PR's record,
-copy the `graft …` CLI command that acts on it (v1 takes no action itself). Content: production aggregates from
+copy the `graft …` CLI command that acts on it (v1 takes no action itself). Content: whatever Graft stored; the mockup used production aggregates from
 2026-10-25 (read-only queries): deliveries, cards, verifier verdicts, policy outcomes, guard events, spend, feedback.
 Constraints: only what the tables store (no PR titles, bodies, diffs); goals are model prose and may be shown;
 WCAG 2.2 AA in light and dark; usable at 360px.

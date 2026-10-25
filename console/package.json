@@ -1,0 +1,39 @@
+{
+  "name": "@graft/console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional read-only operator console for Graft: a BFF over Graft's Postgres and a small web app.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.14.0",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "dev": "tsx scripts/build.ts --watch",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration"
+  },
+  "dependencies": {
+    "fastify": "5.12.7",
+    "kysely": "0.29.6",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@fontsource/courier-prime": "5.3.0",
+    "@fontsource/im-fell-english": "5.3.0",
+    "@fontsource/literata": "5.3.0",
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2",
+    "preact": "11.0.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

@@ -140,6 +140,7 @@ nav:
     - Post-merge guard: features/guard.md
     - MCP server: features/mcp.md
   - Operate:
+    - Operator console: console.md
     - Live e2e scenarios: e2e.md
     - E2E runbook: e2e/runbook.md
     - E2E scenarios spec: e2e/live-scenarios-spec.md

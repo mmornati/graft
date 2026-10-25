@@ -1,6 +1,8 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "vcs": { "enabled": false },
+  "vcs": {
+    "enabled": false
+  },
   "files": {
     "includes": [
       "src/**",
@@ -9,18 +11,43 @@
       "github/*.json",
       "*.json",
       "*.ts",
+      "console/server/**",
+      "console/web/src/**",
+      "console/shared/**",
+      "console/test/**",
+      "console/scripts/**",
+      "console/*.json",
+      "console/*.ts",
+      "!console/web/src/styles.css",
       "!**/dist",
       "!**/node_modules",
       "!test/fixtures"
     ]
   },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
   "linter": {
     "enabled": true,
     "rules": {
-      "suspicious": { "noExplicitAny": "error" }
+      "suspicious": {
+        "noExplicitAny": "error"
+      }
     }
   },
-  "javascript": { "formatter": { "quoteStyle": "double" } },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
 }

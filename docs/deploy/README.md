@@ -19,6 +19,8 @@ One image (the `Dockerfile` at the repository root) holds everything. It runs as
 
 Both long-running processes share one **Postgres 17** database, which also holds the queue (pg-boss). Graft stores no code, diffs or PR text (see [architecture](../architecture.md#contracts)), so the database stays small. Back it up anyway: it holds the audit trail of mode changes and the pilot data.
 
+The optional [operator console](../console.md) is not part of this image: it has its own (`console/Dockerfile`), its own read-only database role and none of these secrets.
+
 The operator CLI runs in the same image: `node dist/bin/graft.js <command>` (for example `mode show --installation <id>` or `pilot doctor`). Inside a container it reads the same environment as the server.
 
 ## Configuration

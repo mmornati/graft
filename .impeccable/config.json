@@ -17,24 +17,6 @@
         "value": "noto sans",
         "createdAt": "2026-10-16T06:54:47.218Z",
         "reason": "Claude: .gh mock of GitHub's PR comment uses GitHub's system font stack on purpose for fidelity"
-      },
-      {
-        "rule": "low-contrast",
-        "value": "*",
-        "files": [
-          "console/mockup/index.html"
-        ],
-        "createdAt": "2026-10-25T15:04:18.410Z",
-        "reason": "Claude: static scan pairs dark-theme tokens with unresolved default colours (#000 text on #1b2721, #9aa69c on #fff); no element uses those pairs. Rendered page checked in light and dark: computed tab colours rgb(186,196,185) on rgb(21,32,27)"
-      },
-      {
-        "rule": "cramped-padding",
-        "value": "*",
-        "files": [
-          "console/mockup/index.html"
-        ],
-        "createdAt": "2026-10-25T15:05:01.101Z",
-        "reason": "Claude: both flags are wrappers whose children carry the inset: .reg-scroll holds a table with 10-14px cell padding; .cabinet is a full-bleed band whose .cabinet__in has a 16px+ gutter and 64-72px padding-block (same pattern already ignored for website/index.html)"
       }
     ]
   }

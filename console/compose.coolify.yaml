@@ -1,0 +1,30 @@
+# The Graft console on Coolify: a resource of its own, next to Graft's. Deploying it never touches
+# Graft, and Graft runs the same without it. See docs/console.md.
+#
+# Build Pack: Docker Compose, Base Directory: /console, Docker Compose Location: /compose.coolify.yaml.
+# Turn on Advanced → Docker compose → "Connect to predefined network" so the database hostname resolves.
+# SERVICE_FQDN_CONSOLE_3100 is a Coolify magic variable: the console's domain, routed to port 3100.
+
+services:
+  console:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SERVICE_FQDN_CONSOLE_3100: ""
+      HOST: 0.0.0.0
+      PORT: "3100"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The graft_console role from sql/readonly-role.sql, never Graft's own DATABASE_URL.
+      CONSOLE_DATABASE_URL: ${CONSOLE_DATABASE_URL:?}
+      CONSOLE_AUTH: github
+      CONSOLE_PUBLIC_URL: ${CONSOLE_PUBLIC_URL:?}
+      CONSOLE_GITHUB_CLIENT_ID: ${CONSOLE_GITHUB_CLIENT_ID:?}
+      CONSOLE_GITHUB_CLIENT_SECRET: ${CONSOLE_GITHUB_CLIENT_SECRET:?}
+      CONSOLE_ALLOWED_USERS: ${CONSOLE_ALLOWED_USERS:?}
+      CONSOLE_SESSION_SECRET: ${CONSOLE_SESSION_SECRET:?}
+      CONSOLE_TIME_ZONE: ${CONSOLE_TIME_ZONE:-UTC}
+      CONSOLE_DAILY_TOKEN_BUDGET: ${CONSOLE_DAILY_TOKEN_BUDGET:-2000000}
+    expose:
+      - "3100"
+    restart: unless-stopped
