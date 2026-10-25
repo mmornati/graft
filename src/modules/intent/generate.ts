@@ -27,16 +27,15 @@ import {
   type WriterOutput,
 } from "./output.js";
 import {
+  buildSharedData,
   buildVerifierData,
   buildVerifierUser,
   buildWriterUser,
   cardClaims,
   type MessageFacts,
+  OUTPUT_SCHEMA,
   PROMPT_VERSION,
-  VERIFIER_OUTPUT_SCHEMA,
-  verifierSystemPrompt,
-  WRITER_OUTPUT_SCHEMA,
-  writerSystemPrompt,
+  systemPrompt,
 } from "./prompts.js";
 import {
   combineRisk,
@@ -148,6 +147,8 @@ export interface PreparedCard {
   // Internals: opaque to callers.
   readonly floorReasons: FloorReason[];
   readonly nonce: string;
+  /** The start of both user messages; cached between the writer and the verifier. */
+  readonly sharedData: string;
   readonly writerUser: string;
   readonly verifierData: string;
   readonly fileList: ReadonlySet<string>;
@@ -270,8 +271,9 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     contextBlock: diff.renderContext(nonce),
     contextFiles: diff.contextFiles,
   };
-  const writerUser = buildWriterUser({ ...facts, title, body, issue });
-  const verifierData = buildVerifierData(facts);
+  const sharedData = buildSharedData(facts);
+  const writerUser = buildWriterUser(sharedData, { ...facts, title, body, issue });
+  const verifierData = buildVerifierData(sharedData, facts);
   const trivial = floor === "trivial";
   const estimatedTokens =
     Math.ceil(writerUser.length / 3) * (trivial ? 2 : 1) +
@@ -285,6 +287,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     stats,
     floorReasons: reasons,
     nonce,
+    sharedData,
     writerUser,
     verifierData,
     fileList: new Set(inputs.files.map((f) => f.path)),
@@ -400,6 +403,7 @@ export async function runCard(
       model: string;
       system: string;
       user: string;
+      userCachePrefix: string;
       outputSchema: Record<string, unknown>;
       effort: LlmEffort;
     },
@@ -461,9 +465,10 @@ export async function runCard(
     {
       purpose: "writer",
       model: firstIsFast ? o.models.fast : o.models.strong,
-      system: writerSystemPrompt(p.language),
+      system: systemPrompt(p.language),
       user: p.writerUser,
-      outputSchema: WRITER_OUTPUT_SCHEMA,
+      userCachePrefix: p.sharedData,
+      outputSchema: OUTPUT_SCHEMA,
       effort: firstIsFast ? EFFORTS.fast : EFFORTS.strong,
     },
     (v) => parseWriterOutput(v, p.fileList),
@@ -482,9 +487,10 @@ export async function runCard(
       {
         purpose: "writer_escalated",
         model: o.models.strong,
-        system: writerSystemPrompt(p.language),
+        system: systemPrompt(p.language),
         user: p.writerUser,
-        outputSchema: WRITER_OUTPUT_SCHEMA,
+        userCachePrefix: p.sharedData,
+        outputSchema: OUTPUT_SCHEMA,
         effort: EFFORTS.strong,
       },
       (v) => parseWriterOutput(v, p.fileList),
@@ -539,9 +545,10 @@ export async function runCard(
     {
       purpose: "verifier",
       model: o.models.strong,
-      system: verifierSystemPrompt(p.language),
+      system: systemPrompt(p.language),
       user: buildVerifierUser(p.verifierData, p.nonce, card),
-      outputSchema: VERIFIER_OUTPUT_SCHEMA,
+      userCachePrefix: p.sharedData,
+      outputSchema: OUTPUT_SCHEMA,
       effort: EFFORTS.verifier,
     },
     (v) => parseVerifierOutput(v, expectedIds, p.fileList, alreadyOutOfScope),

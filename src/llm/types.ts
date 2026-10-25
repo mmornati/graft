@@ -21,6 +21,11 @@ export interface LlmRequest {
   system: string;
   /** Contains untrusted data blocks; NEVER logged. */
   user: string;
+  /**
+   * A prefix of `user` sent as its own block with cache_control, so calls that start with the
+   * same bytes (same model and effort) read it from the cache. Must be non-empty when set.
+   */
+  userCachePrefix?: string;
   /** JSON Schema for output_config.format. */
   outputSchema: Record<string, unknown>;
   maxOutputTokens: number;

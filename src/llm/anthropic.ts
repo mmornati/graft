@@ -139,6 +139,22 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
           : { ok: false, failure: r.failure, usage, model, durationMs };
       };
 
+      const prefix = req.userCachePrefix;
+      if (prefix !== undefined && (prefix === "" || !req.user.startsWith(prefix))) {
+        throw new Error("userCachePrefix must be a non-empty prefix of user");
+      }
+      const rest = prefix === undefined ? "" : req.user.slice(prefix.length);
+      const content =
+        prefix === undefined
+          ? req.user
+          : [
+              {
+                type: "text" as const,
+                text: prefix,
+                cache_control: { type: "ephemeral" as const },
+              },
+              ...(rest === "" ? [] : [{ type: "text" as const, text: rest }]),
+            ];
       const body = {
         model: req.model,
         max_tokens: req.maxOutputTokens,
@@ -149,7 +165,7 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
             cache_control: { type: "ephemeral" as const },
           },
         ],
-        messages: [{ role: "user" as const, content: req.user }],
+        messages: [{ role: "user" as const, content }],
         output_config: {
           effort: req.effort,
           format: { type: "json_schema" as const, schema: req.outputSchema },

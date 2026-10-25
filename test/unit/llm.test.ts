@@ -130,6 +130,33 @@ describe("anthropic client", () => {
     }
   });
 
+  it("U-LLM-20 userCachePrefix becomes a cached first block; anything else is a programmer error", async () => {
+    const { fn, seen } = fakeFetch([ok(), ok()]);
+    const c = client(fn);
+    await c.complete(
+      req({ user: "SHARED_DIFF\n\nWRITER_TAIL", userCachePrefix: "SHARED_DIFF\n\n" }),
+    );
+    expect(seen[0]?.body.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "SHARED_DIFF\n\n", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "WRITER_TAIL" },
+        ],
+      },
+    ]);
+    await c.complete(req({ user: "ALL", userCachePrefix: "ALL" }));
+    expect(seen[1]?.body.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "ALL", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+    await expect(c.complete(req({ userCachePrefix: "OTHER" }))).rejects.toThrow(/prefix of user/);
+    await expect(c.complete(req({ userCachePrefix: "" }))).rejects.toThrow(/prefix of user/);
+    expect(seen).toHaveLength(2);
+  });
+
   it("U-LLM-2 the refusal fallback is only for Sonnet/Opus and only when enabled", async () => {
     const sonnet = fakeFetch([ok()]);
     await client(sonnet.fn, { refusalFallback: true }).complete(

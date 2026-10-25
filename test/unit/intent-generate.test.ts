@@ -9,7 +9,7 @@ import {
   runCard,
   unavailableResult,
 } from "../../src/modules/intent/generate.js";
-import { verifierSystemPrompt, writerSystemPrompt } from "../../src/modules/intent/prompts.js";
+import { OUTPUT_SCHEMA, systemPrompt } from "../../src/modules/intent/prompts.js";
 import { renderIntentSection } from "../../src/modules/intent/render.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
@@ -389,8 +389,7 @@ describe("generateCard", () => {
     for (const c of llm.calls) {
       expect(c.system).toContain("Write every sentence of your answer in German");
     }
-    expect(llm.calls[0]?.system).toBe(writerSystemPrompt("de"));
-    expect(llm.calls[2]?.system).toBe(verifierSystemPrompt("de"));
+    for (const c of llm.calls) expect(c.system).toBe(systemPrompt("de"));
   });
 
   it("U-GEN-17 deterministic and non-mutating", async () => {
@@ -788,5 +787,45 @@ describe("client-side refusal fallback", () => {
     const a = prepareCardInputs(inputs({ files: [file("src/a.ts", { headText: "x\n" })] }), OPTS);
     const b = prepareCardInputs(inputs({ files: [file("src/a.ts", { headText: "y\n" })] }), OPTS);
     expect(a.inputHash).not.toBe(b.inputHash);
+  });
+
+  it("U-GEN-39 the writers and the verifier share one system prompt, one output format and a cached prefix holding the diff", async () => {
+    const llm = scriptedLlm({
+      writer: W({ risk_class: "logic" }),
+      writerEscalated: W({ risk_class: "logic" }),
+      verifier: agreeingVerifier,
+    });
+    await generateCard(
+      inputs({
+        pr: { ...inputs().pr, title: "TITLE_CANARY", body: "BODY_CANARY" },
+        files: [
+          file("src/a.ts", { patch: "+DIFF_CANARY", headText: "const CONTEXT_CANARY = 1;\n" }),
+        ],
+      }),
+      llm,
+      OPTS,
+    );
+    expect(llm.calls.map((c) => c.purpose)).toEqual(["writer", "writer_escalated", "verifier"]);
+    const prefix = llm.calls[0]?.userCachePrefix ?? "";
+    expect(prefix).toMatch(/^Nonce: [0-9a-f]{16}\n/);
+    expect(prefix).toContain("DIFF_CANARY");
+    expect(
+      prefix.endsWith("</untrusted_data_" + /Nonce: ([0-9a-f]{16})/.exec(prefix)?.[1] + ">\n\n"),
+    ).toBe(true);
+    for (const c of ["TITLE_CANARY", "BODY_CANARY", "CONTEXT_CANARY", "intent_card"]) {
+      expect(prefix, c).not.toContain(c);
+    }
+    for (const c of llm.calls) {
+      expect(c.system).toBe(systemPrompt());
+      expect(c.userCachePrefix).toBe(prefix);
+      expect(c.outputSchema).toBe(OUTPUT_SCHEMA);
+      expect(c.user.startsWith(prefix)).toBe(true);
+    }
+    expect(llm.calls[0]?.user.endsWith("Task: write the intent card for this pull request.")).toBe(
+      true,
+    );
+    expect(
+      llm.calls[2]?.user.endsWith("Task: verify every claim in the intent card against the diff."),
+    ).toBe(true);
   });
 });

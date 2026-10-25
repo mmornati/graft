@@ -5,12 +5,10 @@ import {
   LANGUAGE_SECTION,
   PROMPT_VERSION,
   promptFingerprint,
+  SYSTEM_PROMPT,
+  systemPrompt,
   VERIFIER_OUTPUT_SCHEMA,
-  VERIFIER_SYSTEM_PROMPT,
-  verifierSystemPrompt,
   WRITER_OUTPUT_SCHEMA,
-  WRITER_SYSTEM_PROMPT,
-  writerSystemPrompt,
 } from "../../src/modules/intent/prompts.js";
 import { REPORT_LANGUAGES, type ReportLanguage } from "../../src/policy/schema.js";
 
@@ -182,8 +180,7 @@ describe("prompts", () => {
   it("U-PROMPT-1 the prompt hash is pinned next to PROMPT_VERSION", () => {
     const hash = createHash("sha256")
       .update(
-        WRITER_SYSTEM_PROMPT +
-          VERIFIER_SYSTEM_PROMPT +
+        SYSTEM_PROMPT +
           LANGUAGE_SECTION +
           JSON.stringify(WRITER_OUTPUT_SCHEMA) +
           JSON.stringify(VERIFIER_OUTPUT_SCHEMA),
@@ -191,28 +188,24 @@ describe("prompts", () => {
       .digest("hex");
     // Changing a prompt or a schema changes this hash: bump PROMPT_VERSION and update both.
     expect([PROMPT_VERSION, hash]).toEqual([
-      "intent-v3",
-      "5f2eb17b918d1e6870f032433dd4ed87d309affbaf6ee45fe10cee13ded79498",
+      "intent-v4",
+      "55515adfe9e010762c7692b44f6755aa6d71c9bd1110077a8c29c5844d14aca1",
     ]);
     expect(promptFingerprint()).toBe(hash);
-    for (const p of [WRITER_SYSTEM_PROMPT, VERIFIER_SYSTEM_PROMPT]) {
-      expect(p.length).toBeGreaterThanOrEqual(2000);
-      expect(p).not.toMatch(/[{}]/);
-    }
+    expect(SYSTEM_PROMPT.length).toBeGreaterThanOrEqual(2000);
+    expect(SYSTEM_PROMPT).not.toMatch(/[{}]/);
   });
 
-  it("U-PROMPT-2 report.language: English keeps the prompts byte for byte; another language appends its name only", () => {
-    expect(writerSystemPrompt()).toBe(WRITER_SYSTEM_PROMPT);
-    expect(writerSystemPrompt("en")).toBe(WRITER_SYSTEM_PROMPT);
-    expect(verifierSystemPrompt("en")).toBe(VERIFIER_SYSTEM_PROMPT);
+  it("U-PROMPT-2 report.language: English keeps the prompt byte for byte; another language appends its name only", () => {
+    expect(systemPrompt()).toBe(SYSTEM_PROMPT);
+    expect(systemPrompt("en")).toBe(SYSTEM_PROMPT);
     expect(LANGUAGE_SECTION.match(/\{language\}/g)).toHaveLength(1);
     for (const [tag, name] of Object.entries(REPORT_LANGUAGES) as [ReportLanguage, string][]) {
       if (tag === "en") continue;
       const section = LANGUAGE_SECTION.replace("{language}", name);
-      expect(writerSystemPrompt(tag)).toBe(WRITER_SYSTEM_PROMPT + section);
-      expect(verifierSystemPrompt(tag)).toBe(VERIFIER_SYSTEM_PROMPT + section);
+      expect(systemPrompt(tag)).toBe(SYSTEM_PROMPT + section);
       expect(section).not.toMatch(/[{}]/);
     }
-    expect(writerSystemPrompt("fr")).toContain("Write every sentence of your answer in French");
+    expect(systemPrompt("fr")).toContain("Write every sentence of your answer in French");
   });
 });

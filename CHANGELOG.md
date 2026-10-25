@@ -8,6 +8,10 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 - `report.language` in `graft.yaml`: the intent card's model-written text in one of 12 languages (`intent-v3`). Headings and labels stay in English. [graft.yaml](docs/graft-yaml.md)
 
+### Changed
+
+- Lower model cost per card (`intent-v4`): the writer and the verifier share one system prompt and a cached start of the user message holding the diff, so the verifier reads the diff from the prompt cache instead of paying for it again.
+
 ## v0.1.0 (2026-10-24): Phase 1 built, report mode by default
 
 All seven Phase 1 steps are built, reviewed twice and merged. Each one ships with a report mode, and report mode is the default.
