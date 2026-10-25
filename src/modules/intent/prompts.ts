@@ -147,6 +147,16 @@ export const VERIFIER_OUTPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
+/**
+ * intent-v4: the format both calls send. The API renders `output_config.format` ahead of the
+ * system prompt, so two different schemas would split the cache; with this union the writer and
+ * the verifier share one prefix. `parseWriterOutput` and `parseVerifierOutput` still accept only
+ * their own shape, so an answer in the other shape is invalid output and retried.
+ */
+export const OUTPUT_SCHEMA: Record<string, unknown> = {
+  anyOf: [WRITER_OUTPUT_SCHEMA, VERIFIER_OUTPUT_SCHEMA],
+};
+
 export interface MessageFacts {
   nonce: string;
   repositoryFullName: string;

@@ -9,7 +9,7 @@ import {
   runCard,
   unavailableResult,
 } from "../../src/modules/intent/generate.js";
-import { systemPrompt } from "../../src/modules/intent/prompts.js";
+import { OUTPUT_SCHEMA, systemPrompt } from "../../src/modules/intent/prompts.js";
 import { renderIntentSection } from "../../src/modules/intent/render.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
@@ -789,7 +789,7 @@ describe("client-side refusal fallback", () => {
     expect(a.inputHash).not.toBe(b.inputHash);
   });
 
-  it("U-GEN-39 the writers and the verifier share one system prompt and a cached prefix holding the diff", async () => {
+  it("U-GEN-39 the writers and the verifier share one system prompt, one output format and a cached prefix holding the diff", async () => {
     const llm = scriptedLlm({
       writer: W({ risk_class: "logic" }),
       writerEscalated: W({ risk_class: "logic" }),
@@ -818,6 +818,7 @@ describe("client-side refusal fallback", () => {
     for (const c of llm.calls) {
       expect(c.system).toBe(systemPrompt());
       expect(c.userCachePrefix).toBe(prefix);
+      expect(c.outputSchema).toBe(OUTPUT_SCHEMA);
       expect(c.user.startsWith(prefix)).toBe(true);
     }
     expect(llm.calls[0]?.user.endsWith("Task: write the intent card for this pull request.")).toBe(
