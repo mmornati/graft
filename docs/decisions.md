@@ -1017,3 +1017,13 @@ The verifier saw only GitHub's patches, which carry three lines of context per h
 - **Cost.** Up to 60,000 more characters (about 20,000 tokens) on the verifier call and up to 20 more GitHub reads per card. The context is part of `inputHash` and of the nonce search.
 - **Versioning.** `PROMPT_VERSION` is `intent-v2`; U-PROMPT-1, the eval case schema (`headText` is optional, so v1 cases still load; the export redacts it like a description) and the synthetic baseline (metadata only) are updated. Stored claims are JSON, so no migration. Not done: a live eval run comparing the false disagreement rate of `intent-v1` and `intent-v2`.
 - **Tests.** U-FETCH-7/8, U-DIFF-13/14/15/16, U-OUT-8, U-GEN-36/37/38, U-IREN-11. `contentRefs` in the policy tests now counts only `graft.yaml` reads, so I-POLH-2/4/6 still prove the policy is read at the base only.
+
+## Intent card language (`report.language`, intent-v3)
+
+Teams that review in another language asked for the card in that language.
+
+- **Key.** `report.language` in `graft.yaml`, read with `sensitive_paths` from the base commit (D3), so a pull request cannot change the language of its own card. A closed list of tags (`en`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `pl`, `sv`, `ja`, `ko`, `zh`), each mapped to an English name in `REPORT_LANGUAGES`; another value is `language_invalid`. The prompt only ever holds a name from that list, never file text. A file without `report` keeps its canonical form and hash; the policy engine ignores it.
+- **What is translated.** Only the model-written text: the goal, behavior changes, risk reason, out-of-scope reasons and the verifier's reasons and missing changes. Headings, labels, floor reasons, check text and policy messages stay English: they are fixed strings, and translating them is separate work.
+- **How.** English keeps both system prompts byte for byte. Another language appends one `Language` section to both, telling the model to write every sentence in that language and to keep paths, JSON keys, claim ids, `risk_class` and `verdict` in English (the output parsers check them). The writer and verifier get the same language, so the verifier reads claims in the language it writes its reasons in. The language is part of `inputHash`, so changing it gives a new card.
+- **Versioning.** `PROMPT_VERSION` is `intent-v3`: the fingerprint now covers the language section. U-PROMPT-1 and the synthetic baseline (metadata only; English prompts are unchanged) are updated. Not done: a live eval in another language. The synthetic cases are English, and the risk floor's injection patterns are English, so non-English injection text is caught only by the model.
+- **Tests.** U-PRL-1, U-PROMPT-2, U-GEN-16 (language changes the hash), U-GEN-21, I-POLH-7.

@@ -31,6 +31,7 @@ import { evaluatePolicy, type PolicyFacts } from "../../src/policy/evaluate.js";
 import { validateGlob } from "../../src/policy/globs.js";
 import { policyJsonSchema } from "../../src/policy/json-schema.js";
 import { parsePolicyText } from "../../src/policy/parse.js";
+import { REPORT_LANGUAGES } from "../../src/policy/schema.js";
 import { expectDuration } from "../helpers/perf.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -1532,6 +1533,53 @@ describe("graft.yaml guard key (Phase 1 step 4)", () => {
     const checksOnly = parse("version: 1\nguard:\n  checks: [test]\n");
     if (!checksOnly.ok) throw new Error("parse failed");
     expect(checksOnly.policy.guard).toEqual({ checks: ["test"] });
+    for (const [name, bytes] of [
+      ["docs/examples/graft.yaml", EXAMPLE],
+      ["minimal.yaml", fixture("minimal.yaml")],
+    ] as [string, Uint8Array][]) {
+      const r = parsePolicyText(bytes);
+      if (!r.ok) throw new Error(name);
+      expect(r.hash, name).toBe(BEFORE[name]);
+    }
+  });
+});
+
+describe("graft.yaml report key", () => {
+  // Computed with the code before this key (main at 9c1a887).
+  const BEFORE: Record<string, string> = {
+    "docs/examples/graft.yaml": "15b4511afd2fc506ff72ebece14e5ee93fb97e2f9132c5d4fcbb462f9193fe71",
+    "minimal.yaml": "2eb972bc224ae0b92fddeb0637a3e45cc994530571651360f8b100fa96608ebf",
+  };
+
+  it("U-PRL-1 report.language parses; a bad tag, a list and an unknown key are errors; a file without it keeps its hash", () => {
+    const codes = (yaml: string) => codesOf(`version: 1\n${yaml}`);
+    const res = parse("version: 1\nreport:\n  language: fr\n");
+    if (!res.ok) throw new Error(JSON.stringify(res.errors));
+    expect(res.policy.report).toEqual({ language: "fr" });
+    const empty = parse("version: 1\nreport: {}\n");
+    if (!empty.ok) throw new Error(JSON.stringify(empty.errors));
+    expect(empty.policy.report).toEqual({});
+
+    const bad = errorsOf("version: 1\nreport:\n  language: klingon\n");
+    expect(bad.map((e) => [e.code, e.location])).toEqual([["language_invalid", "report.language"]]);
+    // The message lists every supported tag, in the schema's order.
+    expect(formatPolicyError(bad[0] as never)).toContain(
+      `one of ${Object.keys(REPORT_LANGUAGES).slice(0, -1).join(", ")} and zh.`,
+    );
+    expect(codes("report: { language: FR }\n")).toEqual(["language_invalid"]);
+    expect(codes("report: { language: [fr] }\n")).toEqual(["language_invalid"]);
+    expect(codes("report: fr\n")).toEqual(["wrong_type"]);
+    const unknown = errorsOf("version: 1\nreport:\n  tone: formal\n");
+    expect(unknown.map((e) => [e.code, e.key, e.location])).toEqual([
+      ["unknown_key", "tone", "report"],
+    ]);
+
+    // The evaluator ignores it; a file without it keeps its canonical form.
+    const without = parse("version: 1\n");
+    if (!without.ok) throw new Error("parse failed");
+    expect(without.policy.report).toBeUndefined();
+    const { report: _report, ...rest } = res.policy;
+    expect(rest).toEqual(without.policy);
     for (const [name, bytes] of [
       ["docs/examples/graft.yaml", EXAMPLE],
       ["minimal.yaml", fixture("minimal.yaml")],

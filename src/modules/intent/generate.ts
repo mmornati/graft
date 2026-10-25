@@ -16,6 +16,7 @@ import {
   type LlmUsage,
   ZERO_USAGE,
 } from "../../llm/types.js";
+import type { ReportLanguage } from "../../policy/schema.js";
 import { chooseNonce, LIMITS, neutralizeUntrusted, type OmitReason, prepareDiff } from "./diff.js";
 import type { CardInputs } from "./inputs.js";
 import {
@@ -33,9 +34,9 @@ import {
   type MessageFacts,
   PROMPT_VERSION,
   VERIFIER_OUTPUT_SCHEMA,
-  VERIFIER_SYSTEM_PROMPT,
+  verifierSystemPrompt,
   WRITER_OUTPUT_SCHEMA,
-  WRITER_SYSTEM_PROMPT,
+  writerSystemPrompt,
 } from "./prompts.js";
 import {
   combineRisk,
@@ -65,6 +66,8 @@ export interface GenerateOptions {
    */
   models: { fast: string; strong: string; refusalFallback?: string };
   floor: FloorConfig;
+  /** `report.language` of the base branch's `graft.yaml`; default English. */
+  language?: ReportLanguage;
   /** Per call. */
   timeoutMs: number;
   /** Whole run; default 600_000. */
@@ -149,6 +152,7 @@ export interface PreparedCard {
   readonly verifierData: string;
   readonly fileList: ReadonlySet<string>;
   readonly tooLarge: boolean;
+  readonly language: ReportLanguage;
 }
 
 export const EFFORTS = { fast: "low", strong: "medium", verifier: "medium" } as const;
@@ -157,7 +161,11 @@ const MIN_REMAINING_MS = 10_000;
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
-export function defaultGenerateOptions(config: Config, floor: FloorConfig): GenerateOptions {
+export function defaultGenerateOptions(
+  config: Config,
+  floor: FloorConfig,
+  language: ReportLanguage = "en",
+): GenerateOptions {
   return {
     models: {
       fast: config.llmModelFast,
@@ -167,6 +175,7 @@ export function defaultGenerateOptions(config: Config, floor: FloorConfig): Gene
         : {}),
     },
     floor,
+    language,
     timeoutMs: config.llmTimeoutMs,
     deadlineMs: 600_000,
     nowMs: () => Date.now(),
@@ -212,6 +221,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     EFFORTS,
     { ...LIMITS, maxOutputTokens: MAX_OUTPUT_TOKENS },
     [...o.floor.extraSensitiveGlobs].sort(),
+    o.language ?? "en",
     title,
     body,
     issue,
@@ -279,6 +289,7 @@ export function prepareCardInputs(inputs: CardInputs, o: GenerateOptions): Prepa
     verifierData,
     fileList: new Set(inputs.files.map((f) => f.path)),
     tooLarge: inputs.tooLarge,
+    language: o.language ?? "en",
   };
 }
 
@@ -450,7 +461,7 @@ export async function runCard(
     {
       purpose: "writer",
       model: firstIsFast ? o.models.fast : o.models.strong,
-      system: WRITER_SYSTEM_PROMPT,
+      system: writerSystemPrompt(p.language),
       user: p.writerUser,
       outputSchema: WRITER_OUTPUT_SCHEMA,
       effort: firstIsFast ? EFFORTS.fast : EFFORTS.strong,
@@ -471,7 +482,7 @@ export async function runCard(
       {
         purpose: "writer_escalated",
         model: o.models.strong,
-        system: WRITER_SYSTEM_PROMPT,
+        system: writerSystemPrompt(p.language),
         user: p.writerUser,
         outputSchema: WRITER_OUTPUT_SCHEMA,
         effort: EFFORTS.strong,
@@ -528,7 +539,7 @@ export async function runCard(
     {
       purpose: "verifier",
       model: o.models.strong,
-      system: VERIFIER_SYSTEM_PROMPT,
+      system: verifierSystemPrompt(p.language),
       user: buildVerifierUser(p.verifierData, p.nonce, card),
       outputSchema: VERIFIER_OUTPUT_SCHEMA,
       effort: EFFORTS.verifier,

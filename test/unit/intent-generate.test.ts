@@ -9,6 +9,7 @@ import {
   runCard,
   unavailableResult,
 } from "../../src/modules/intent/generate.js";
+import { verifierSystemPrompt, writerSystemPrompt } from "../../src/modules/intent/prompts.js";
 import { renderIntentSection } from "../../src/modules/intent/render.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
@@ -365,11 +366,31 @@ describe("generateCard", () => {
       h(base, { ...OPTS, models: { ...OPTS.models, fast: "claude-haiku-5-6" } }),
       h(base, { ...OPTS, models: { ...OPTS.models, strong: "claude-sonnet-5-6" } }),
       h(base, { ...OPTS, floor: { extraSensitiveGlobs: ["x/**"] } }),
+      h(base, { ...OPTS, language: "fr" }),
     ];
     expect(new Set([h(), ...differs]).size).toBe(differs.length + 1);
     const p = prepareCardInputs(base, OPTS);
     await runCard(p, scriptedLlm({ writer: W({ goal: "A." }), verifier: agreeingVerifier }), OPTS);
     expect(prepareCardInputs(base, OPTS).inputHash).toBe(p.inputHash);
+    // English is the default: leaving it out and naming it give the same hash.
+    const { language: _language, ...noLanguage } = OPTS;
+    expect(h(base, noLanguage)).toBe(h(base, { ...OPTS, language: "en" }));
+  });
+
+  it("U-GEN-21 report.language reaches the writer, the escalated writer and the verifier", async () => {
+    const llm = scriptedLlm({
+      writer: W({ risk_class: "logic" }),
+      writerEscalated: W({ risk_class: "logic" }),
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, genOptions({ language: "de" }));
+    expect(r.status).toBe("ok");
+    expect(llm.calls.map((c) => c.purpose)).toEqual(["writer", "writer_escalated", "verifier"]);
+    for (const c of llm.calls) {
+      expect(c.system).toContain("Write every sentence of your answer in German");
+    }
+    expect(llm.calls[0]?.system).toBe(writerSystemPrompt("de"));
+    expect(llm.calls[2]?.system).toBe(verifierSystemPrompt("de"));
   });
 
   it("U-GEN-17 deterministic and non-mutating", async () => {

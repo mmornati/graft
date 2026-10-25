@@ -232,7 +232,7 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   } catch (err) {
     throw toJobError(err, "list files");
   }
-  const opts = defaultGenerateOptions(config, settings.floor);
+  const opts = defaultGenerateOptions(config, settings.floor, settings.language);
   opts.log = ctx.log;
   opts.startedAtMs = startedAtMs;
   const prepared = prepareCardInputs(inputs, opts);

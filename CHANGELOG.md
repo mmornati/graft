@@ -2,6 +2,12 @@
 
 Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot data, versions stay below `1.0.0`. Every release defaults to report mode: nothing enforces until an operator raises `GRAFT_MODE_CEILING` and sets a repository to enforce.
 
+## Unreleased
+
+### Added
+
+- `report.language` in `graft.yaml`: the intent card's model-written text in one of 12 languages (`intent-v3`). Headings and labels stay in English. [graft.yaml](docs/graft-yaml.md)
+
 ## v0.1.0 (2026-10-24): Phase 1 built, report mode by default
 
 All seven Phase 1 steps are built, reviewed twice and merged. Each one ships with a report mode, and report mode is the default.
