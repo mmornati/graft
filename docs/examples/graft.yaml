@@ -49,3 +49,7 @@ rules:
 #   # Phase 1 step 5: enable GitHub auto-merge on Graft's revert PRs of these risk classes
 #   # (trivial, logic; never sensitive). Read from the last green commit before the culprit.
 #   auto_merge_reverts: [trivial]
+
+# The language of the intent card's text (default en). Headings and labels stay in English.
+# report:
+#   language: fr

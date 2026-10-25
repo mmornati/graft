@@ -2,13 +2,17 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { parseVerifierOutput, parseWriterOutput } from "../../src/modules/intent/output.js";
 import {
+  LANGUAGE_SECTION,
   PROMPT_VERSION,
   promptFingerprint,
   VERIFIER_OUTPUT_SCHEMA,
   VERIFIER_SYSTEM_PROMPT,
+  verifierSystemPrompt,
   WRITER_OUTPUT_SCHEMA,
   WRITER_SYSTEM_PROMPT,
+  writerSystemPrompt,
 } from "../../src/modules/intent/prompts.js";
+import { REPORT_LANGUAGES, type ReportLanguage } from "../../src/policy/schema.js";
 
 const FILES = new Set(["src/a.ts", "README.md", "docs/x.md"]);
 const writer = (over: Record<string, unknown> = {}) => ({
@@ -180,19 +184,35 @@ describe("prompts", () => {
       .update(
         WRITER_SYSTEM_PROMPT +
           VERIFIER_SYSTEM_PROMPT +
+          LANGUAGE_SECTION +
           JSON.stringify(WRITER_OUTPUT_SCHEMA) +
           JSON.stringify(VERIFIER_OUTPUT_SCHEMA),
       )
       .digest("hex");
     // Changing a prompt or a schema changes this hash: bump PROMPT_VERSION and update both.
     expect([PROMPT_VERSION, hash]).toEqual([
-      "intent-v2",
-      "9f271271b5511b9d78e43ba9dcd408d513088b9573ea6a8f10dc989a2e286233",
+      "intent-v3",
+      "5f2eb17b918d1e6870f032433dd4ed87d309affbaf6ee45fe10cee13ded79498",
     ]);
     expect(promptFingerprint()).toBe(hash);
     for (const p of [WRITER_SYSTEM_PROMPT, VERIFIER_SYSTEM_PROMPT]) {
       expect(p.length).toBeGreaterThanOrEqual(2000);
       expect(p).not.toMatch(/[{}]/);
     }
+  });
+
+  it("U-PROMPT-2 report.language: English keeps the prompts byte for byte; another language appends its name only", () => {
+    expect(writerSystemPrompt()).toBe(WRITER_SYSTEM_PROMPT);
+    expect(writerSystemPrompt("en")).toBe(WRITER_SYSTEM_PROMPT);
+    expect(verifierSystemPrompt("en")).toBe(VERIFIER_SYSTEM_PROMPT);
+    expect(LANGUAGE_SECTION.match(/\{language\}/g)).toHaveLength(1);
+    for (const [tag, name] of Object.entries(REPORT_LANGUAGES) as [ReportLanguage, string][]) {
+      if (tag === "en") continue;
+      const section = LANGUAGE_SECTION.replace("{language}", name);
+      expect(writerSystemPrompt(tag)).toBe(WRITER_SYSTEM_PROMPT + section);
+      expect(verifierSystemPrompt(tag)).toBe(VERIFIER_SYSTEM_PROMPT + section);
+      expect(section).not.toMatch(/[{}]/);
+    }
+    expect(writerSystemPrompt("fr")).toContain("Write every sentence of your answer in French");
   });
 });

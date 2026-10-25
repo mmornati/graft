@@ -259,6 +259,29 @@
         }
       },
       "additionalProperties": false
+    },
+    "report": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string",
+          "enum": [
+            "en",
+            "fr",
+            "de",
+            "es",
+            "it",
+            "pt",
+            "nl",
+            "pl",
+            "sv",
+            "ja",
+            "ko",
+            "zh"
+          ]
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [

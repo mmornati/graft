@@ -38,6 +38,7 @@ export const POLICY_ERROR_CODES = [
   "approve_untrusted_key",
   "approve_any_path",
   "auto_merge_sensitive",
+  "language_invalid",
   "too_many_errors",
 ] as const;
 export type PolicyErrorCode = (typeof POLICY_ERROR_CODES)[number];
@@ -124,6 +125,8 @@ const MESSAGES: Record<
   approve_any_path:
     "approve: auto cannot use paths, which matches when any file matches. Use only_paths.",
   auto_merge_sensitive: "Reverts of sensitive changes are never auto-merged; remove sensitive.",
+  language_invalid:
+    "report.language must be one of en, fr, de, es, it, pt, nl, pl, sv, ja, ko and zh.",
   too_many_errors: "More than 50 errors; fix these first.",
 };
 

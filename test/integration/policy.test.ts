@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../../src/core/logger.js";
 import { parseManagedComment } from "../../src/github/managed-comment.js";
-import type { LlmClient } from "../../src/llm/types.js";
+import type { LlmClient, LlmRequest } from "../../src/llm/types.js";
 import { upsertChangeFromPull } from "../../src/modules/changes/index.js";
 import { generateIntent } from "../../src/modules/intent/job.js";
 import {
@@ -68,7 +68,7 @@ import { seedWorld } from "../helpers/seed.js";
 
 let t: TestApp;
 let api: FakeGitHubApi;
-let current: LlmClient & { calls: unknown[] };
+let current: LlmClient & { calls: LlmRequest[] };
 let logged = "";
 const llm: LlmClient = { complete: (r) => current.complete(r) };
 
@@ -1170,6 +1170,23 @@ describe("intent hook (graft.yaml sensitive_paths)", () => {
     expect(api.find("GET", /\/git\/ref\//).length).toBeGreaterThanOrEqual(1);
     expect(contentRefs(api)).toEqual([B2]);
     expect(await floorRules()).toContain("configured_path");
+  });
+
+  it("I-POLH-7 report.language from the base graft.yaml reaches both system prompts; without it they stay English", async () => {
+    loadIntentScenario(api);
+    putContent(api, B1, "version: 1\nreport:\n  language: fr\n");
+    expect(await runIntent()).toBe("published");
+    const systems = current.calls.map((c) => c.system);
+    expect(systems.length).toBeGreaterThanOrEqual(2);
+    for (const s of systems) expect(s).toContain("Write every sentence of your answer in French");
+
+    clearPolicyCache();
+    await t.db.deleteFrom("intent_cards").execute();
+    current.calls.length = 0;
+    putContent(api, B1, "version: 1\n");
+    expect(await runIntent()).toBe("published");
+    expect(current.calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of current.calls) expect(c.system).not.toContain("\nLanguage\n");
   });
 });
 

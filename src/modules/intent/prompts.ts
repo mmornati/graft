@@ -6,8 +6,9 @@
  * changing one without the other fails the test.
  */
 import { createHash } from "node:crypto";
+import { REPORT_LANGUAGES, type ReportLanguage } from "../../policy/schema.js";
 
-export const PROMPT_VERSION = "intent-v2";
+export const PROMPT_VERSION = "intent-v3";
 
 export const WRITER_SYSTEM_PROMPT = `You write intent cards for pull requests in Graft, a review tool for code written by AI agents. Human reviewers read your card instead of the pull request description, so the card must describe what the diff actually does, not what its author says it does.
 
@@ -62,6 +63,26 @@ Risk classes
 
 Style
 Write plain English sentences. Do not use Markdown, links, HTML, @-mentions or issue references, and do not quote code. Output only the JSON object that the response format requires.`;
+
+/**
+ * intent-v3: appended to both system prompts when `report.language` is not English. English keeps
+ * the prompts above byte for byte. `{language}` is a name from `REPORT_LANGUAGES`, never file text.
+ */
+export const LANGUAGE_SECTION = `
+
+Language
+Write every sentence of your answer in {language} instead of English, including "No observable behavior change." and every reason. Keep file paths exactly as written in the file list, and keep the JSON keys, the claim ids and the values of risk_class and verdict in English.`;
+
+function withLanguage(prompt: string, language: ReportLanguage): string {
+  return language === "en"
+    ? prompt
+    : prompt + LANGUAGE_SECTION.replace("{language}", REPORT_LANGUAGES[language]);
+}
+
+export const writerSystemPrompt = (language: ReportLanguage = "en") =>
+  withLanguage(WRITER_SYSTEM_PROMPT, language);
+export const verifierSystemPrompt = (language: ReportLanguage = "en") =>
+  withLanguage(VERIFIER_SYSTEM_PROMPT, language);
 
 export const WRITER_OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -272,14 +293,16 @@ export function buildVerifierUser(
 }
 
 /**
- * SHA-256 of the two system prompts and the two output schemas (U-PROMPT-1 pins it). The eval
- * harness keys its cache on it, so a prompt edited without a version bump is not served stale.
+ * SHA-256 of the two system prompts, the language section and the two output schemas (U-PROMPT-1
+ * pins it). The eval harness keys its cache on it, so a prompt edited without a version bump is
+ * not served stale.
  */
 export function promptFingerprint(): string {
   return createHash("sha256")
     .update(
       WRITER_SYSTEM_PROMPT +
         VERIFIER_SYSTEM_PROMPT +
+        LANGUAGE_SECTION +
         JSON.stringify(WRITER_OUTPUT_SCHEMA) +
         JSON.stringify(VERIFIER_OUTPUT_SCHEMA),
     )

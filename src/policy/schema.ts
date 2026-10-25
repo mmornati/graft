@@ -15,6 +15,26 @@ export type RiskClass = "trivial" | "logic" | "sensitive";
 /** Phase 1 step 5 (§11): the risk classes whose reverts may be auto-merged (never sensitive). */
 export type AutoMergeRisk = Exclude<RiskClass, "sensitive">;
 
+/**
+ * `report.language`: the languages the intent card's model-written text may use, with the English
+ * name the prompt gives the model. A closed list, so the prompt never holds file text.
+ */
+export const REPORT_LANGUAGES = {
+  en: "English",
+  fr: "French",
+  de: "German",
+  es: "Spanish",
+  it: "Italian",
+  pt: "Portuguese",
+  nl: "Dutch",
+  pl: "Polish",
+  sv: "Swedish",
+  ja: "Japanese",
+  ko: "Korean",
+  zh: "Simplified Chinese",
+} as const;
+export type ReportLanguage = keyof typeof REPORT_LANGUAGES;
+
 export interface Policy {
   version: 1;
   sensitivePaths: string[];
@@ -26,6 +46,8 @@ export interface Policy {
    * ignores it. Phase 1 step 5 (§11) adds `autoMergeReverts`, likewise only when present.
    */
   guard?: { checks?: string[]; autoMergeReverts?: AutoMergeRisk[] };
+  /** The intent card's language; absent without a `report` key, like `guard`. */
+  report?: { language?: ReportLanguage };
 }
 export interface PolicyRule {
   index: number;
@@ -162,6 +184,17 @@ const guardSchema = z.strictObject(
   { error: "wrong_type" },
 );
 
+const reportSchema = z.strictObject(
+  {
+    language: z
+      .enum(Object.keys(REPORT_LANGUAGES) as [ReportLanguage, ...ReportLanguage[]], {
+        error: "language_invalid",
+      })
+      .optional(),
+  },
+  { error: "wrong_type" },
+);
+
 export const policySchema = z.strictObject(
   {
     version: z.literal(1),
@@ -172,6 +205,7 @@ export const policySchema = z.strictObject(
       .max(LIMITS.rules, { error: "too_many_rules" })
       .optional(),
     guard: guardSchema.optional(),
+    report: reportSchema.optional(),
   },
   { error: "wrong_type" },
 );
@@ -414,6 +448,11 @@ export function normalizePolicy(data: RawPolicy): Policy {
       guard.autoMergeReverts = dedupe(data.guard.auto_merge_reverts);
     }
     policy.guard = guard;
+  }
+  if (data.report !== undefined) {
+    const report: NonNullable<Policy["report"]> = {};
+    if (data.report.language !== undefined) report.language = data.report.language;
+    policy.report = report;
   }
   return policy;
 }
