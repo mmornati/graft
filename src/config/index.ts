@@ -8,7 +8,7 @@ import {
   FEDERATION_FIELDS,
   federationFrom,
 } from "../llm/federation.js";
-import { type LlmRegistry, loadRegistry } from "../llm/registry.js";
+import { type Deployment, type LlmRegistry, loadRegistry } from "../llm/registry.js";
 import { MODEL_ID } from "../llm/types.js";
 import { GLOB_REASONS } from "../policy/errors.js";
 import { validateGlob } from "../policy/globs.js";
@@ -232,6 +232,7 @@ const EnvSchema = z.object({
   GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
   GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
   GRAFT_LLM_REFUSAL_FALLBACK_MODEL: opt(modelId),
+  GRAFT_DEPLOYMENT: withDefault(z.enum(["hosted", "self-hosted"]), "self-hosted"),
   GRAFT_LLM_PROVIDERS: opt(z.string().max(100_000)),
   GRAFT_LLM_PROVIDERS_FILE: opt(z.string()),
   GRAFT_LLM_DAILY_TOKEN_BUDGET: withDefault(intString(0, Number.MAX_SAFE_INTEGER), "2000000"),
@@ -302,6 +303,12 @@ export interface Config {
    * settings below are its roles, each `<provider id>/<model>`.
    */
   readonly llmRegistry: LlmRegistry | undefined;
+  /**
+   * `hosted`: Graft serves other people's repositories (the GitHub App others install), so the
+   * registry refuses providers that run on a personal CLI login. `self-hosted` (the default)
+   * allows them for single-tenant use.
+   */
+  readonly deployment: Deployment;
   readonly llmModelFast: string;
   readonly llmModelStrong: string;
   readonly llmTimeoutMs: number;
@@ -402,6 +409,7 @@ function registryFrom(
       }),
       baseUrl: d.ANTHROPIC_BASE_URL,
     },
+    deployment: d.GRAFT_DEPLOYMENT,
   });
 }
 
@@ -506,6 +514,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     anthropicFederation: federationFrom(d),
     anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
     llmRegistry,
+    deployment: d.GRAFT_DEPLOYMENT,
     llmModelFast: llmRegistry?.roles.fast ?? d.GRAFT_LLM_MODEL_FAST,
     llmModelStrong: llmRegistry?.roles.strong ?? d.GRAFT_LLM_MODEL_STRONG,
     llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,

@@ -41,6 +41,7 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_LLM_MAX_RETRIES` | `2` | SDK retries, 0 to 5. |
 | `GRAFT_LLM_REFUSAL_FALLBACK` | `true` | `true` or `false`: let the API retry a refused request on a substitute model (Sonnet and Opus only). Applies only on the Claude API: with an `ANTHROPIC_BASE_URL` other than `api.anthropic.com` it is never sent. |
 | `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` | unset (off) | Without a provider registry only (`roles.refusalFallback` with one). A model Graft itself retries once when a call is refused and no server-side fallback ran: on a gateway or cloud, and for Haiku on the Claude API. The card names the model that answered. Same pattern as the model settings. |
+| `GRAFT_DEPLOYMENT` | `self-hosted` | `self-hosted` or `hosted`. Set `hosted` when Graft serves repositories of people other than the operator (a GitHub App others install): startup then refuses the `cli:*` [provider kinds](#model-providers), which run on a personal CLI login. |
 | `GRAFT_LLM_PROVIDERS` | unset | A [provider registry](#model-providers), inline as YAML or JSON. Set at most one of this and `GRAFT_LLM_PROVIDERS_FILE`. Unset: Graft uses the single client built from the `ANTHROPIC_*` settings, as before. |
 | `GRAFT_LLM_PROVIDERS_FILE` | unset | Path to the same document as a YAML or JSON file, read at startup. |
 | `GRAFT_LLM_DAILY_TOKEN_BUDGET` | `2000000` | Per-repository daily token budget (UTC day, from the `intent_spend` ledger); `0` means unlimited. |
@@ -104,6 +105,7 @@ roles:
 - **Kinds.**
   - `anthropic`: any endpoint that speaks the Anthropic Messages API (the Claude API, OpenRouter, Vercel AI Gateway, LiteLLM, Bedrock Mantle). Its roles take Claude model IDs, as `GRAFT_LLM_MODEL_*` do.
   - `openai-compatible`: any Chat Completions endpoint: OpenAI, OpenRouter, Mistral, DeepSeek, Gemini's OpenAI-compatible endpoint, and local servers (Ollama, vLLM, LM Studio, llama.cpp, the LiteLLM proxy). `baseUrl` is required. `apiKeyEnv` is optional (sent as a bearer token; a local server may need none) and `authTokenEnv` does not exist. Its roles take any model ID without spaces, Ollama tags included. `zeroRetention: true` asks OpenRouter for zero-data-retention endpoints and no data collection (refused for any other host). `maxTokensParam` is `max_completion_tokens` for `api.openai.com` and `max_tokens` elsewhere; set it when a server wants the other one. The `OPENAI_*` variables are never read, except `OPENAI_CUSTOM_HEADERS`, which the SDK always applies.
+  - `cli:claude`: Claude Code (`claude -p`) on this machine, logged in however the operator set it up (a subscription, `CLAUDE_CODE_OAUTH_TOKEN`, an API key). **Self-hosted, single-tenant only**: a personal login may not serve other people's pull requests, so `GRAFT_DEPLOYMENT=hosted` refuses it, and the worker logs a warning at startup. `command` is the binary (default `claude` on `PATH`, or an absolute path). Its roles take Claude model IDs; pass explicit IDs, as aliases can resolve to older models. See [CLI providers](#cli-providers).
 - **Capabilities.** An `anthropic` provider is assumed to support JSON-schema output, prompt caching, effort and usage counts. An `openai-compatible` one is assumed to support JSON-schema output and usage counts only: many models reject `reasoning_effort`, and caching, where it exists, needs no markers. Set `capabilities: { effort: true }` to send Graft's effort as `reasoning_effort`. Override what an endpoint lacks, for example `capabilities: { nativeSchema: false }` for Bedrock Mantle: Graft then puts the schema in the system prompt and relies on its own validation and retry.
 - **Prices.** Calls on an `anthropic` provider are priced from the built-in Claude table unless the entry's `prices` names the model. An `openai-compatible` provider has only its `prices`. The longest key that equals the model or is followed by `-`, `:` or `@` wins, so `qwen3-coder` prices `qwen3-coder:30b`. A model with no price leaves the card's cost unknown; the daily token budget still counts its tokens.
 - **Refusal fallback.** `GRAFT_LLM_REFUSAL_FALLBACK` applies to every `anthropic` provider whose URL is the Claude API.
@@ -111,6 +113,17 @@ roles:
 - **Errors** name the field (`GRAFT_LLM_PROVIDERS: providers[1].authTokenEnv: names a variable that is not set`), never a value. The startup log lists each provider's id, kind, host and whether it uses the shared credential.
 
 The evaluation tool (`pnpm eval`) reads the same registry with the same rules, so a candidate model can be run against the saved baseline before it goes into a role. A live run refuses a model with no price: give a local model `{ input: 0, output: 0 }`. See [Evaluation](features/evaluation.md).
+
+### CLI providers
+
+A `cli:*` provider runs the CLI once per model call. The CLI is an agent with tools, and Graft feeds it untrusted PR text, so Graft isolates it whatever the registry says:
+
+- **No tools.** Tools, MCP servers, settings files (and the hooks, plugins and skills they enable) and session storage are all off. For `cli:claude` that is `--tools "" --strict-mcp-config --setting-sources "" --disable-slash-commands --no-session-persistence`. The PR text goes on stdin, never as an argument.
+- **An empty directory.** Each call runs in a fresh temporary directory, removed afterwards, so no project file or `CLAUDE.md` is in reach.
+- **A clean environment.** The CLI gets `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL` and `TMPDIR`, plus the variables listed in the entry's `passEnv` (its login, for example `CLAUDE_CODE_OAUTH_TOKEN`). `GITHUB_*`, `GRAFT_*`, `PG*`, `SMEE_*`, anything ending in `DATABASE_URL` or `_PRIVATE_KEY`, and other providers' key variables are refused in `passEnv` and never passed.
+- **Bounded.** The whole process group is killed at the call's deadline, and output beyond 4 MiB fails the call.
+
+Run the worker as a dedicated user whose `HOME` holds only the CLI's login. The default Docker image ships no CLI: build `FROM` the Graft image, install the CLI, and mount its login read-only. Usage comes from the CLI's own counters. Calls are unpriced unless the entry has `prices`, since the login, not Graft, decides what they cost.
 
 ## Deploying with federation
 

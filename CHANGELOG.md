@@ -6,6 +6,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Added
 
+- The `cli:claude` provider kind: Claude Code on the worker's machine, run per call with no tools, MCP servers or settings, in an empty directory, with a clean environment. For self-hosted single-tenant installs only: the new `GRAFT_DEPLOYMENT=hosted` refuses it. [CLI providers](docs/configuration.md#cli-providers)
 - `pnpm eval` reads the provider registry, so a candidate model can be run against the saved baseline before it is put in a role. [Evaluation](docs/features/evaluation.md)
 - The `openai-compatible` provider kind: OpenAI, OpenRouter, Mistral, DeepSeek, Gemini and local servers such as Ollama and vLLM through the Chat Completions format, with JSON-schema output, OpenRouter zero-data-retention routing and the same failure classes as the Claude client. [Model providers](docs/configuration.md#model-providers)
 - A server-side **provider registry** (`GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE`): several model providers, each with its own credential, capabilities and prices, and roles that point the writer and verifier at any of them as `<provider id>/<model>`. Without it nothing changes. [Model providers](docs/configuration.md#model-providers)
