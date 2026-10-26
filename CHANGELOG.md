@@ -6,6 +6,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Added
 
+- A server-side **provider registry** (`GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE`): several model providers, each with its own credential, capabilities and prices, and roles that point the writer and verifier at any of them as `<provider id>/<model>`. Without it nothing changes. [Model providers](docs/configuration.md#model-providers)
 - An optional, read-only **operator console** (`console/`): a daily journal of what Graft handled, every PR's record, what needs a human, the gate, the token budget and the job queue. Its own container and image, a SELECT-only database role, sign-in with GitHub restricted to a list. Graft runs the same without it. [Operator console](docs/console.md)
 - `report.language` in `graft.yaml`: the intent card's model-written text in one of 12 languages (`intent-v3`). Headings and labels stay in English. [graft.yaml](docs/graft-yaml.md)
 

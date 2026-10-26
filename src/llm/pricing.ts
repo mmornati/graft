@@ -17,10 +17,16 @@ export const PRICES: Readonly<Record<string, Price>> = {
   "claude-sonnet-5-5": { input: 2.0, output: 10.0, cacheRead: 0.2, cacheWrite: 2.5 },
 };
 
-/** Longest-prefix match: `response.model` may carry a date suffix. */
-export function priceFor(model: string): Price | null {
+/**
+ * Longest-prefix match: `response.model` may carry a date suffix. `table` is the built-in Claude
+ * prices unless a provider registry entry brings its own.
+ */
+export function priceFor(
+  model: string,
+  table: Readonly<Record<string, Price>> = PRICES,
+): Price | null {
   let best: string | null = null;
-  for (const id of Object.keys(PRICES)) {
+  for (const id of Object.keys(table)) {
     if (
       (model === id || model.startsWith(`${id}-`)) &&
       (best === null || id.length > best.length)
@@ -28,12 +34,15 @@ export function priceFor(model: string): Price | null {
       best = id;
     }
   }
-  return best === null ? null : (PRICES[best] as Price);
+  return best === null ? null : (table[best] as Price);
 }
 
 export function cost(usage: LlmUsage, model: string): number | null {
   const p = priceFor(model);
-  if (!p) return null;
+  return p ? costAt(usage, p) : null;
+}
+
+export function costAt(usage: LlmUsage, p: Price): number {
   return (
     (usage.inputTokens * p.input +
       usage.outputTokens * p.output +

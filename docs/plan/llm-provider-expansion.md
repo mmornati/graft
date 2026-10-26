@@ -256,14 +256,14 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 - **Every CLI is an agent with tools, and Graft feeds it untrusted PR text.** Each adapter must turn tools, MCP servers, settings files and plugins off, run in an empty temporary working directory, and start with an environment stripped to what the CLI needs (no `GITHUB_*`, no other providers' keys, no database URL). This is the main security cost of the feature, not an afterthought.
 - **Packaging:** the default Docker image ships no CLI. Self-hosters who want one build `FROM` the Graft image and add it, and mount the CLI's login state read-only. Document this; do not bake subscriptions into an image.
 
-### Step 2: Provider registry and roles (PR 1)
+### Step 2: Provider registry and roles (PR 1), implemented
 
-1. Parse and validate the registry (`GRAFT_LLM_PROVIDERS_FILE` or `GRAFT_LLM_PROVIDERS`) and the roles in `src/config/index.ts`, including the implicit `anthropic` provider for existing deployments. Unknown provider IDs in a role, a missing `apiKeyEnv` variable or a duplicate ID fail at startup.
-2. Replace the switch in `src/llm/index.ts` with a router: an `LlmClient` that holds one client per provider and sends each request to the provider named by its model's prefix. `generate.ts` keeps passing `model`; it receives `provider/model` strings and never builds clients. No provider configured still maps to `unconfiguredLlm`.
-3. Add `capabilities(model)` to `LlmClient`, next to `serverRefusalFallback`. In `generate.ts`, a provider without `nativeSchema` gets the schema appended to the system prompt and relies on the existing invalid-output retry. Effort is dropped where unsupported.
-4. Pricing keyed by provider and model: the built-in table covers the `anthropic` kind, and registry `prices` cover the rest. An unknown price stays `null`, which `costOfCalls` already handles, and the daily token budget keeps counting tokens.
-5. Show the provider with the model in the card footer (`src/modules/intent/render.ts`) and in the `llm call` log line. Never log a base URL beyond its host.
-6. Move the Vertex, Foundry and Bedrock variants here as `anthropic` with a `variant` field (+1 SDK package each, added only when a variant is used).
+1. **Done.** `GRAFT_LLM_PROVIDERS` / `GRAFT_LLM_PROVIDERS_FILE` are parsed in `src/llm/registry.ts` and checked in `src/config/index.ts`. Duplicate IDs, unset key variables, roles naming no provider and model IDs a kind does not accept fail at startup, with the field named and never a value. **Changed from the plan:** there is no implicit registry for existing deployments. Without a registry `createLlmClient` builds exactly the client it built before, so model IDs stay bare and card input hashes do not change. Setting both a registry and `GRAFT_LLM_MODEL_*` is an error.
+2. **Done.** `src/llm/router.ts`: one client per provider. Requests carry `<provider id>/<model>`, the provider gets the bare model, and the result's model is qualified again. That is how the card footer, the `llm call` log line (through a child logger with `provider`) and the spend ledger name the provider (item 5).
+3. **Done.** `LlmClient.capabilities(model)`. `generate.ts` puts the schema in the system prompt for a provider without `nativeSchema`. The Anthropic client drops `output_config.format`, `effort` or `cache_control` when the entry's capabilities say so.
+4. **Done.** `LlmClient.costOf`: the entry's `prices` first, then the built-in Claude table for `anthropic` providers, otherwise `null`.
+5. **Done** (see 2).
+6. **Not done.** Vertex, Foundry and Bedrock SDK variants wait for an operator who needs them. Bedrock Mantle already works as an `anthropic` entry with `capabilities: { nativeSchema: false }`.
 
 ### Step 3: OpenAI-compatible transport (PR 2)
 
