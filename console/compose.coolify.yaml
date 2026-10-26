@@ -4,6 +4,11 @@
 # Build Pack: Docker Compose, Base Directory: /console, Docker Compose Location: /compose.coolify.yaml.
 # Turn on Advanced → Docker compose → "Connect to predefined network" so the database hostname resolves.
 # SERVICE_FQDN_CONSOLE_3100 is a Coolify magic variable: the console's domain, routed to port 3100.
+#
+# Keep the three secrets runtime-only in Coolify (untick "Available during build"): Coolify turns
+# build-time variables into Dockerfile ARGs, which land in the image history. Compose interpolates
+# this file at build time too, so the secrets carry no `:?` here; the console's own config check
+# refuses to start without them.
 
 services:
   console:
@@ -16,13 +21,13 @@ services:
       PORT: "3100"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # The graft_console role from sql/readonly-role.sql, never Graft's own DATABASE_URL.
-      CONSOLE_DATABASE_URL: ${CONSOLE_DATABASE_URL:?}
+      CONSOLE_DATABASE_URL: ${CONSOLE_DATABASE_URL:-}
       CONSOLE_AUTH: github
       CONSOLE_PUBLIC_URL: ${CONSOLE_PUBLIC_URL:?}
       CONSOLE_GITHUB_CLIENT_ID: ${CONSOLE_GITHUB_CLIENT_ID:?}
-      CONSOLE_GITHUB_CLIENT_SECRET: ${CONSOLE_GITHUB_CLIENT_SECRET:?}
+      CONSOLE_GITHUB_CLIENT_SECRET: ${CONSOLE_GITHUB_CLIENT_SECRET:-}
       CONSOLE_ALLOWED_USERS: ${CONSOLE_ALLOWED_USERS:?}
-      CONSOLE_SESSION_SECRET: ${CONSOLE_SESSION_SECRET:?}
+      CONSOLE_SESSION_SECRET: ${CONSOLE_SESSION_SECRET:-}
       CONSOLE_TIME_ZONE: ${CONSOLE_TIME_ZONE:-UTC}
       CONSOLE_DAILY_TOKEN_BUDGET: ${CONSOLE_DAILY_TOKEN_BUDGET:-2000000}
     expose:
