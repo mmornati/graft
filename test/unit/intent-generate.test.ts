@@ -137,13 +137,14 @@ describe("generateCard", () => {
     ]);
   });
 
-  it("U-GEN-6 missing behavior changes alone make the verifier disagree", async () => {
+  it("U-GEN-6 missing behavior changes alone complete the card: no disagreement, no raised risk", async () => {
     const llm = scriptedLlm({
       writer: W(),
       verifier: (req) => verifierJson(req, { missing_behavior_changes: ["New network call."] }),
     });
     const r = await generateCard(inputs(), llm, OPTS);
-    expect(r.verifier).toMatchObject({ status: "disagree", missing: ["New network call."] });
+    expect(r.verifier).toMatchObject({ status: "agree", missing: ["New network call."] });
+    expect(r.risk.raisedBy).not.toContain("verifier_disagrees");
   });
 
   it("U-GEN-7 a failing verifier leaves an ok card with verifier error", async () => {

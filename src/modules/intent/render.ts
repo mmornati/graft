@@ -122,17 +122,40 @@ function claimIndex(id: string): number {
   return Number(id.slice(1));
 }
 
+function failingClaims(v: CardResult): CardResult["verifier"]["claims"] {
+  return v.verifier.claims.filter(
+    (c) => c.verdict === "unsupported" || c.verdict === "contradicted",
+  );
+}
+
+/**
+ * A card the verifier contradicts. Cards stored before intent-v5 also say "disagree" when the
+ * verifier only found missing behavior changes; those now show the "Also changed" list instead.
+ */
+function disagrees(v: CardResult): boolean {
+  return v.verifier.status === "disagree" && failingClaims(v).length > 0;
+}
+
+/** Behavior changes the verifier found in the diff that the card does not mention. */
+function alsoChangedBlock(v: CardResult, maxBullets: number): string[] {
+  if (v.verifier.status === "error" || v.verifier.missing.length === 0) return [];
+  const bullets = v.verifier.missing.map((m) => `- ${escapeProse(m, 200)}`);
+  const shown = bullets.slice(0, maxBullets);
+  if (bullets.length > shown.length) shown.push(`- …and ${bullets.length - shown.length} more`);
+  return ["**Also changed** · found by the verifier, not listed above", "", ...shown];
+}
+
+function alsoChangedTitle(v: CardResult): string {
+  const n = v.verifier.missing.length;
+  return n === 0 ? "" : ` · ${n} more ${n === 1 ? "change" : "changes"}`;
+}
+
 function warningBlock(v: CardResult, maxBullets: number): string[] {
-  if (v.verifier.status === "disagree") {
+  if (disagrees(v)) {
     const idx = new Map(v.verifier.claims.map((c) => [c.id, claimIndex(c.id)] as const));
-    const bullets: string[] = [];
-    for (const c of v.verifier.claims) {
-      if (c.verdict === "supported" || c.verdict === "unverifiable") continue;
-      bullets.push(`- ${LABEL_FOR_KIND(c, idx)} is ${c.verdict}: ${escapeProse(c.reason, 300)}`);
-    }
-    for (const m of v.verifier.missing) {
-      bullets.push(`- Missing from the card: ${escapeProse(m, 200)}`);
-    }
+    const bullets = failingClaims(v).map(
+      (c) => `- ${LABEL_FOR_KIND(c, idx)} is ${c.verdict}: ${escapeProse(c.reason, 300)}`,
+    );
     const shown = bullets.slice(0, maxBullets);
     if (bullets.length > shown.length) shown.push(`- …and ${bullets.length - shown.length} more`);
     return [
@@ -227,6 +250,8 @@ function renderOk(
     ...card.behaviorChanges.map((b) => `- ${escapeProse(b, 200)}`),
     "",
   ];
+  const also = alsoChangedBlock(v, o.maxBullets);
+  if (also.length > 0) lines.push(...also, "");
   const oos: string[] = [
     ...card.outOfScopeEdits.map((e) => `- ${codeSpan(e.path)}: ${escapeProse(e.reason, 200)}`),
     ...v.verifier.unexplained.map((p) => `- ${codeSpan(p)}: flagged by the verifier`),
@@ -312,10 +337,10 @@ export function renderIntentCheckOutput(
   const title =
     v.status === "unavailable"
       ? `Card unavailable · risk: ${v.risk.final}`
-      : v.verifier.status === "agree"
-        ? `Risk: ${v.risk.final} · verifier agrees`
-        : v.verifier.status === "disagree"
-          ? `Risk: ${v.risk.final} · verifier disagrees`
+      : disagrees(v)
+        ? `Risk: ${v.risk.final} · verifier disagrees`
+        : v.verifier.status === "agree" || v.verifier.status === "disagree"
+          ? `Risk: ${v.risk.final} · verifier agrees${alsoChangedTitle(v)}`
           : `Risk: ${v.risk.final} · not verified`;
 
   const lines: string[] = ["Rules", ""];

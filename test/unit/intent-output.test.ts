@@ -188,8 +188,8 @@ describe("prompts", () => {
       .digest("hex");
     // Changing a prompt or a schema changes this hash: bump PROMPT_VERSION and update both.
     expect([PROMPT_VERSION, hash]).toEqual([
-      "intent-v4",
-      "55515adfe9e010762c7692b44f6755aa6d71c9bd1110077a8c29c5844d14aca1",
+      "intent-v5",
+      "0c72065e92c152eca517785aee74c78d38064f42143310d0c041486df990c1bd",
     ]);
     expect(promptFingerprint()).toBe(hash);
     expect(SYSTEM_PROMPT.length).toBeGreaterThanOrEqual(2000);

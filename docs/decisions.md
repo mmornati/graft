@@ -1041,3 +1041,14 @@ Production usage (21 to 25 October 2026, 117 cards) was about 86% uncached input
 - **Versioning.** `PROMPT_VERSION` is `intent-v4`; U-PROMPT-1 and the synthetic baseline (metadata only) are updated.
 - **Tests.** U-LLM-20, U-GEN-39, U-PROMPT-1/2, U-GEN-21.
 
+## Missing behavior changes are "Also changed", not a disagreement (intent-v5)
+
+Production audit (14 to 26 October 2026, 66 PRs with a written card, read through the operator console): the verifier disagreed on 43 cards (65%), and 37 of them only because it listed behavior changes the writer left out. Those cards carried the "Read the diff instead of relying on the card" warning and a `logic` floor, although their claims were supported. The missing items were often the most useful line for a reviewer (a deployment that now needs a new variable, a release that a failed test run now blocks, a service now listening on every interface). One was wrong: a flag the verifier said was never set is set in the same file, outside the diff.
+
+- **Rule.** `disagree` means at least one claim is `unsupported` or `contradicted`. Missing behavior changes are stored as before (`verifier_missing`) and rendered as an **Also changed** list under the behavior changes. They no longer add `verifier_disagrees` to the risk; the verifier's own risk class still counts in the maximum, so a missing change it rates `sensitive` still raises the card.
+- **Check title.** `verifier agrees · N more changes` when the list is not empty.
+- **Older cards.** A stored `intent-v4` or earlier card with status `disagree` and no failing claim renders the new way (no warning, the list instead). Its stored risk is not recomputed.
+- **Prompt.** The verifier is told that its missing items are shown as additions to the card, and to state each as a fact the changed lines show, never as a doubt about code it was not shown.
+- **Evaluation.** The should-flag metric counts a card as flagged when the verifier disagrees or lists missing changes, since both now alert the reviewer. syn-022 moves from `disagree` to `agree` with an unchanged final class.
+- **Versioning.** `PROMPT_VERSION` is `intent-v5`; U-PROMPT-1 and the synthetic baseline are updated. Not done: a live eval run. Judge it on production data: the disagreement rate per `prompt_version` and the 👍/👎 votes.
+- **Tests.** U-GEN-6, U-IREN-1, U-IREN-12, U-PROMPT-1.

@@ -8,11 +8,13 @@
 import { createHash } from "node:crypto";
 import { REPORT_LANGUAGES, type ReportLanguage } from "../../policy/schema.js";
 
-export const PROMPT_VERSION = "intent-v4";
+export const PROMPT_VERSION = "intent-v5";
 
 /**
  * intent-v4: one system prompt for the writer and the verifier, so that with the shared start of
  * the user message (nonce, facts, file list, diff) both calls have the same cached prefix.
+ * intent-v5: missing behavior changes no longer make the verifier disagree; the card lists them as
+ * "Also changed". The verifier is told so, and to state each one as a fact the diff shows.
  */
 export const SYSTEM_PROMPT = `You work on intent cards for pull requests in Graft, a review tool for code written by AI agents. Human reviewers read the card instead of the pull request description, so the card must describe what the diff actually does, not what its author says it does. Each request asks for one of two tasks, named on the last line of the user message: write the card, or verify a card that another model wrote. Follow the section for that task.
 
@@ -45,7 +47,7 @@ Another model wrote the card from the pull request description and the diff. The
 - Code that neither the diff nor the file context shows, such as a function in a file the change does not touch, exists unchanged in the repository.
 Fields:
 - claims: exactly one entry for every claim id in the card, in the same order. verdict is "supported" when the diff, read with the file context, shows the claim is true; "contradicted" when it shows something different or opposite; "unverifiable" when the changed lines do what the claim says but whether the claim holds depends on unchanged code you were not shown, and nothing shown contradicts it; and "unsupported" when the diff does not show the claim. Never use unverifiable for the hidden part of a file marked truncated or omitted: that is part of the change, so such a claim is unsupported. For unverifiable, the reason names the code you could not see. For a claim of kind out_of_scope, "supported" means the change to that file really is not explained by the goal. reason: at most 300 characters; cite file paths, not code.
-- missing_behavior_changes: at most 5 observable behavior changes visible in the diff that the card neither states nor clearly implies and that a reviewer needs to know about, for example new network calls, changed permissions, removed checks, or data deleted or sent elsewhere. Do not list refactors, renames, formatting or test-only changes. Each at most 200 characters.
+- missing_behavior_changes: at most 5 observable behavior changes visible in the diff that the card neither states nor clearly implies and that a reviewer needs to know about, for example new network calls, changed permissions, removed checks, or data deleted or sent elsewhere. Do not list refactors, renames, formatting or test-only changes. Graft shows these to the reviewer as additions to the card, not as errors in it, so state each one as a fact the changed lines show, never as a doubt about code you were not shown. Each at most 200 characters.
 - unexplained_files: exact paths from the file list whose changes the goal does not explain and that the card's out_of_scope claims do not already list.
 - risk_class and risk_reason: your own classification of the diff, regardless of the card. risk_reason is at most 300 characters.
 - instructions_in_data: see the trust rules.
