@@ -35,12 +35,14 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `ANTHROPIC_WORKSPACE_ID` | unset | Federation, optional: the workspace (`wrkspc_...`) to scope the token to. Required when the rule is enabled for more than one workspace. |
 | `ANTHROPIC_IDENTITY_TOKEN_FILE` | unset | Federation: absolute path to the OIDC JWT your platform writes (for example a projected Kubernetes token). Read on every exchange, never at startup, and never logged. |
 | `ANTHROPIC_BASE_URL` | unset (the Claude API) | An http(s) URL of any service that speaks the Anthropic Messages API, for example `https://openrouter.ai/api`. Diffs go to that service: check its data retention first. Only the host is logged. With federation the token exchange goes to the same host, so it must be https (or loopback). |
-| `GRAFT_LLM_MODEL_FAST` | `claude-haiku-5-5` | First-pass writer when the rule-based floor is `trivial`. A Claude model ID, optionally with a gateway's vendor prefix or version suffix (`anthropic/claude-haiku-5.5`, `us.anthropic.claude-haiku-5-5-v1:0`). |
-| `GRAFT_LLM_MODEL_STRONG` | `claude-sonnet-5-5` | Writer for everything else, and always the verifier. Same pattern. |
+| `GRAFT_LLM_MODEL_FAST` | `claude-haiku-5-5` | Without a provider registry only (with one, its `roles.fast` names the model and setting this is an error). First-pass writer when the rule-based floor is `trivial`. A Claude model ID, optionally with a gateway's vendor prefix or version suffix (`anthropic/claude-haiku-5.5`, `us.anthropic.claude-haiku-5-5-v1:0`). |
+| `GRAFT_LLM_MODEL_STRONG` | `claude-sonnet-5-5` | Without a provider registry only (`roles.strong` with one). Writer for everything else, and always the verifier. Same pattern. |
 | `GRAFT_LLM_TIMEOUT_MS` | `120000` | Per-call timeout, 5,000 to 600,000 ms. |
 | `GRAFT_LLM_MAX_RETRIES` | `2` | SDK retries, 0 to 5. |
 | `GRAFT_LLM_REFUSAL_FALLBACK` | `true` | `true` or `false`: let the API retry a refused request on a substitute model (Sonnet and Opus only). Applies only on the Claude API: with an `ANTHROPIC_BASE_URL` other than `api.anthropic.com` it is never sent. |
-| `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` | unset (off) | A model Graft itself retries once when a call is refused and no server-side fallback ran: on a gateway or cloud, and for Haiku on the Claude API. The card names the model that answered. Same pattern as the model settings. |
+| `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` | unset (off) | Without a provider registry only (`roles.refusalFallback` with one). A model Graft itself retries once when a call is refused and no server-side fallback ran: on a gateway or cloud, and for Haiku on the Claude API. The card names the model that answered. Same pattern as the model settings. |
+| `GRAFT_LLM_PROVIDERS` | unset | A [provider registry](#model-providers), inline as YAML or JSON. Set at most one of this and `GRAFT_LLM_PROVIDERS_FILE`. Unset: Graft uses the single client built from the `ANTHROPIC_*` settings, as before. |
+| `GRAFT_LLM_PROVIDERS_FILE` | unset | Path to the same document as a YAML or JSON file, read at startup. |
 | `GRAFT_LLM_DAILY_TOKEN_BUDGET` | `2000000` | Per-repository daily token budget (UTC day, from the `intent_spend` ledger); `0` means unlimited. |
 | `GRAFT_INTENT_SENSITIVE_PATHS` | empty | Extra comma-separated globs that set the risk floor to `sensitive`, for example `services/billing/**`. 1 to 200 characters each, no leading `!`, no `..` segment, and the same checks as `graft.yaml` globs (validated at startup). |
 | `GRAFT_FEEDBACK_POLL_CRON` | `*/15 * * * *` | Cron for polling 👍/👎 reactions on the managed comment, or `off`. Checked for shape only (5 fields). |
@@ -70,6 +72,38 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 | `GRAFT_MCP_MAX_TOKENS_PER_REPO` | `10` | Integer 1 to 50. Active MCP tokens per repository (`pnpm graft mcp-token create` refuses past it). |
 | `GRAFT_TRUST_PROXY` | empty | Phase 1 step 7 (D6). Comma-separated IP addresses or CIDR ranges (IPv4 or IPv6) of the proxies in front of the server. When the connection's peer is one of them, the client address is taken from `X-Forwarded-For`, so each MCP client behind the proxy has its own failed-authentication bucket. Empty: the peer is the client. `true`, hop counts and hostnames are refused (`ConfigError` naming the entry's position, never its value). List only the proxy's own addresses (for example `10.0.0.5`), never a network that holds clients: a client that connects from a listed address chooses its own. The proxy must append the peer address to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`) or overwrite it, and Graft must be reachable only through the proxy. |
 | `GRAFT_POLICY_CARD_WAIT_SECONDS` | `600` | Integer 0 to 3600. In enforce mode, how long `graft/policy` stays `in_progress` after a head is first evaluated while its intent card is still being written; after that it concludes on the conservative pending-card rules. `0` never waits. Report mode never waits (it still schedules the re-evaluation). See [Policy](features/policy.md#enforce-mode). |
+
+## Model providers
+
+By default Graft sends every model call to one Anthropic Messages API endpoint, configured with the `ANTHROPIC_*` variables. A **provider registry** lists several providers instead and says which one each role uses. It is operator configuration only: repositories cannot choose a provider in `graft.yaml`, because the provider decides where diffs go and who pays.
+
+```yaml
+# GRAFT_LLM_PROVIDERS_FILE=/etc/graft/providers.yaml
+providers:
+  - id: claude               # 1-30 characters of a-z, 0-9 and '-'
+    kind: anthropic          # uses ANTHROPIC_API_KEY / _AUTH_TOKEN / federation and ANTHROPIC_BASE_URL
+  - id: openrouter
+    kind: anthropic
+    baseUrl: https://openrouter.ai/api
+    authTokenEnv: OPENROUTER_API_KEY   # the variable's name, never the key
+    prices:                  # USD per million tokens; cacheRead and cacheWrite default to input
+      anthropic/claude-sonnet-5.5: { input: 2, output: 10 }
+roles:
+  fast: claude/claude-haiku-5-5
+  strong: openrouter/anthropic/claude-sonnet-5.5
+  refusalFallback: claude/claude-opus-5-5      # optional
+```
+
+- **Roles.** `fast` is the first-pass writer for `trivial` PRs, `strong` the writer for everything else and the verifier, and `refusalFallback` the model Graft retries once on a refusal. Each is `<provider id>/<model>`: everything after the first `/` is the provider's own model ID. The card, the `llm call` log line and the spend ledger name the model with its provider.
+- **Credentials.** An entry names the variable holding its key with `apiKeyEnv` (sent as `x-api-key`) or `authTokenEnv` (sent as a bearer token), at most one. An `anthropic` entry with neither uses the `ANTHROPIC_*` credential, federation included, and `ANTHROPIC_BASE_URL`; it cannot set its own `baseUrl`, so a shared credential never goes to a host it was not meant for. Startup fails when a named variable is unset.
+- **Kinds.** `anthropic`: any endpoint that speaks the Anthropic Messages API (the Claude API, OpenRouter, Vercel AI Gateway, LiteLLM, Bedrock Mantle). Its roles take Claude model IDs, as `GRAFT_LLM_MODEL_*` do.
+- **Capabilities.** Every kind assumes its API supports JSON-schema output, prompt caching, effort and usage counts. Override what an endpoint lacks, for example `capabilities: { nativeSchema: false }` for Bedrock Mantle: Graft then puts the schema in the system prompt and relies on its own validation and retry.
+- **Prices.** Calls on an `anthropic` provider are priced from the built-in Claude table unless the entry's `prices` names the model (longest prefix wins). A model with no price leaves the card's cost unknown; the daily token budget still counts its tokens.
+- **Refusal fallback.** `GRAFT_LLM_REFUSAL_FALLBACK` applies to every `anthropic` provider whose URL is the Claude API.
+- **Backward compatible.** Without `GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE` nothing changes. With a registry, `GRAFT_LLM_MODEL_FAST`, `GRAFT_LLM_MODEL_STRONG` and `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` must be unset: the roles replace them instead of quietly overriding them. Changing models changes the card's input hash, so open PRs get a new card on their next push, as with any model change.
+- **Errors** name the field (`GRAFT_LLM_PROVIDERS: providers[1].authTokenEnv: names a variable that is not set`), never a value. The startup log lists each provider's id, kind, host and whether it uses the shared credential.
+
+The evaluation tool (`pnpm eval`) still reads only the `ANTHROPIC_*` and `GRAFT_LLM_MODEL_*` variables.
 
 ## Deploying with federation
 

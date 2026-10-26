@@ -2,6 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Logger } from "../core/logger.js";
 import { type AnthropicFederation, FederationError, federatedCredentials } from "./federation.js";
 import {
+  FULL_CAPABILITIES,
+  type LlmCapabilities,
   type LlmClient,
   type LlmFailure,
   type LlmRequest,
@@ -40,6 +42,11 @@ export interface AnthropicSettings {
   refusalFallback: boolean;
   /** Messages API base URL; undefined means the Claude API. */
   baseURL?: string;
+  /**
+   * What the endpoint supports; defaults to everything. A gateway or cloud without structured
+   * outputs (Bedrock Mantle) gets no `output_config.format`, and so on for effort and caching.
+   */
+  capabilities?: LlmCapabilities;
 }
 
 export type AnthropicLlmOptions = AnthropicCredential &
@@ -108,9 +115,12 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
     ...(o.fetch ? { fetch: o.fetch } : {}),
   });
   const serverRefusalFallback = (model: string) => o.refusalFallback && FALLBACK_MODEL.test(model);
+  const caps = o.capabilities ?? FULL_CAPABILITIES;
+  const cacheControl = caps.promptCache ? { cache_control: { type: "ephemeral" as const } } : {};
 
   return {
     serverRefusalFallback,
+    capabilities: () => caps,
     async complete(req: LlmRequest): Promise<LlmResult> {
       const started = Date.now();
       const finish = (
@@ -148,28 +158,24 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
         prefix === undefined
           ? req.user
           : [
-              {
-                type: "text" as const,
-                text: prefix,
-                cache_control: { type: "ephemeral" as const },
-              },
+              { type: "text" as const, text: prefix, ...cacheControl },
               ...(rest === "" ? [] : [{ type: "text" as const, text: rest }]),
             ];
       const body = {
         model: req.model,
         max_tokens: req.maxOutputTokens,
-        system: [
-          {
-            type: "text" as const,
-            text: req.system,
-            cache_control: { type: "ephemeral" as const },
-          },
-        ],
+        system: [{ type: "text" as const, text: req.system, ...cacheControl }],
         messages: [{ role: "user" as const, content }],
-        output_config: {
-          effort: req.effort,
-          format: { type: "json_schema" as const, schema: req.outputSchema },
-        },
+        ...(caps.effort || caps.nativeSchema
+          ? {
+              output_config: {
+                ...(caps.effort ? { effort: req.effort } : {}),
+                ...(caps.nativeSchema
+                  ? { format: { type: "json_schema" as const, schema: req.outputSchema } }
+                  : {}),
+              },
+            }
+          : {}),
       };
       // The SDK's `timeout` is per attempt and it retries: the signal bounds the whole call.
       const reqOpts = {

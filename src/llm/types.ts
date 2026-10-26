@@ -61,6 +61,28 @@ export type LlmResult =
   | { ok: true; value: unknown; usage: LlmUsage; model: string; durationMs: number }
   | { ok: false; failure: LlmFailure; usage: LlmUsage; model: string; durationMs: number };
 
+/**
+ * What a provider's API can do. A provider without `nativeSchema` gets the schema in the system
+ * prompt instead, and the caller's own validation catches what does not match.
+ */
+export interface LlmCapabilities {
+  /** Constrained or validated JSON-schema output (`output_config.format`, `response_format`). */
+  readonly nativeSchema: boolean;
+  /** Explicit prompt-cache markers (`cache_control`). */
+  readonly promptCache: boolean;
+  /** Graft's `effort` is sent; without it the field is dropped. */
+  readonly effort: boolean;
+  /** Token counts come back with every call; without them usage is zero. */
+  readonly reportsUsage: boolean;
+}
+
+export const FULL_CAPABILITIES: LlmCapabilities = Object.freeze({
+  nativeSchema: true,
+  promptCache: true,
+  effort: true,
+  reportsUsage: true,
+});
+
 export interface LlmClient {
   complete(req: LlmRequest): Promise<LlmResult>;
   /**
@@ -68,6 +90,13 @@ export interface LlmClient {
    * caller must not add its own refusal fallback. Absent means false.
    */
   serverRefusalFallback?(model: string): boolean;
+  /** What the provider behind `model` supports. Absent means `FULL_CAPABILITIES`. */
+  capabilities?(model: string): LlmCapabilities;
+  /**
+   * The USD cost of one call's usage, for clients that know their providers' prices. Absent means
+   * the built-in Claude price table (`src/llm/pricing.ts`); null means unpriced.
+   */
+  costOf?(usage: LlmUsage, model: string): number | null;
 }
 
 export const ZERO_USAGE: LlmUsage = Object.freeze({

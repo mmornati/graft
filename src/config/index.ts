@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { z } from "zod";
+import { anthropicCredential } from "../llm/anthropic.js";
 import {
   type AnthropicFederation,
   credentialProblems,
   FEDERATION_FIELDS,
   federationFrom,
 } from "../llm/federation.js";
+import { type LlmRegistry, parseRegistry } from "../llm/registry.js";
 import { MODEL_ID } from "../llm/types.js";
 import { GLOB_REASONS } from "../policy/errors.js";
 import { validateGlob } from "../policy/globs.js";
@@ -230,6 +232,8 @@ const EnvSchema = z.object({
   GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
   GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
   GRAFT_LLM_REFUSAL_FALLBACK_MODEL: opt(modelId),
+  GRAFT_LLM_PROVIDERS: opt(z.string().max(100_000)),
+  GRAFT_LLM_PROVIDERS_FILE: opt(z.string()),
   GRAFT_LLM_DAILY_TOKEN_BUDGET: withDefault(intString(0, Number.MAX_SAFE_INTEGER), "2000000"),
   GRAFT_INTENT_SENSITIVE_PATHS: withDefault(globList, ""),
   GRAFT_FEEDBACK_POLL_CRON: withDefault(cronOrOff, "*/15 * * * *"),
@@ -292,6 +296,12 @@ export interface Config {
   readonly anthropicFederation: AnthropicFederation | undefined;
   /** Messages API base URL; undefined means the Claude API. */
   readonly anthropicBaseUrl: string | undefined;
+  /**
+   * The provider registry (`GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE`), or undefined for
+   * the single client built from the `ANTHROPIC_*` settings. With a registry the three model
+   * settings below are its roles, each `<provider id>/<model>`.
+   */
+  readonly llmRegistry: LlmRegistry | undefined;
   readonly llmModelFast: string;
   readonly llmModelStrong: string;
   readonly llmTimeoutMs: number;
@@ -372,6 +382,58 @@ export interface Config {
   readonly trustProxy: readonly string[];
 }
 
+const LEGACY_MODEL_VARS = [
+  "GRAFT_LLM_MODEL_FAST",
+  "GRAFT_LLM_MODEL_STRONG",
+  "GRAFT_LLM_REFUSAL_FALLBACK_MODEL",
+] as const;
+
+/**
+ * The registry, when one is configured. It replaces the three model variables instead of quietly
+ * winning over them, so setting both is an error. Messages name variables, never values.
+ */
+function registryFrom(
+  d: z.infer<typeof EnvSchema>,
+  env: NodeJS.ProcessEnv,
+): { registry: LlmRegistry | undefined; problems: string[] } {
+  const inline = d.GRAFT_LLM_PROVIDERS;
+  const file = d.GRAFT_LLM_PROVIDERS_FILE;
+  if (inline === undefined && file === undefined) return { registry: undefined, problems: [] };
+  if (inline !== undefined && file !== undefined) {
+    return {
+      registry: undefined,
+      problems: ["GRAFT_LLM_PROVIDERS / GRAFT_LLM_PROVIDERS_FILE: set at most one, not both"],
+    };
+  }
+  const legacy = LEGACY_MODEL_VARS.filter((k) => emptyToUndefined(env[k]) !== undefined);
+  if (legacy.length > 0) {
+    return {
+      registry: undefined,
+      problems: [
+        `${legacy.join(" / ")}: unset with a provider registry; its roles name the models`,
+      ],
+    };
+  }
+  let text = inline;
+  const source = inline !== undefined ? "GRAFT_LLM_PROVIDERS" : "GRAFT_LLM_PROVIDERS_FILE";
+  if (file !== undefined) {
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return { registry: undefined, problems: ["GRAFT_LLM_PROVIDERS_FILE: file cannot be read"] };
+    }
+  }
+  const shared = anthropicCredential({
+    anthropicApiKey: d.ANTHROPIC_API_KEY,
+    anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+    anthropicFederation: federationFrom(d),
+  });
+  return parseRegistry(source, text as string, env, {
+    credential: shared,
+    baseUrl: d.ANTHROPIC_BASE_URL,
+  });
+}
+
 /** Placeholder secrets shipped in `.env.example`; refused in production. */
 const EXAMPLE_WEBHOOK_SECRETS = new Set(["change-me-dev-webhook-secret"]);
 
@@ -397,6 +459,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   if (parsed.success) problems.push(...credentialProblems(parsed.data));
+
+  let llmRegistry: LlmRegistry | undefined;
+  if (parsed.success && problems.length === 0) {
+    const r = registryFrom(parsed.data, env);
+    problems.push(...r.problems);
+    llmRegistry = r.registry;
+  }
 
   if (
     parsed.success &&
@@ -465,12 +534,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
     anthropicFederation: federationFrom(d),
     anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
-    llmModelFast: d.GRAFT_LLM_MODEL_FAST,
-    llmModelStrong: d.GRAFT_LLM_MODEL_STRONG,
+    llmRegistry,
+    llmModelFast: llmRegistry?.roles.fast ?? d.GRAFT_LLM_MODEL_FAST,
+    llmModelStrong: llmRegistry?.roles.strong ?? d.GRAFT_LLM_MODEL_STRONG,
     llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,
     llmMaxRetries: d.GRAFT_LLM_MAX_RETRIES,
     llmRefusalFallback: d.GRAFT_LLM_REFUSAL_FALLBACK,
-    llmRefusalFallbackModel: d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
+    llmRefusalFallbackModel: llmRegistry
+      ? llmRegistry.roles.refusalFallback
+      : d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
     llmDailyTokenBudget: d.GRAFT_LLM_DAILY_TOKEN_BUDGET,
     intentSensitivePaths: Object.freeze([...d.GRAFT_INTENT_SENSITIVE_PATHS]),
     feedbackPollCron: d.GRAFT_FEEDBACK_POLL_CRON,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { upsertManagedSection } from "../../src/github/managed-comment.js";
 import { agreeingVerifier, createFakeLlm, forbiddenLlm, scriptedLlm } from "../../src/llm/fake.js";
 import type { LlmRequest } from "../../src/llm/types.js";
+import { FULL_CAPABILITIES } from "../../src/llm/types.js";
 import {
   type CardResult,
   generateCard,
@@ -828,5 +829,20 @@ describe("client-side refusal fallback", () => {
     expect(
       llm.calls[2]?.user.endsWith("Task: verify every claim in the intent card against the diff."),
     ).toBe(true);
+  });
+
+  it("U-GEN-PROV-1 a provider without native schema gets it in the prompt; its client prices the call", async () => {
+    const llm = Object.assign(scriptedLlm({ writer: W(), verifier: agreeingVerifier }), {
+      capabilities: (m: string) => ({ ...FULL_CAPABILITIES, nativeSchema: m !== STRONG }),
+      costOf: () => 0.25,
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(r.status).toBe("ok");
+    const [writer, verifier] = llm.calls;
+    expect(writer?.system).toBe(systemPrompt("en"));
+    expect(verifier?.system.startsWith(systemPrompt("en"))).toBe(true);
+    expect(verifier?.system).toContain(JSON.stringify(OUTPUT_SCHEMA));
+    expect(verifier?.outputSchema).toEqual(OUTPUT_SCHEMA);
+    expect(r.costUsd).toBe(0.5);
   });
 });

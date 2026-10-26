@@ -305,10 +305,24 @@ export const RETRYABLE: ReadonlySet<FailureReason> = new Set([
 ]);
 
 /** A call that spent nothing costs 0 whatever its model; otherwise null when the model is unpriced. */
-function callCost(usage: LlmUsage, model: string): number | null {
+function callCost(usage: LlmUsage, model: string, llm: LlmClient): number | null {
   const tokens =
     usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-  return tokens === 0 ? 0 : cost(usage, model);
+  if (tokens === 0) return 0;
+  return llm.costOf ? llm.costOf(usage, model) : cost(usage, model);
+}
+
+/**
+ * A provider without native JSON-schema output gets the schema in the system prompt. The answer is
+ * validated the same way either way, and an answer that does not match is retried once.
+ */
+export function systemWithSchema(
+  system: string,
+  schema: Record<string, unknown>,
+  nativeSchema: boolean,
+): string {
+  if (nativeSchema) return system;
+  return `${system}\n\nAnswer with a single JSON object and nothing else: no prose, no code fence. It must match this JSON Schema:\n${JSON.stringify(schema)}`;
 }
 
 interface Spent {
@@ -414,8 +428,10 @@ export async function runCard(
     for (let attempt = 0; attempt < 2; attempt++) {
       const remaining = deadlineAt - o.nowMs();
       if (remaining < MIN_REMAINING_MS) return { ok: false, reason: "deadline_exceeded" };
+      const native = llm.capabilities?.(model).nativeSchema ?? true;
       const res = await llm.complete({
         ...base,
+        system: systemWithSchema(base.system, base.outputSchema, native),
         model,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         timeoutMs: Math.min(o.timeoutMs, remaining),
@@ -423,7 +439,7 @@ export async function runCard(
       });
       spent.calls += 1;
       if (spent.costUsd !== null) {
-        const c = callCost(res.usage, res.model);
+        const c = callCost(res.usage, res.model, llm);
         spent.costUsd = c === null ? null : roundUsd(spent.costUsd + c);
       }
       spent.usage = {
