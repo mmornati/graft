@@ -11,7 +11,7 @@ Graft makes at most three model calls per pull request: a writer, an escalated w
 - **Usage counters:** token counts per call, priced by `src/llm/pricing.ts`.
 - **Failure taxonomy:** `timeout`, `rate_limited`, `unavailable`, `auth`, `bad_request`, `refusal`, `max_tokens`, `invalid_json`.
 
-The `LlmClient` interface in `src/llm/types.ts` is already provider-neutral. That makes the job "add implementations and capability flags", not "redesign".
+The `LlmClient` interface in `src/llm/types.ts` is already provider-neutral. That makes the job "add implementations and capability flags", not "redesign". Section 4 adds them behind a provider registry that the operator configures on the server, with roles that point the writer and verifier at any registered provider.
 
 ## TL;DR
 
@@ -25,6 +25,7 @@ The `LlmClient` interface in `src/llm/types.ts` is already provider-neutral. Tha
 | Bedrock / Vertex / Foundry | **Yes**, for enterprise self-hosters. | Uses Anthropic SDK variants. Bedrock Mantle has **no structured outputs**. |
 | Local models (Ollama, vLLM, LM Studio) | **Yes**, through a second, OpenAI-format transport. | Constrained JSON through grammars. Fully private. |
 | Codex SDK on a ChatGPT login | **Only self-hosted, with the customer's own key or Business token.** | OpenAI recommends API keys for automation. Same consumer-plan problem as Claude. |
+| opencode CLI | **Only self-hosted**, like the Claude and Codex CLIs. | It inherits the terms of whatever login it uses. |
 | Gemini CLI on a Google account | **No.** | Tested here: personal Code Assist access is gone, and the CLI now refers users to Antigravity. |
 | Jev (TypeSafe, "System One") | **Pilot offline only**, as a classifier or claim checker. | Outputs typed answers with probabilities, not text. Cannot write a card. Costs $0.042/M input. Early access, vendor-run benchmarks. |
 | Cheaper "fast" model than Haiku 5.5 | **Not worth it.** | Haiku costs about $0.002 per call. Sonnet costs about $0.045 and is about 90% of the bill. |
@@ -207,20 +208,86 @@ Each step is shippable on its own and gated by `pnpm eval:ci` plus a live `pnpm 
 
 Details are in [decisions.md](../decisions.md#llm-gateways-and-client-side-refusal-fallback).
 
-### Step 2: Provider abstraction
+### Design: a server-side provider registry
 
-1. `GRAFT_LLM_PROVIDER = anthropic | anthropic-vertex | anthropic-foundry | anthropic-bedrock | openai-compatible | copilot | claude-code (dev only)`, replacing the "key present" switch in `src/llm/index.ts`. Keep "no credentials" mapping to `unconfiguredLlm`.
-2. Each `LlmClient` declares capabilities: `nativeSchema`, `promptCache`, `effort`, `serverRefusalFallback`, `reportsUsage`. `generate.ts` already validates output, so a provider without `nativeSchema` adds the schema to the system prompt and relies on the existing invalid-output retry.
-3. Map Graft's `effort` (`low`, `medium`, `high`) to each provider's equivalent, or drop it where unsupported. Pricing becomes keyed by provider and model. An unknown price stays `null`, which `costOfCalls` already handles.
-4. Put the provider name in the card footer and in the `llm call` log line.
+Steps 2–7 replace the single "key present" switch with a list of providers that the operator configures on the server, and with roles that point at them. Repository owners do not choose providers in `graft.yaml`: a provider decides where diffs go and who pays, so it stays operator configuration. The one per-installation choice is Copilot billing (Step 6).
 
-### Step 3: OpenAI-compatible transport
+```yaml
+# GRAFT_LLM_PROVIDERS_FILE, or the same document as JSON in GRAFT_LLM_PROVIDERS
+providers:
+  - id: claude
+    kind: anthropic            # variant: api | vertex | foundry | bedrock
+  - id: openrouter
+    kind: openai-compatible
+    baseUrl: https://openrouter.ai/api/v1
+    apiKeyEnv: OPENROUTER_API_KEY
+    zeroRetention: true
+  - id: ollama
+    kind: openai-compatible
+    baseUrl: http://ollama:11434/v1
+    capabilities: { nativeSchema: true, promptCache: false, effort: false }
+    prices: { "qwen3-coder-30b-a3b": { input: 0, output: 0 } }
+  - id: local-claude
+    kind: cli:claude           # self-hosted only, see "Scope of the CLI providers"
+roles:
+  fast: ollama/qwen3-coder-30b-a3b
+  strong: claude/claude-sonnet-5-5
+  refusalFallback: openrouter/anthropic/claude-opus-5.5
+```
 
-1. `src/llm/openai-compatible.ts` on the `openai` package: `response_format: { type: "json_schema", strict: true }`, plus `provider.require_parameters` and `provider.zdr` when the host is OpenRouter.
-2. Map errors to the same taxonomy. A content-filter finish reason maps to `refusal`, and `length` maps to `max_tokens`.
-3. Contract tests with a fake `fetch`, mirroring the U-LLM tests. Run a live eval against Ollama with Qwen3-Coder-30B-A3B and one hosted model.
+- **Roles** are the three models Graft already uses (`generate.ts`): `fast` (first writer), `strong` (escalated writer and verifier) and the optional `refusalFallback`. Each is `<provider id>/<model>`; everything after the first `/` is the provider's own model ID.
+- **Secrets never sit in the registry.** An entry names the environment variable that holds its key (`apiKeyEnv`), so the file can be committed or mounted while keys stay runtime-only secrets on Coolify and Fly.
+- **Backward compatible.** With no registry, Graft builds an implicit `anthropic` provider from today's `ANTHROPIC_*` settings and maps `GRAFT_LLM_MODEL_FAST`, `GRAFT_LLM_MODEL_STRONG` and `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` to the three roles. An existing deployment changes nothing. Setting both the registry and the old model variables is a config error, not a silent precedence rule.
+- **Validation moves to each provider kind.** The global `MODEL_ID` check in `src/config/index.ts` only accepts Claude IDs; it becomes the `anthropic` kind's check. The other kinds accept any model ID within a length and character limit.
+- **Capabilities** (`nativeSchema`, `promptCache`, `effort`, `serverRefusalFallback`, `reportsUsage`) have a default per kind, and an entry may override them for an endpoint that differs (an Ollama build without grammar support, a gateway that drops `cache_control`).
 
-### Step 4: Copilot provider (multi-tenant, licence-backed)
+### Scope of the CLI providers
+
+The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) logged in with a personal subscription. Section 1 explains why that login may not serve other people's pull requests. The rules:
+
+| Kind | Hosted Graft App | Self-hosted, single tenant | Why |
+| --- | --- | --- | --- |
+| `cli:claude` | **Refused** | Allowed, with a warning in the logs and on the card | Anthropic's terms (1.1) |
+| `cli:codex` | **Refused** | Allowed with an API key or a Business access token; a ChatGPT login gets a warning | OpenAI's automation guidance (1.3) |
+| `cli:opencode` | **Refused** | Allowed; the warning names the upstream provider's terms | It inherits whatever login it uses (1.4) |
+| `copilot` (SDK) | **Allowed** | Allowed | Installation tokens bill the installing org (1.2) |
+
+- **How "hosted" is detected:** a new `GRAFT_DEPLOYMENT = hosted | self-hosted` setting, defaulting to `self-hosted`. Graft's own deployment sets `hosted`, and config loading fails when a `cli:*` provider is configured there. `NODE_ENV=production` alone is not the signal: a self-hoster runs production too.
+- **Every CLI is an agent with tools, and Graft feeds it untrusted PR text.** Each adapter must turn tools, MCP servers, settings files and plugins off, run in an empty temporary working directory, and start with an environment stripped to what the CLI needs (no `GITHUB_*`, no other providers' keys, no database URL). This is the main security cost of the feature, not an afterthought.
+- **Packaging:** the default Docker image ships no CLI. Self-hosters who want one build `FROM` the Graft image and add it, and mount the CLI's login state read-only. Document this; do not bake subscriptions into an image.
+
+### Step 2: Provider registry and roles (PR 1)
+
+1. Parse and validate the registry (`GRAFT_LLM_PROVIDERS_FILE` or `GRAFT_LLM_PROVIDERS`) and the roles in `src/config/index.ts`, including the implicit `anthropic` provider for existing deployments. Unknown provider IDs in a role, a missing `apiKeyEnv` variable or a duplicate ID fail at startup.
+2. Replace the switch in `src/llm/index.ts` with a router: an `LlmClient` that holds one client per provider and sends each request to the provider named by its model's prefix. `generate.ts` keeps passing `model`; it receives `provider/model` strings and never builds clients. No provider configured still maps to `unconfiguredLlm`.
+3. Add `capabilities(model)` to `LlmClient`, next to `serverRefusalFallback`. In `generate.ts`, a provider without `nativeSchema` gets the schema appended to the system prompt and relies on the existing invalid-output retry. Effort is dropped where unsupported.
+4. Pricing keyed by provider and model: the built-in table covers the `anthropic` kind, and registry `prices` cover the rest. An unknown price stays `null`, which `costOfCalls` already handles, and the daily token budget keeps counting tokens.
+5. Show the provider with the model in the card footer (`src/modules/intent/render.ts`) and in the `llm call` log line. Never log a base URL beyond its host.
+6. Move the Vertex, Foundry and Bedrock variants here as `anthropic` with a `variant` field (+1 SDK package each, added only when a variant is used).
+
+### Step 3: OpenAI-compatible transport (PR 2)
+
+1. `src/llm/openai-compatible.ts` on the `openai` package: `response_format: { type: "json_schema", strict: true }`, plus `provider.require_parameters` and, when `zeroRetention` is set, `provider.zdr` and `data_collection: deny` on OpenRouter.
+2. Map errors to the same taxonomy. A content-filter finish reason maps to `refusal`, `length` to `max_tokens`, and a body that is not JSON to `invalid_json`.
+3. Contract tests with a fake `fetch`, mirroring the U-LLM tests. Run a live eval against Ollama with Qwen3-Coder-30B-A3B and one hosted model (OpenAI or Mistral).
+4. This one transport covers OpenAI, OpenRouter, Mistral, DeepSeek, Gemini (compat), Ollama, vLLM, LM Studio, llama.cpp and the LiteLLM proxy.
+
+### Step 4: CLI transport and the `claude` adapter (PR 3)
+
+1. `src/llm/cli.ts`: the shared base. It spawns the binary with an argument array (never a shell), writes the prompt on stdin, enforces `timeoutMs` and `deadlineMs` by killing the process group, caps stdout size, parses JSON, and maps exit codes and stderr patterns to the failure taxonomy. Usage comes from the CLI's JSON when it reports it, otherwise zero with `reportsUsage: false`.
+2. The isolation rules from "Scope of the CLI providers": empty temp directory, stripped environment, tools and MCP off. Enforced in the base, not left to each adapter.
+3. The `cli:claude` adapter: `claude -p --tools "" --strict-mcp-config --setting-sources "" --model <id> --system-prompt … --output-format json --json-schema …`, as in the 1.1 spike. Pass explicit model IDs; aliases resolve to old models.
+4. The `GRAFT_DEPLOYMENT=hosted` guard, and the warning on the card.
+5. A security test with prompt-injection cases syn-019, syn-020, syn-021 and syn-030 against a fake CLI binary that records its arguments and environment: no tool flag enabled, no secret in the environment, the working directory empty.
+
+### Step 5: `codex` and `opencode` adapters (PR 4)
+
+1. Spike first: confirm the current flags for non-interactive JSON output, a schema option, and turning tools and MCP off, on the installed versions. Record them in this document.
+2. `cli:codex`: `codex exec` with `--output-schema` (or `@openai/codex-sdk` with `outputSchema` if the CLI flag is missing). Read-only sandbox, no approvals.
+3. `cli:opencode`: `opencode run` with JSON output. Schema support is unverified, so the default is `nativeSchema: false` and Graft's own validation.
+4. Extend the Step 4 security test to both adapters.
+
+### Step 6: Copilot provider (PR 5)
 
 1. Add the "Copilot Requests" permission to `github/app-manifest.json`. Mint installation tokens with `copilot_requests: write` per job; they last one hour, so fetch one per job.
 2. Write `src/llm/copilot.ts` on `@github/copilot-sdk`:
@@ -228,18 +295,39 @@ Details are in [decisions.md](../decisions.md#llm-gateways-and-client-side-refus
    - an empty session per call: **no tools**, no MCP, system message in replace mode
    - `responseSchema`, then Graft's own validation
    - usage from `assistant.usage`
-3. Choose the provider per installation, through settings or `graft.yaml` on the base branch, so an org can opt into "bill my Copilot". Fall back to the Anthropic key when Copilot requests are not enabled for that org.
-4. Add a security test that no tool can be invoked, given prompt-injection cases syn-019, syn-020, syn-021 and syn-030.
+3. A `copilot` provider entry is installation-aware: the router passes the job's installation so the client uses that org's token. An installation opts in through a setting (stored with the installation, not in `graft.yaml`, since it is a billing decision). Without the opt-in, or when the org does not allow Copilot requests from apps, the role falls back to the provider named in `fallback`.
+4. The same no-tools security test as Step 4.
 
-### Step 5: Cost cascade (Section 3)
+### Step 7: Providers in the console (PR 6)
+
+1. Show the configured providers, their kind, host, capabilities and role assignments in the read-only console. Never show `apiKeyEnv` values, only whether the variable is set.
+2. Per-provider call counts, failure classes and spend from the existing `llm call` data.
+
+### Step 8: Cost cascade (Section 3)
+
+Independent of Steps 2–7, and can run before or after them.
 
 1. Shared cached prefix (A): measure cache hits on the eval set first.
 2. Cheap-first verifier with escalation rules (C). Bump `PROMPT_VERSION` and re-baseline.
-3. Optional: a Jev spike as an offline eval provider only (D). Compare it with Sonnet verdicts on a few hundred pilot cases before any live use.
+3. Optional: a Jev spike as an offline eval provider only (D). Compare it with Sonnet verdicts on a few hundred pilot cases before any live use. With the registry in place, Jev is one more `openai-compatible` entry if OpenRouter serves it.
 
-### Step 6: Local developer provider (optional)
+### Effort
 
-Add a `claude-code` and/or `codex` provider through their SDKs, for running `pnpm eval` and e2e on a developer's own subscription. Refuse it when `NODE_ENV=production`, and document why (section 1.1).
+Estimated for AI implementation with the same review loop as phases 0 and 1 (two review rounds per step). Sizes: **S** is under one working session, **M** about one session, **L** two or more.
+
+| Step | PR | Size | Depends on | Main risk |
+| --- | --- | --- | --- | --- |
+| 2 | Registry, roles, router, capabilities, pricing | M | – | Keeping existing deployments unchanged; config migration tests |
+| 3 | OpenAI-compatible transport | M | 2 | Error mapping across gateways that differ in small ways |
+| 4 | CLI base and `claude` adapter | M | 2 | Process isolation; it carries the security test |
+| 5 | `codex` and `opencode` adapters | S each | 4 | CLI flags change between versions; spike first |
+| 6 | Copilot provider | L | 2 | App permission rollout, per-installation tokens and opt-in, fallback |
+| 7 | Console view | S | 2 | – |
+| 8 | Cost cascade | M | – | Eval regressions; needs re-baselining |
+
+The code is the predictable part. The open-ended part is **quality per model**: every model put in a role must pass `pnpm eval` against the saved baseline (90% or more) before it is recommended. Weaker local models may need prompt tuning, or may only be good enough for `fast` and not for `strong`. Budget one live eval run per candidate model, and treat a failing model as "documented as unsupported for that role", not as a reason to lower the gate.
+
+Recommended order: 2 and 3 first. Together they deliver "any OpenAI-compatible provider, configured on the server" with no licensing or tool-execution risk. Then 6 for hosted customers, and 4–5 for self-hosters.
 
 ---
 
@@ -252,3 +340,5 @@ Add a `claude-code` and/or `codex` provider through their SDKs, for running `pnp
 - Can Jev be called on OpenRouter? Is its price subsidised? How does it score on Graft's labelled cases?
 - The official Google announcement of the Gemini CLI personal-tier retirement was not found. The only evidence is the CLI's own error.
 - OpenAI's Terms of Use page returned 403 during research.
+- Which `codex exec` and `opencode run` flags give JSON output against a schema with tools and MCP off? (Step 5 starts with this spike.)
+- Can one `copilot` provider entry serve installations that opted in and fall back cleanly for those that did not, without a token mint on every call?
