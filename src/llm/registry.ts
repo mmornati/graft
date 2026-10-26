@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { AnthropicCredential } from "./anthropic.js";
+import { FORBIDDEN_ENV } from "./cli.js";
 import type { Price } from "./pricing.js";
 import { FULL_CAPABILITIES, type LlmCapabilities, MODEL_ID } from "./types.js";
 
@@ -68,9 +69,38 @@ const openAiCompatibleEntry = z
   })
   .strict();
 
-const entrySchema = z.discriminatedUnion("kind", [anthropicEntry, openAiCompatibleEntry], {
-  error: 'kind must be "anthropic" or "openai-compatible"',
-});
+/** CLI kinds: a coding agent's command-line tool on this machine (self-hosted only). */
+export const CLI_KINDS = ["cli:claude"] as const;
+export type CliKind = (typeof CLI_KINDS)[number];
+
+/** A bare command name looked up on PATH, or an absolute path. */
+const COMMAND = /^(\/[^\0\n]{1,1023}|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/;
+
+const cliEntry = <K extends CliKind>(kind: K) =>
+  z
+    .object({
+      ...common,
+      kind: z.literal(kind),
+      command: z.string().regex(COMMAND, "must be a command name or an absolute path").optional(),
+      passEnv: z
+        .array(
+          envName.refine(
+            (n) => !FORBIDDEN_ENV.test(n),
+            "names a variable Graft never passes to a CLI",
+          ),
+        )
+        .max(20)
+        .optional(),
+    })
+    .strict();
+
+const entrySchema = z.discriminatedUnion(
+  "kind",
+  [anthropicEntry, openAiCompatibleEntry, cliEntry("cli:claude")],
+  {
+    error: `kind must be "anthropic", "openai-compatible" or ${CLI_KINDS.map((k) => `"${k}"`).join(", ")}`,
+  },
+);
 
 const roleRef = z.string().min(3).max(200);
 const documentSchema = z
@@ -114,7 +144,20 @@ export interface OpenAiCompatibleProvider extends ProviderCommon {
   readonly maxTokensParam: "max_tokens" | "max_completion_tokens";
 }
 
-export type LlmProvider = AnthropicProvider | OpenAiCompatibleProvider;
+export interface CliProvider extends ProviderCommon {
+  readonly kind: CliKind;
+  /** A command name on PATH or an absolute path. */
+  readonly command: string;
+  /** Variables passed to the CLI on top of the base set (its login, say). */
+  readonly passEnv: readonly string[];
+  readonly baseUrl: undefined;
+  readonly sharedCredential: false;
+}
+
+export type LlmProvider = AnthropicProvider | OpenAiCompatibleProvider | CliProvider;
+
+/** `self-hosted` (the default) allows the CLI kinds; `hosted` refuses them. */
+export type Deployment = "hosted" | "self-hosted";
 
 /**
  * What each kind assumes before an entry's overrides. An OpenAI-format server is only assumed to
@@ -127,6 +170,13 @@ export const DEFAULT_CAPABILITIES: Record<ProviderKind, LlmCapabilities> = {
     nativeSchema: true,
     promptCache: false,
     effort: false,
+    reportsUsage: true,
+  }),
+  // The CLI caches on its own; Graft cannot place markers.
+  "cli:claude": Object.freeze({
+    nativeSchema: true,
+    promptCache: false,
+    effort: true,
     reportsUsage: true,
   }),
 };
@@ -147,7 +197,14 @@ export interface LlmRegistry {
 const MODEL_PATTERN: Record<ProviderKind, { re: RegExp; message: string }> = {
   anthropic: { re: MODEL_ID, message: "must be a Claude model ID" },
   "openai-compatible": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
+  "cli:claude": { re: MODEL_ID, message: "must be a Claude model ID" },
 };
+
+const DEFAULT_COMMAND: Record<CliKind, string> = { "cli:claude": "claude" };
+
+function isCliKind(kind: string): kind is CliKind {
+  return (CLI_KINDS as readonly string[]).includes(kind);
+}
 
 /** The `ANTHROPIC_*` settings an `anthropic` entry without its own key falls back to. */
 export interface AnthropicDefaults {
@@ -273,6 +330,32 @@ function openAiCompatibleProvider(
   };
 }
 
+function cliProvider(
+  e: Extract<Entry, { kind: CliKind }>,
+  at: string,
+  deployment: Deployment,
+  problems: string[],
+): CliProvider | null {
+  if (deployment === "hosted") {
+    // Section 1 of docs/plan/llm-provider-expansion.md: a personal CLI login may not serve
+    // other people's pull requests.
+    problems.push(
+      `${at}.kind: ${e.kind} uses a personal CLI login and is refused when GRAFT_DEPLOYMENT=hosted`,
+    );
+    return null;
+  }
+  return {
+    id: e.id,
+    kind: e.kind,
+    capabilities: capabilitiesOf(e),
+    prices: pricesOf(e),
+    command: e.command ?? DEFAULT_COMMAND[e.kind],
+    passEnv: Object.freeze([...(e.passEnv ?? [])]),
+    baseUrl: undefined,
+    sharedCredential: false,
+  };
+}
+
 function issuePath(path: readonly PropertyKey[]): string {
   return path
     .map((p) => (typeof p === "number" ? `[${p}]` : `.${String(p)}`))
@@ -289,6 +372,7 @@ export function parseRegistry(
   text: string,
   env: Readonly<Record<string, string | undefined>>,
   defaults: AnthropicDefaults,
+  deployment: Deployment = "self-hosted",
 ): { registry: LlmRegistry; problems: [] } | { registry: undefined; problems: string[] } {
   let raw: unknown;
   try {
@@ -321,8 +405,30 @@ export function parseRegistry(
     const p =
       e.kind === "anthropic"
         ? anthropicProvider(e, at, env, defaults, problems)
-        : openAiCompatibleProvider(e, at, env, problems);
+        : e.kind === "openai-compatible"
+          ? openAiCompatibleProvider(e, at, env, problems)
+          : cliProvider(e, at, deployment, problems);
     if (p) providers.push(Object.freeze(p));
+  });
+
+  // A CLI gets no other provider's key: those variables are for their own endpoints.
+  const keyVars = new Set(
+    parsed.data.providers.flatMap((e) =>
+      "apiKeyEnv" in e || "authTokenEnv" in e
+        ? [
+            ...("apiKeyEnv" in e && e.apiKeyEnv ? [e.apiKeyEnv] : []),
+            ...("authTokenEnv" in e && e.authTokenEnv ? [e.authTokenEnv] : []),
+          ]
+        : [],
+    ),
+  );
+  parsed.data.providers.forEach((e, i) => {
+    if (!isCliKind(e.kind) || !("passEnv" in e)) return;
+    (e.passEnv ?? []).forEach((name, j) => {
+      if (keyVars.has(name)) {
+        problems.push(`${source}: providers[${i}].passEnv[${j}]: is another provider's key`);
+      }
+    });
   });
 
   const byId = new Map(providers.map((p) => [p.id, p]));
@@ -379,6 +485,7 @@ export function loadRegistry(o: {
   file: string | undefined;
   env: Readonly<Record<string, string | undefined>>;
   defaults: AnthropicDefaults;
+  deployment?: Deployment;
 }): { registry: LlmRegistry | undefined; problems: string[] } {
   if (o.inline === undefined && o.file === undefined) return { registry: undefined, problems: [] };
   if (o.inline !== undefined && o.file !== undefined) {
@@ -403,7 +510,7 @@ export function loadRegistry(o: {
     } catch {
       return { registry: undefined, problems: ["GRAFT_LLM_PROVIDERS_FILE: file cannot be read"] };
     }
-    return parseRegistry("GRAFT_LLM_PROVIDERS_FILE", text, o.env, o.defaults);
+    return parseRegistry("GRAFT_LLM_PROVIDERS_FILE", text, o.env, o.defaults, o.deployment);
   }
-  return parseRegistry("GRAFT_LLM_PROVIDERS", o.inline as string, o.env, o.defaults);
+  return parseRegistry("GRAFT_LLM_PROVIDERS", o.inline as string, o.env, o.defaults, o.deployment);
 }

@@ -272,13 +272,13 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 3. **Done:** contract tests with a fake `fetch` (U-OAI-1 to U-OAI-11). **Done in a follow-up PR:** `pnpm eval` reads the registry (`loadRegistry`, shared with the server config), and a live run prices calls with the entries' `prices`. **Not done:** the live eval itself against Ollama and a hosted model. It needs those endpoints and an operator's spend approval, so it is a human task.
 4. **Done.** Default capabilities for the kind: JSON schema and usage only, with no `reasoning_effort` and no cache markers. Prices match on `-`, `:` or `@` after the key, for Ollama tags.
 
-### Step 4: CLI transport and the `claude` adapter (PR 3)
+### Step 4: CLI transport and the `claude` adapter (PR 3), implemented
 
-1. `src/llm/cli.ts`: the shared base. It spawns the binary with an argument array (never a shell), writes the prompt on stdin, enforces `timeoutMs` and `deadlineMs` by killing the process group, caps stdout size, parses JSON, and maps exit codes and stderr patterns to the failure taxonomy. Usage comes from the CLI's JSON when it reports it, otherwise zero with `reportsUsage: false`.
-2. The isolation rules from "Scope of the CLI providers": empty temp directory, stripped environment, tools and MCP off. Enforced in the base, not left to each adapter.
-3. The `cli:claude` adapter: `claude -p --tools "" --strict-mcp-config --setting-sources "" --model <id> --system-prompt … --output-format json --json-schema …`, as in the 1.1 spike. Pass explicit model IDs; aliases resolve to old models.
-4. The `GRAFT_DEPLOYMENT=hosted` guard, and the warning on the card.
-5. A security test with prompt-injection cases syn-019, syn-020, syn-021 and syn-030 against a fake CLI binary that records its arguments and environment: no tool flag enabled, no secret in the environment, the working directory empty.
+1. **Done.** `src/llm/cli.ts` spawns with an argument array (`shell: false`) in its own process group, writes the user message on stdin, kills the group at `min(timeoutMs, deadlineMs)`, caps stdout at 4 MiB and stderr at 64 KiB (never logged), and maps spawn failures and exits to the failure taxonomy.
+2. **Done.** Isolation lives in the base: a fresh temporary working directory, removed afterwards, and an environment rebuilt from `BASE_ENV` plus the entry's `passEnv`, minus `FORBIDDEN_ENV`. The registry also refuses a `passEnv` name that is another provider's key.
+3. **Done.** `src/llm/cli-claude.ts`, checked against Claude Code 2.1.284, with flags `-p --output-format json --tools "" --strict-mcp-config --setting-sources "" --disable-slash-commands --no-session-persistence --model --system-prompt [--effort] [--json-schema]`. The output-token limit goes through `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. `api_error_status` maps like an HTTP status. One live call through the adapter succeeded during development.
+4. **Done.** `GRAFT_DEPLOYMENT=hosted` makes the registry refuse every `cli:*` kind. **Changed from the plan:** the warning is a startup log line per CLI provider, not a line on the card. The card already names the provider in the model (`local/claude-sonnet-5-5`).
+5. **Done.** U-CLI-T-9 runs syn-019, syn-020, syn-021 and syn-030 through `generateCard` against a fake `claude` that records its arguments, environment and directory. It checks that no tool flag is enabled, no secret is in the environment, the directory is empty and the untrusted text travels only on stdin.
 
 ### Step 5: `codex` and `opencode` adapters (PR 4)
 

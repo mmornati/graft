@@ -1,6 +1,9 @@
+import path from "node:path";
 import type { Config } from "../config/index.js";
 import type { Logger } from "../core/logger.js";
 import { anthropicCredential, createAnthropicLlm, isClaudeApi } from "./anthropic.js";
+import { createCliLlm } from "./cli.js";
+import { claudeCliAdapter } from "./cli-claude.js";
 import { createOpenAiCompatibleLlm } from "./openai-compatible.js";
 import type { LlmProvider, LlmRegistry } from "./registry.js";
 import { createRouterLlm } from "./router.js";
@@ -88,7 +91,7 @@ function describeProvider(p: LlmProvider) {
   return {
     id: p.id,
     kind: p.kind,
-    host: p.baseUrl ? new URL(p.baseUrl).host : "default",
+    host: p.baseUrl ? new URL(p.baseUrl).host : "command" in p ? "local" : "default",
     auth: p.sharedCredential ? "shared" : "own",
   };
 }
@@ -116,6 +119,18 @@ function providerClient(
         capabilities: p.capabilities,
         zeroRetention: p.zeroRetention,
         maxTokensParam: p.maxTokensParam,
+        log,
+      });
+    case "cli:claude":
+      log.warn(
+        { command: path.basename(p.command) },
+        "llm provider runs a CLI on a personal login: single-tenant self-hosted use only",
+      );
+      return createCliLlm({
+        command: p.command,
+        adapter: claudeCliAdapter,
+        capabilities: p.capabilities,
+        passEnv: p.passEnv,
         log,
       });
   }
