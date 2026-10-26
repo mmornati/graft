@@ -88,17 +88,24 @@ providers:
     authTokenEnv: OPENROUTER_API_KEY   # the variable's name, never the key
     prices:                  # USD per million tokens; cacheRead and cacheWrite default to input
       anthropic/claude-sonnet-5.5: { input: 2, output: 10 }
+  - id: ollama
+    kind: openai-compatible
+    baseUrl: http://ollama:11434/v1    # up to, not including, /chat/completions
+    prices:
+      qwen3-coder: { input: 0, output: 0 }
 roles:
-  fast: claude/claude-haiku-5-5
+  fast: ollama/qwen3-coder:30b
   strong: openrouter/anthropic/claude-sonnet-5.5
   refusalFallback: claude/claude-opus-5-5      # optional
 ```
 
 - **Roles.** `fast` is the first-pass writer for `trivial` PRs, `strong` the writer for everything else and the verifier, and `refusalFallback` the model Graft retries once on a refusal. Each is `<provider id>/<model>`: everything after the first `/` is the provider's own model ID. The card, the `llm call` log line and the spend ledger name the model with its provider.
 - **Credentials.** An entry names the variable holding its key with `apiKeyEnv` (sent as `x-api-key`) or `authTokenEnv` (sent as a bearer token), at most one. An `anthropic` entry with neither uses the `ANTHROPIC_*` credential, federation included, and `ANTHROPIC_BASE_URL`; it cannot set its own `baseUrl`, so a shared credential never goes to a host it was not meant for. Startup fails when a named variable is unset.
-- **Kinds.** `anthropic`: any endpoint that speaks the Anthropic Messages API (the Claude API, OpenRouter, Vercel AI Gateway, LiteLLM, Bedrock Mantle). Its roles take Claude model IDs, as `GRAFT_LLM_MODEL_*` do.
-- **Capabilities.** Every kind assumes its API supports JSON-schema output, prompt caching, effort and usage counts. Override what an endpoint lacks, for example `capabilities: { nativeSchema: false }` for Bedrock Mantle: Graft then puts the schema in the system prompt and relies on its own validation and retry.
-- **Prices.** Calls on an `anthropic` provider are priced from the built-in Claude table unless the entry's `prices` names the model (longest prefix wins). A model with no price leaves the card's cost unknown; the daily token budget still counts its tokens.
+- **Kinds.**
+  - `anthropic`: any endpoint that speaks the Anthropic Messages API (the Claude API, OpenRouter, Vercel AI Gateway, LiteLLM, Bedrock Mantle). Its roles take Claude model IDs, as `GRAFT_LLM_MODEL_*` do.
+  - `openai-compatible`: any Chat Completions endpoint: OpenAI, OpenRouter, Mistral, DeepSeek, Gemini's OpenAI-compatible endpoint, and local servers (Ollama, vLLM, LM Studio, llama.cpp, the LiteLLM proxy). `baseUrl` is required. `apiKeyEnv` is optional (sent as a bearer token; a local server may need none) and `authTokenEnv` does not exist. Its roles take any model ID without spaces, Ollama tags included. `zeroRetention: true` asks OpenRouter for zero-data-retention endpoints and no data collection (refused for any other host). `maxTokensParam` is `max_completion_tokens` for `api.openai.com` and `max_tokens` elsewhere; set it when a server wants the other one. The `OPENAI_*` variables are never read, except `OPENAI_CUSTOM_HEADERS`, which the SDK always applies.
+- **Capabilities.** An `anthropic` provider is assumed to support JSON-schema output, prompt caching, effort and usage counts. An `openai-compatible` one is assumed to support JSON-schema output and usage counts only: many models reject `reasoning_effort`, and caching, where it exists, needs no markers. Set `capabilities: { effort: true }` to send Graft's effort as `reasoning_effort`. Override what an endpoint lacks, for example `capabilities: { nativeSchema: false }` for Bedrock Mantle: Graft then puts the schema in the system prompt and relies on its own validation and retry.
+- **Prices.** Calls on an `anthropic` provider are priced from the built-in Claude table unless the entry's `prices` names the model. An `openai-compatible` provider has only its `prices`. The longest key that equals the model or is followed by `-`, `:` or `@` wins, so `qwen3-coder` prices `qwen3-coder:30b`. A model with no price leaves the card's cost unknown; the daily token budget still counts its tokens.
 - **Refusal fallback.** `GRAFT_LLM_REFUSAL_FALLBACK` applies to every `anthropic` provider whose URL is the Claude API.
 - **Backward compatible.** Without `GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE` nothing changes. With a registry, `GRAFT_LLM_MODEL_FAST`, `GRAFT_LLM_MODEL_STRONG` and `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` must be unset: the roles replace them instead of quietly overriding them. Changing models changes the card's input hash, so open PRs get a new card on their next push, as with any model change.
 - **Errors** name the field (`GRAFT_LLM_PROVIDERS: providers[1].authTokenEnv: names a variable that is not set`), never a value. The startup log lists each provider's id, kind, host and whether it uses the shared credential.

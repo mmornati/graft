@@ -18,7 +18,8 @@ export const PRICES: Readonly<Record<string, Price>> = {
 };
 
 /**
- * Longest-prefix match: `response.model` may carry a date suffix. `table` is the built-in Claude
+ * Longest-prefix match: `response.model` may carry a date suffix (`-20260101`), an Ollama tag
+ * (`:30b`) or a version (`@001`). `table` is the built-in Claude
  * prices unless a provider registry entry brings its own.
  */
 export function priceFor(
@@ -28,7 +29,7 @@ export function priceFor(
   let best: string | null = null;
   for (const id of Object.keys(table)) {
     if (
-      (model === id || model.startsWith(`${id}-`)) &&
+      (model === id || ["-", ":", "@"].some((sep) => model.startsWith(`${id}${sep}`))) &&
       (best === null || id.length > best.length)
     ) {
       best = id;
