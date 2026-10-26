@@ -6,6 +6,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Added
 
+- An optional, read-only **operator console** (`console/`): a daily journal of what Graft handled, every PR's record, what needs a human, the gate, the token budget and the job queue. Its own container and image, a SELECT-only database role, sign-in with GitHub restricted to a list. Graft runs the same without it. [Operator console](docs/console.md)
 - `report.language` in `graft.yaml`: the intent card's model-written text in one of 12 languages (`intent-v3`). Headings and labels stay in English. [graft.yaml](docs/graft-yaml.md)
 
 ### Changed

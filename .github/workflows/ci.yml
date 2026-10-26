@@ -48,3 +48,45 @@ jobs:
       - run: pnpm graft policy schema --check
       - run: for f in graft.yaml docs/examples/graft.yaml docs/pilots/graft.*.yaml; do pnpm graft policy check "$f" || exit 1; done
       - run: pnpm build
+
+  # The optional operator console (console/): its own pnpm project, typechecked against Graft's schema
+  # and tested against a database migrated by Graft's migrations.
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: graft
+          POSTGRES_PASSWORD: graft
+          POSTGRES_DB: graft
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U graft -d graft"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            console/pnpm-lock.yaml
+      # Graft's dependencies: the console imports Graft's schema types and migrations.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+        working-directory: console
+      - run: pnpm typecheck
+        working-directory: console
+      - run: pnpm test
+        working-directory: console
+      - run: pnpm build
+        working-directory: console
