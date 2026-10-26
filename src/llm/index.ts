@@ -2,10 +2,12 @@ import path from "node:path";
 import type { Config } from "../config/index.js";
 import type { Logger } from "../core/logger.js";
 import { anthropicCredential, createAnthropicLlm, isClaudeApi } from "./anthropic.js";
-import { createCliLlm } from "./cli.js";
+import { type CliAdapter, createCliLlm } from "./cli.js";
 import { claudeCliAdapter } from "./cli-claude.js";
+import { codexCliAdapter } from "./cli-codex.js";
+import { opencodeCliAdapter } from "./cli-opencode.js";
 import { createOpenAiCompatibleLlm } from "./openai-compatible.js";
-import type { LlmProvider, LlmRegistry } from "./registry.js";
+import type { CliKind, LlmProvider, LlmRegistry } from "./registry.js";
 import { createRouterLlm } from "./router.js";
 import type { LlmClient } from "./types.js";
 import { unconfiguredLlm } from "./unconfigured.js";
@@ -86,6 +88,12 @@ export function createRegistryLlm(
   );
 }
 
+const CLI_ADAPTERS: Record<CliKind, CliAdapter> = {
+  "cli:claude": claudeCliAdapter,
+  "cli:codex": codexCliAdapter,
+  "cli:opencode": opencodeCliAdapter,
+};
+
 /** What is safe to log about a provider: never a credential or a whole URL. */
 function describeProvider(p: LlmProvider) {
   return {
@@ -122,13 +130,15 @@ function providerClient(
         log,
       });
     case "cli:claude":
+    case "cli:codex":
+    case "cli:opencode":
       log.warn(
         { command: path.basename(p.command) },
         "llm provider runs a CLI on a personal login: single-tenant self-hosted use only",
       );
       return createCliLlm({
         command: p.command,
-        adapter: claudeCliAdapter,
+        adapter: CLI_ADAPTERS[p.kind],
         capabilities: p.capabilities,
         passEnv: p.passEnv,
         log,

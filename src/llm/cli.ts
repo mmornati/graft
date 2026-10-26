@@ -5,7 +5,8 @@
  * These tools are agents with tools, and Graft feeds them untrusted PR text. The isolation is
  * enforced here, not left to each adapter:
  * - the binary is spawned with an argument array, never a shell;
- * - it runs in a fresh, empty temporary directory, removed afterwards;
+ * - it runs in a fresh, empty temporary directory, and anything it stores goes to a scratch
+ *   directory next to it; both are removed afterwards;
  * - its environment is rebuilt from a short allow-list plus the variables the operator named,
  *   so no GitHub key, database URL or other provider's key reaches it;
  * - each adapter turns tools, MCP servers, settings, plugins and session storage off;
@@ -14,7 +15,7 @@
  * Only self-hosted, single-tenant deployments may use these providers (see the registry).
  */
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Logger } from "../core/logger.js";
@@ -44,6 +45,16 @@ export interface CliRun {
   stdin: string;
   /** Extra variables for this call only (an output-token limit, say). */
   env?: Readonly<Record<string, string>>;
+  /** Files written into the scratch directory before the run (a schema file, say). */
+  files?: Readonly<Record<string, string>>;
+}
+
+export interface CliContext {
+  /**
+   * A directory of this call's own, outside the working directory and removed afterwards: for the
+   * CLI's session storage and config, so no PR text stays on disk.
+   */
+  scratchDir: string;
 }
 
 export type CliParsed =
@@ -53,7 +64,7 @@ export type CliParsed =
 export interface CliAdapter {
   /** For logs. */
   readonly name: string;
-  build(req: LlmRequest, caps: LlmCapabilities): CliRun;
+  build(req: LlmRequest, caps: LlmCapabilities, ctx: CliContext): CliRun;
   /** Called for every run that exited by itself; `code` is its exit status. */
   parse(out: { stdout: string; stderr: string; code: number | null }): CliParsed;
 }
@@ -69,6 +80,21 @@ export interface CliLlmOptions {
   /** Tests only. */
   environment?: NodeJS.ProcessEnv;
   spawn?: typeof nodeSpawn;
+}
+
+/** An HTTP status a CLI reports for its model call, as a failure class. */
+export function failureForStatus(status: number): LlmFailure {
+  if (status === 429) return "rate_limited";
+  if (status >= 500) return "unavailable";
+  if (status === 401 || status === 403) return "auth";
+  return "bad_request";
+}
+
+/** A CLI error with no status: its text is matched, never logged. */
+export function failureForMessage(message: string): LlmFailure {
+  if (/\b(401|403)\b|unauthori[sz]ed|log ?in|credential|api key|auth/i.test(message)) return "auth";
+  if (/\b429\b|rate.?limit|quota/i.test(message)) return "rate_limited";
+  return "unavailable";
 }
 
 /** The environment a CLI gets: `BASE_ENV` and `passEnv`, minus anything `FORBIDDEN_ENV` names. */
@@ -202,13 +228,21 @@ export function createCliLlm(o: CliLlmOptions): LlmClient {
         throw new Error("userCachePrefix must be a non-empty prefix of user");
       }
 
-      const run = o.adapter.build(req, caps);
-      const cwd = await mkdtemp(path.join(tmpdir(), "graft-cli-"));
+      const root = await mkdtemp(path.join(tmpdir(), "graft-cli-"));
       let exit: Exit;
       try {
+        const cwd = path.join(root, "work");
+        const scratchDir = path.join(root, "scratch");
+        await mkdir(cwd, { mode: 0o700 });
+        await mkdir(scratchDir, { mode: 0o700 });
+        const run = o.adapter.build(req, caps, { scratchDir });
+        for (const [name, content] of Object.entries(run.files ?? {})) {
+          if (name.includes("/") || name.startsWith(".")) throw new Error("bad scratch file name");
+          await writeFile(path.join(scratchDir, name), content, { mode: 0o600 });
+        }
         exit = await runOnce(o, run, cwd, Math.min(req.timeoutMs, req.deadlineMs ?? req.timeoutMs));
       } finally {
-        await rm(cwd, { recursive: true, force: true });
+        await rm(root, { recursive: true, force: true });
       }
 
       if (exit.kind !== "exited") {

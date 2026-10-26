@@ -70,7 +70,7 @@ const openAiCompatibleEntry = z
   .strict();
 
 /** CLI kinds: a coding agent's command-line tool on this machine (self-hosted only). */
-export const CLI_KINDS = ["cli:claude"] as const;
+export const CLI_KINDS = ["cli:claude", "cli:codex", "cli:opencode"] as const;
 export type CliKind = (typeof CLI_KINDS)[number];
 
 /** A bare command name looked up on PATH, or an absolute path. */
@@ -96,7 +96,13 @@ const cliEntry = <K extends CliKind>(kind: K) =>
 
 const entrySchema = z.discriminatedUnion(
   "kind",
-  [anthropicEntry, openAiCompatibleEntry, cliEntry("cli:claude")],
+  [
+    anthropicEntry,
+    openAiCompatibleEntry,
+    cliEntry("cli:claude"),
+    cliEntry("cli:codex"),
+    cliEntry("cli:opencode"),
+  ],
   {
     error: `kind must be "anthropic", "openai-compatible" or ${CLI_KINDS.map((k) => `"${k}"`).join(", ")}`,
   },
@@ -179,6 +185,20 @@ export const DEFAULT_CAPABILITIES: Record<ProviderKind, LlmCapabilities> = {
     effort: true,
     reportsUsage: true,
   }),
+  // `--output-schema` is strict, and Graft's combined schema has an `anyOf` root: prompt instead.
+  "cli:codex": Object.freeze({
+    nativeSchema: false,
+    promptCache: false,
+    effort: true,
+    reportsUsage: true,
+  }),
+  // No schema flag; `--variant` names are provider-specific, so effort is opt-in.
+  "cli:opencode": Object.freeze({
+    nativeSchema: false,
+    promptCache: false,
+    effort: false,
+    reportsUsage: true,
+  }),
 };
 
 export interface LlmRoles {
@@ -198,9 +218,16 @@ const MODEL_PATTERN: Record<ProviderKind, { re: RegExp; message: string }> = {
   anthropic: { re: MODEL_ID, message: "must be a Claude model ID" },
   "openai-compatible": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
   "cli:claude": { re: MODEL_ID, message: "must be a Claude model ID" },
+  "cli:codex": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
+  // opencode names models `<provider>/<model>`.
+  "cli:opencode": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
 };
 
-const DEFAULT_COMMAND: Record<CliKind, string> = { "cli:claude": "claude" };
+const DEFAULT_COMMAND: Record<CliKind, string> = {
+  "cli:claude": "claude",
+  "cli:codex": "codex",
+  "cli:opencode": "opencode",
+};
 
 function isCliKind(kind: string): kind is CliKind {
   return (CLI_KINDS as readonly string[]).includes(kind);
