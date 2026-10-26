@@ -4,12 +4,14 @@
  * webhook secret.
  */
 import { z } from "zod";
+import { anthropicCredential } from "../llm/anthropic.js";
 import {
   type AnthropicFederation,
   credentialProblems,
   FEDERATION_FIELDS,
   federationFrom,
 } from "../llm/federation.js";
+import { type LlmRegistry, loadRegistry } from "../llm/registry.js";
 import { MODEL_ID } from "../llm/types.js";
 
 export class EvalEnvError extends Error {
@@ -75,6 +77,8 @@ const EnvSchema = z.object({
   GRAFT_LLM_MAX_RETRIES: withDefault(intString(0, 5), "2"),
   GRAFT_LLM_REFUSAL_FALLBACK: withDefault(boolString, "true"),
   GRAFT_LLM_REFUSAL_FALLBACK_MODEL: opt(modelId),
+  GRAFT_LLM_PROVIDERS: opt(z.string().max(100_000)),
+  GRAFT_LLM_PROVIDERS_FILE: opt(z.string()),
   GRAFT_AGENT_LOGINS: withDefault(loginList, ""),
   GRAFT_AGENT_COAUTHOR_EMAILS: withDefault(emailList, "noreply@anthropic.com"),
   GITHUB_APP_ID: opt(intString(1, Number.MAX_SAFE_INTEGER)),
@@ -93,6 +97,8 @@ export interface EvalEnv {
   anthropicAuthToken: string | undefined;
   anthropicFederation: AnthropicFederation | undefined;
   anthropicBaseUrl: string | undefined;
+  /** The provider registry, read with the same rules as the server; its roles become the models. */
+  llmRegistry: LlmRegistry | undefined;
   modelFast: string;
   modelStrong: string;
   llmTimeoutMs: number;
@@ -118,6 +124,24 @@ export function parseEvalEnv(env: Record<string, string | undefined>): EvalEnv {
   }
   const d = res.data;
   const problems = credentialProblems(d);
+  const anthropicFederation = problems.length === 0 ? federationFrom(d) : undefined;
+  const { registry, problems: registryProblems } =
+    problems.length === 0
+      ? loadRegistry({
+          inline: d.GRAFT_LLM_PROVIDERS,
+          file: d.GRAFT_LLM_PROVIDERS_FILE,
+          env,
+          defaults: {
+            credential: anthropicCredential({
+              anthropicApiKey: d.ANTHROPIC_API_KEY,
+              anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+              anthropicFederation,
+            }),
+            baseUrl: d.ANTHROPIC_BASE_URL,
+          },
+        })
+      : { registry: undefined, problems: [] };
+  problems.push(...registryProblems);
   if (problems.length > 0) {
     throw new EvalEnvError(`Invalid configuration:\n- ${problems.join("\n- ")}`);
   }
@@ -127,14 +151,17 @@ export function parseEvalEnv(env: Record<string, string | undefined>): EvalEnv {
     githubToken: d.GRAFT_EVAL_GITHUB_TOKEN,
     anthropicApiKey: d.ANTHROPIC_API_KEY,
     anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
-    anthropicFederation: federationFrom(d),
+    anthropicFederation,
     anthropicBaseUrl: d.ANTHROPIC_BASE_URL,
-    modelFast: d.GRAFT_LLM_MODEL_FAST,
-    modelStrong: d.GRAFT_LLM_MODEL_STRONG,
+    llmRegistry: registry,
+    modelFast: registry?.roles.fast ?? d.GRAFT_LLM_MODEL_FAST,
+    modelStrong: registry?.roles.strong ?? d.GRAFT_LLM_MODEL_STRONG,
     llmTimeoutMs: d.GRAFT_LLM_TIMEOUT_MS,
     llmMaxRetries: d.GRAFT_LLM_MAX_RETRIES,
     llmRefusalFallback: d.GRAFT_LLM_REFUSAL_FALLBACK,
-    llmRefusalFallbackModel: d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
+    llmRefusalFallbackModel: registry
+      ? registry.roles.refusalFallback
+      : d.GRAFT_LLM_REFUSAL_FALLBACK_MODEL,
     agentLogins: Object.freeze([...d.GRAFT_AGENT_LOGINS]),
     agentCoauthorEmails: Object.freeze([...d.GRAFT_AGENT_COAUTHOR_EMAILS]),
     githubAppId: d.GITHUB_APP_ID,

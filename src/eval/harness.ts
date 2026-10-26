@@ -4,7 +4,7 @@
  * prompt fingerprint.
  */
 import { randomBytes } from "node:crypto";
-import type { LlmClient } from "../llm/types.js";
+import type { LlmClient, LlmUsage } from "../llm/types.js";
 import {
   type CardResult,
   type GenerateOptions,
@@ -21,7 +21,7 @@ import { caseSetHash, type EvalCase, gold, goldStatus, type LabelSet } from "./c
 import { llmForCase } from "./fake-models.js";
 import { type MeteredCall, meteredLlm } from "./metered.js";
 import { computeMetrics } from "./metrics.js";
-import { costOfCalls, priceFor, roundUsd } from "./pricing.js";
+import { cost, costOfCalls, priceFor, roundUsd } from "./pricing.js";
 import type { CaseRow, EvalReport } from "./report-schema.js";
 import { type CaseSet, EvalCaseError, listCaseIds, readCase } from "./store.js";
 
@@ -44,6 +44,11 @@ export interface RunOptions {
   mode: "fake" | "live";
   /** The live client, injected by the CLI (tests inject a fake). */
   llm?: LlmClient;
+  /**
+   * Prices calls on provider-qualified models (a registry); absent means the built-in Claude
+   * table. Null means unpriced, which a live run refuses before any call.
+   */
+  costOf?: (usage: LlmUsage, model: string) => number | null;
   models: { fast: string; strong: string; refusalFallback?: string };
   timeoutMs: number;
   concurrency: number;
@@ -62,15 +67,30 @@ export type RunOutcome =
   | { report: EvalReport; aborted: false }
   | { aborted: true; reason: "declined" | "over_budget"; estimate: Estimate };
 
+/** One input token: enough to tell a priced model from an unpriced one. */
+const PRICE_PROBE: LlmUsage = {
+  inputTokens: 1,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 const sortedUnique = (a: readonly string[]): string[] => [...new Set(a)].sort();
 
 /** §8.12: an upper bound that ignores caching and the cheaper fast model. */
-export function estimateCase(p: PreparedCard, strong: string): { tokens: number; usd: number } {
+export function estimateCase(
+  p: PreparedCard,
+  strong: string,
+  costOf: (usage: LlmUsage, model: string) => number | null = cost,
+): { tokens: number; usd: number } {
   if (p.tooLarge) return { tokens: 0, usd: 0 };
-  const price = priceFor(strong);
   const out = MAX_OUTPUT_TOKENS * (p.floor === "trivial" ? 3 : 2);
   const input = Math.max(0, p.estimatedTokens - out);
-  const usd = price ? (input * price.input + out * price.output) / 1e6 : 0;
+  const usd =
+    costOf(
+      { inputTokens: input, outputTokens: out, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      strong,
+    ) ?? 0;
   return { tokens: p.estimatedTokens, usd };
 }
 
@@ -167,8 +187,13 @@ export async function runEval(o: RunOptions): Promise<RunOutcome> {
     if (!o.llm) throw new EvalConfigError("live mode needs an LLM client");
     for (const m of [o.models.fast, o.models.strong, o.models.refusalFallback]) {
       if (m === undefined) continue;
-      if (!priceFor(m))
-        throw new EvalConfigError(`no price for model ${m}: update src/eval/pricing.ts`);
+      if (o.costOf ? o.costOf(PRICE_PROBE, m) === null : !priceFor(m)) {
+        throw new EvalConfigError(
+          o.costOf
+            ? `no price for model ${m}: add it to its provider's prices`
+            : `no price for model ${m}: update src/eval/pricing.ts`,
+        );
+      }
     }
   }
 
@@ -198,7 +223,7 @@ export async function runEval(o: RunOptions): Promise<RunOutcome> {
     }
   }
   const estimates = new Map(
-    items.map((it) => [it.c.id, estimateCase(it.prepared, o.models.strong)]),
+    items.map((it) => [it.c.id, estimateCase(it.prepared, o.models.strong, o.costOf)]),
   );
   if (live) {
     const toCall = items.filter((it) => !cachedEntries.has(it.c.id) && !it.prepared.tooLarge);
@@ -264,7 +289,9 @@ export async function runEval(o: RunOptions): Promise<RunOutcome> {
       }
     }
     const calls: MeteredCall[] = metered.calls;
-    const costUsd = costOfCalls(calls);
+    const costUsd = o.costOf
+      ? roundUsd(calls.reduce((sum, c) => sum + (o.costOf?.(c.usage, c.model) ?? 0), 0))
+      : costOfCalls(calls);
     spentUsd += costUsd;
     spentTokens += tokensOf(result.usage);
     if (live && isCacheable(result)) {

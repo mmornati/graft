@@ -9,6 +9,24 @@ import {
   type LlmUsage,
 } from "./types.js";
 
+/**
+ * The cost of one call on a provider-qualified model: the entry's prices first, then the built-in
+ * Claude table for Anthropic-format providers; null when unpriced or the provider is unknown.
+ */
+export function registryCostOf(
+  providers: readonly LlmProvider[],
+): (usage: LlmUsage, ref: string) => number | null {
+  const byId = new Map(providers.map((p) => [p.id, p]));
+  return (usage, ref) => {
+    const split = splitModelRef(ref);
+    const p = split ? byId.get(split.provider) : undefined;
+    if (!split || !p) return null;
+    const price =
+      priceFor(split.model, p.prices) ?? (p.kind === "anthropic" ? priceFor(split.model) : null);
+    return price ? costAt(usage, price) : null;
+  };
+}
+
 export interface RoutedProvider {
   readonly provider: LlmProvider;
   readonly client: LlmClient;
@@ -22,6 +40,7 @@ export interface RoutedProvider {
  */
 export function createRouterLlm(routes: readonly RoutedProvider[]): LlmClient {
   const byId = new Map(routes.map((r) => [r.provider.id, r]));
+  const costOf = registryCostOf(routes.map((r) => r.provider));
   const route = (ref: string): { r: RoutedProvider; model: string } => {
     const split = splitModelRef(ref);
     const r = split ? byId.get(split.provider) : undefined;
@@ -44,12 +63,8 @@ export function createRouterLlm(routes: readonly RoutedProvider[]): LlmClient {
       return r.client.capabilities?.(model) ?? r.provider.capabilities ?? FULL_CAPABILITIES;
     },
     costOf(usage: LlmUsage, ref: string): number | null {
-      const { r, model } = route(ref);
-      // The operator's prices win; an Anthropic-format provider falls back to the Claude table.
-      const p =
-        priceFor(model, r.provider.prices) ??
-        (r.provider.kind === "anthropic" ? priceFor(model) : null);
-      return p ? costAt(usage, p) : null;
+      route(ref); // an unknown provider is a programmer error here too
+      return costOf(usage, ref);
     },
   };
 }

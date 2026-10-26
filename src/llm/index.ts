@@ -2,7 +2,7 @@ import type { Config } from "../config/index.js";
 import type { Logger } from "../core/logger.js";
 import { anthropicCredential, createAnthropicLlm, isClaudeApi } from "./anthropic.js";
 import { createOpenAiCompatibleLlm } from "./openai-compatible.js";
-import type { LlmProvider } from "./registry.js";
+import type { LlmProvider, LlmRegistry } from "./registry.js";
 import { createRouterLlm } from "./router.js";
 import type { LlmClient } from "./types.js";
 import { unconfiguredLlm } from "./unconfigured.js";
@@ -14,10 +14,11 @@ export {
   type LlmProvider,
   type LlmRegistry,
   type LlmRoles,
+  loadRegistry,
   parseRegistry,
   splitModelRef,
 } from "./registry.js";
-export { createRouterLlm } from "./router.js";
+export { createRouterLlm, registryCostOf } from "./router.js";
 export * from "./types.js";
 export { unconfiguredLlm } from "./unconfigured.js";
 
@@ -40,19 +41,7 @@ export function createLlmClient(
   >,
   log: Logger,
 ): LlmClient {
-  if (config.llmRegistry) {
-    const { providers, roles } = config.llmRegistry;
-    log.info(
-      { providers: providers.map(describeProvider), roles: { ...roles } },
-      "llm client: registry",
-    );
-    return createRouterLlm(
-      providers.map((provider) => ({
-        provider,
-        client: providerClient(provider, config, log.child({ provider: provider.id })),
-      })),
-    );
-  }
+  if (config.llmRegistry) return createRegistryLlm(config.llmRegistry, config, log);
   const credential = anthropicCredential(config);
   if (credential) {
     // The host only, never the whole URL: it could carry credentials. Of the federation settings
@@ -74,6 +63,24 @@ export function createLlmClient(
   }
   log.info("llm client: unconfigured");
   return unconfiguredLlm();
+}
+
+/** A router over one client per registered provider. Also used by the eval tool. */
+export function createRegistryLlm(
+  registry: LlmRegistry,
+  settings: Pick<Config, "llmMaxRetries" | "llmRefusalFallback">,
+  log: Logger,
+): LlmClient {
+  log.info(
+    { providers: registry.providers.map(describeProvider), roles: { ...registry.roles } },
+    "llm client: registry",
+  );
+  return createRouterLlm(
+    registry.providers.map((provider) => ({
+      provider,
+      client: providerClient(provider, settings, log.child({ provider: provider.id })),
+    })),
+  );
 }
 
 /** What is safe to log about a provider: never a credential or a whole URL. */
