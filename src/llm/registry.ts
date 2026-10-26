@@ -9,6 +9,7 @@
  * The resolved credential is kept in a closure, so serializing a registry never shows it. Problems
  * name fields and variables, never values.
  */
+import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { AnthropicCredential } from "./anthropic.js";
@@ -359,4 +360,50 @@ export function parseRegistry(
     }),
     problems: [],
   };
+}
+
+/** The model variables a registry replaces; setting one beside it is an error, not an override. */
+export const LEGACY_MODEL_VARS = [
+  "GRAFT_LLM_MODEL_FAST",
+  "GRAFT_LLM_MODEL_STRONG",
+  "GRAFT_LLM_REFUSAL_FALLBACK_MODEL",
+] as const;
+
+/**
+ * The registry from `GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE`, for the server config and
+ * the eval tool alike. Undefined, with no problem, when neither is set. `env` is the raw
+ * environment: it tells whether a model variable was set and resolves each entry's key variable.
+ */
+export function loadRegistry(o: {
+  inline: string | undefined;
+  file: string | undefined;
+  env: Readonly<Record<string, string | undefined>>;
+  defaults: AnthropicDefaults;
+}): { registry: LlmRegistry | undefined; problems: string[] } {
+  if (o.inline === undefined && o.file === undefined) return { registry: undefined, problems: [] };
+  if (o.inline !== undefined && o.file !== undefined) {
+    return {
+      registry: undefined,
+      problems: ["GRAFT_LLM_PROVIDERS / GRAFT_LLM_PROVIDERS_FILE: set at most one, not both"],
+    };
+  }
+  const legacy = LEGACY_MODEL_VARS.filter((k) => (o.env[k] ?? "").trim() !== "");
+  if (legacy.length > 0) {
+    return {
+      registry: undefined,
+      problems: [
+        `${legacy.join(" / ")}: unset with a provider registry; its roles name the models`,
+      ],
+    };
+  }
+  if (o.file !== undefined) {
+    let text: string;
+    try {
+      text = readFileSync(o.file, "utf8");
+    } catch {
+      return { registry: undefined, problems: ["GRAFT_LLM_PROVIDERS_FILE: file cannot be read"] };
+    }
+    return parseRegistry("GRAFT_LLM_PROVIDERS_FILE", text, o.env, o.defaults);
+  }
+  return parseRegistry("GRAFT_LLM_PROVIDERS", o.inline as string, o.env, o.defaults);
 }

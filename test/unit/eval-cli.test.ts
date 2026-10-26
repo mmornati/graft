@@ -113,6 +113,50 @@ describe("eval cli", () => {
     expect(partial.err).toContain("federation needs all of");
   });
 
+  it("U-CLI-1d run --live with a provider registry builds the router, never the Anthropic client, and refuses unpriced models", async () => {
+    const out = await tmpDir();
+    const registry = (prices: string) => `
+providers:
+  - id: ollama
+    kind: openai-compatible
+    baseUrl: http://ollama.test:11434/v1
+${prices}
+roles:
+  fast: ollama/qwen3-coder:30b
+  strong: ollama/qwen3-coder:30b
+`;
+    const registryLlmFactory = vi.fn(() => createFakeLlm(() => ({ failure: "unavailable" })));
+    const argv = ["run", "--set", "eval/synthetic", "--live", "--yes", "--out", out];
+    const r = await cli([...argv, "--cases", "syn-001-docs-typo"], {
+      env: {
+        GRAFT_LLM_PROVIDERS: registry("    prices:\n      qwen3-coder: { input: 0, output: 0 }"),
+      },
+      registryLlmFactory,
+    });
+    expect(r.err).not.toContain("needs ANTHROPIC");
+    expect(r.llmFactory).not.toHaveBeenCalled();
+    expect(registryLlmFactory).toHaveBeenCalledTimes(1);
+    const [reg, settings] = registryLlmFactory.mock.calls[0] as unknown as [
+      { roles: { fast: string } },
+      unknown,
+    ];
+    expect(reg.roles.fast).toBe("ollama/qwen3-coder:30b");
+    expect(settings).toEqual({ llmMaxRetries: 2, llmRefusalFallback: true });
+
+    const unpriced = await cli([...argv, "--cases", "syn-001-docs-typo"], {
+      env: { GRAFT_LLM_PROVIDERS: registry("") },
+      registryLlmFactory,
+    });
+    expect(unpriced.code).toBe(2);
+    expect(unpriced.err).toContain("no price for model ollama/qwen3-coder:30b");
+
+    const both = await cli(["run", "--set", "eval/synthetic"], {
+      env: { GRAFT_LLM_PROVIDERS: registry(""), GRAFT_LLM_MODEL_FAST: "claude-haiku-5-5" },
+    });
+    expect(both.code).toBe(2);
+    expect(both.err).toContain("GRAFT_LLM_MODEL_FAST: unset with a provider registry");
+  });
+
   it("U-CLI-2 run --live on a non-TTY without --yes prints the estimate and exits 3 without a call", async () => {
     const out = await tmpDir();
     const r = await cli(["run", "--set", "eval/synthetic", "--live", "--out", out], {

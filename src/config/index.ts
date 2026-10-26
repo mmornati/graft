@@ -8,7 +8,7 @@ import {
   FEDERATION_FIELDS,
   federationFrom,
 } from "../llm/federation.js";
-import { type LlmRegistry, parseRegistry } from "../llm/registry.js";
+import { type LlmRegistry, loadRegistry } from "../llm/registry.js";
 import { MODEL_ID } from "../llm/types.js";
 import { GLOB_REASONS } from "../policy/errors.js";
 import { validateGlob } from "../policy/globs.js";
@@ -382,12 +382,6 @@ export interface Config {
   readonly trustProxy: readonly string[];
 }
 
-const LEGACY_MODEL_VARS = [
-  "GRAFT_LLM_MODEL_FAST",
-  "GRAFT_LLM_MODEL_STRONG",
-  "GRAFT_LLM_REFUSAL_FALLBACK_MODEL",
-] as const;
-
 /**
  * The registry, when one is configured. It replaces the three model variables instead of quietly
  * winning over them, so setting both is an error. Messages name variables, never values.
@@ -396,41 +390,18 @@ function registryFrom(
   d: z.infer<typeof EnvSchema>,
   env: NodeJS.ProcessEnv,
 ): { registry: LlmRegistry | undefined; problems: string[] } {
-  const inline = d.GRAFT_LLM_PROVIDERS;
-  const file = d.GRAFT_LLM_PROVIDERS_FILE;
-  if (inline === undefined && file === undefined) return { registry: undefined, problems: [] };
-  if (inline !== undefined && file !== undefined) {
-    return {
-      registry: undefined,
-      problems: ["GRAFT_LLM_PROVIDERS / GRAFT_LLM_PROVIDERS_FILE: set at most one, not both"],
-    };
-  }
-  const legacy = LEGACY_MODEL_VARS.filter((k) => emptyToUndefined(env[k]) !== undefined);
-  if (legacy.length > 0) {
-    return {
-      registry: undefined,
-      problems: [
-        `${legacy.join(" / ")}: unset with a provider registry; its roles name the models`,
-      ],
-    };
-  }
-  let text = inline;
-  const source = inline !== undefined ? "GRAFT_LLM_PROVIDERS" : "GRAFT_LLM_PROVIDERS_FILE";
-  if (file !== undefined) {
-    try {
-      text = readFileSync(file, "utf8");
-    } catch {
-      return { registry: undefined, problems: ["GRAFT_LLM_PROVIDERS_FILE: file cannot be read"] };
-    }
-  }
-  const shared = anthropicCredential({
-    anthropicApiKey: d.ANTHROPIC_API_KEY,
-    anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
-    anthropicFederation: federationFrom(d),
-  });
-  return parseRegistry(source, text as string, env, {
-    credential: shared,
-    baseUrl: d.ANTHROPIC_BASE_URL,
+  return loadRegistry({
+    inline: d.GRAFT_LLM_PROVIDERS,
+    file: d.GRAFT_LLM_PROVIDERS_FILE,
+    env,
+    defaults: {
+      credential: anthropicCredential({
+        anthropicApiKey: d.ANTHROPIC_API_KEY,
+        anthropicAuthToken: d.ANTHROPIC_AUTH_TOKEN,
+        anthropicFederation: federationFrom(d),
+      }),
+      baseUrl: d.ANTHROPIC_BASE_URL,
+    },
   });
 }
 

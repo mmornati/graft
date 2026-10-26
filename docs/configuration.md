@@ -110,7 +110,7 @@ roles:
 - **Backward compatible.** Without `GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE` nothing changes. With a registry, `GRAFT_LLM_MODEL_FAST`, `GRAFT_LLM_MODEL_STRONG` and `GRAFT_LLM_REFUSAL_FALLBACK_MODEL` must be unset: the roles replace them instead of quietly overriding them. Changing models changes the card's input hash, so open PRs get a new card on their next push, as with any model change.
 - **Errors** name the field (`GRAFT_LLM_PROVIDERS: providers[1].authTokenEnv: names a variable that is not set`), never a value. The startup log lists each provider's id, kind, host and whether it uses the shared credential.
 
-The evaluation tool (`pnpm eval`) still reads only the `ANTHROPIC_*` and `GRAFT_LLM_MODEL_*` variables.
+The evaluation tool (`pnpm eval`) reads the same registry with the same rules, so a candidate model can be run against the saved baseline before it goes into a role. A live run refuses a model with no price: give a local model `{ input: 0, output: 0 }`. See [Evaluation](features/evaluation.md).
 
 ## Deploying with federation
 

@@ -6,6 +6,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Added
 
+- `pnpm eval` reads the provider registry, so a candidate model can be run against the saved baseline before it is put in a role. [Evaluation](docs/features/evaluation.md)
 - The `openai-compatible` provider kind: OpenAI, OpenRouter, Mistral, DeepSeek, Gemini and local servers such as Ollama and vLLM through the Chat Completions format, with JSON-schema output, OpenRouter zero-data-retention routing and the same failure classes as the Claude client. [Model providers](docs/configuration.md#model-providers)
 - A server-side **provider registry** (`GRAFT_LLM_PROVIDERS` or `GRAFT_LLM_PROVIDERS_FILE`): several model providers, each with its own credential, capabilities and prices, and roles that point the writer and verifier at any of them as `<provider id>/<model>`. Without it nothing changes. [Model providers](docs/configuration.md#model-providers)
 - An optional, read-only **operator console** (`console/`): a daily journal of what Graft handled, every PR's record, what needs a human, the gate, the token budget and the job queue. Its own container and image, a SELECT-only database role, sign-in with GitHub restricted to a list. Graft runs the same without it. [Operator console](docs/console.md)

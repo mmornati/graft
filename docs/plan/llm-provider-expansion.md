@@ -269,7 +269,7 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 
 1. **Done.** `src/llm/openai-compatible.ts` on the `openai` package. It uses `response_format: json_schema` (strict only when the schema's root is an object; Graft's combined schema is an `anyOf`), and `provider.require_parameters` on OpenRouter, plus `zdr` and `data_collection: deny` with `zeroRetention`. Every option the SDK would read from `OPENAI_*` is passed explicitly, and its own logging is off.
 2. **Done.** Errors map to the same taxonomy: `refusal` (a `refusal` message or `content_filter`), `max_tokens` (`length`) and `invalid_json`. One Markdown fence around the answer is accepted. Cached prompt tokens are counted apart from input, as Anthropic counts them.
-3. **Done:** contract tests with a fake `fetch` (U-OAI-1 to U-OAI-11). **Not done:** the live eval against Ollama and a hosted model. It needs `pnpm eval` to read the registry, which is the next PR.
+3. **Done:** contract tests with a fake `fetch` (U-OAI-1 to U-OAI-11). **Done in a follow-up PR:** `pnpm eval` reads the registry (`loadRegistry`, shared with the server config), and a live run prices calls with the entries' `prices`. **Not done:** the live eval itself against Ollama and a hosted model. It needs those endpoints and an operator's spend approval, so it is a human task.
 4. **Done.** Default capabilities for the kind: JSON schema and usage only, with no `reasoning_effort` and no cache markers. Prices match on `-`, `:` or `@` after the key, for Ollama tags.
 
 ### Step 4: CLI transport and the `claude` adapter (PR 3)

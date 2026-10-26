@@ -59,7 +59,10 @@ import {
   createAnthropicLlm,
   isClaudeApi,
 } from "../llm/anthropic.js";
-import type { LlmClient, LlmRequest, LlmResult } from "../llm/types.js";
+import { createRegistryLlm } from "../llm/index.js";
+import type { LlmRegistry } from "../llm/registry.js";
+import { registryCostOf } from "../llm/router.js";
+import { FULL_CAPABILITIES, type LlmClient } from "../llm/types.js";
 import { prepareCardInputs } from "../modules/intent/index.js";
 import { loadDotEnv } from "./env.js";
 
@@ -77,6 +80,11 @@ export interface CliDeps {
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
   llmFactory: (o: AnthropicLlmFactoryOptions) => LlmClient;
+  /** With a provider registry; defaults to the real router (tests inject a fake). */
+  registryLlmFactory?: (
+    registry: LlmRegistry,
+    settings: { llmMaxRetries: number; llmRefusalFallback: boolean },
+  ) => LlmClient;
   git: () => { commit: string | null; dirty: boolean | null };
   cwd: string;
 }
@@ -242,6 +250,7 @@ export function realDeps(): CliDeps {
     now: () => new Date(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     llmFactory: (o) => createAnthropicLlm({ ...o, log: silentLogger() }),
+    registryLlmFactory: (r, s) => createRegistryLlm(r, s, silentLogger()),
     git: realGit,
     cwd: process.cwd(),
   };
@@ -606,7 +615,8 @@ async function runCommand(
 ): Promise<number> {
   const live = Boolean(a.live);
   const credential = anthropicCredential(env);
-  if (live && !credential) {
+  const registry = env.llmRegistry;
+  if (live && !credential && !registry) {
     throw new EvalConfigError(
       "--live needs ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or the ANTHROPIC_FEDERATION_* settings",
     );
@@ -617,17 +627,31 @@ async function runCommand(
   const concurrency = intFlag("concurrency", a.concurrency, live ? 4 : 8, 1, 64);
   const ids = a.cases ? new Set(csvList(a.cases, [])) : null;
 
+  // Built on the first call, so a fake run never constructs a client.
   let client: LlmClient | null = null;
+  const settings = { llmMaxRetries: env.llmMaxRetries, llmRefusalFallback: env.llmRefusalFallback };
+  const get = (): LlmClient =>
+    (client ??= registry
+      ? (deps.registryLlmFactory ?? ((r, s) => createRegistryLlm(r, s, silentLogger())))(
+          registry,
+          settings,
+        )
+      : deps.llmFactory({
+          ...(credential as AnthropicCredential),
+          ...(env.anthropicBaseUrl ? { baseURL: env.anthropicBaseUrl } : {}),
+          maxRetries: env.llmMaxRetries,
+          refusalFallback: env.llmRefusalFallback && isClaudeApi(env.anthropicBaseUrl),
+        }));
+  const costOf = registry ? registryCostOf(registry.providers) : undefined;
   const lazy: LlmClient = {
-    complete(req: LlmRequest): Promise<LlmResult> {
-      client ??= deps.llmFactory({
-        ...(credential as AnthropicCredential),
-        ...(env.anthropicBaseUrl ? { baseURL: env.anthropicBaseUrl } : {}),
-        maxRetries: env.llmMaxRetries,
-        refusalFallback: env.llmRefusalFallback && isClaudeApi(env.anthropicBaseUrl),
-      });
-      return client.complete(req);
-    },
+    complete: (req) => get().complete(req),
+    ...(registry
+      ? {
+          serverRefusalFallback: (m: string) => get().serverRefusalFallback?.(m) ?? false,
+          capabilities: (m: string) => get().capabilities?.(m) ?? FULL_CAPABILITIES,
+          costOf,
+        }
+      : {}),
   };
 
   const confirm = async (e: Estimate): Promise<boolean> => {
@@ -654,6 +678,7 @@ async function runCommand(
     set,
     mode: live ? "live" : "fake",
     ...(live ? { llm: lazy } : {}),
+    ...(costOf ? { costOf } : {}),
     models: {
       fast: env.modelFast,
       strong: env.modelStrong,
