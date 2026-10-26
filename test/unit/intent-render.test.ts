@@ -101,6 +101,10 @@ const EXPECTED_CARD = `### Intent
 - Failed deliveries are retried up to 5 times, waiting 1, 2, 4, 8 and 16 seconds.
 - A delivery that still fails after 5 retries is marked failed and logged at error level.
 
+**Also changed** · found by the verifier, not listed above
+
+- Retries now also run for 4xx responses, not only 5xx.
+
 **Out-of-scope edits**
 
 - \`README.md\`: Rewords the installation section, unrelated to retries.
@@ -109,7 +113,6 @@ const EXPECTED_CARD = `### Intent
 > **The verifier disagrees with this card.** Read the diff instead of relying on the card.
 >
 > - Behavior change 1 is contradicted: src/retry.ts caps retries at 3, not 5.
-> - Missing from the card: Retries now also run for 4xx responses, not only 5xx.
 
 <details><summary>How this card was made</summary>
 
@@ -378,5 +381,49 @@ ${tail}`;
     const both = renderIntentSection(mixed, no);
     expect(both.indexOf("[!WARNING]")).toBeLessThan(both.indexOf("[!NOTE]"));
     expect(both).not.toContain("Behavior change 2 is unverifiable");
+  });
+
+  it("U-IREN-12 missing behavior changes are an Also changed list, not a disagreement (intent-v5)", () => {
+    const supported = okView().verifier.claims.map((c) => ({
+      ...c,
+      verdict: "supported" as const,
+    }));
+    const missing = ["Retries now also run for 4xx responses, not only 5xx.", "Adds a metric."];
+    const agree = okView({
+      verifier: { ...okView().verifier, status: "agree", claims: supported, missing },
+    });
+    const out = renderIntentSection(agree, no);
+    expect(out).not.toContain("[!WARNING]");
+    expect(out).toContain(
+      [
+        "**Also changed** · found by the verifier, not listed above",
+        "",
+        "- Retries now also run for 4xx responses, not only 5xx.",
+        "- Adds a metric.",
+        "",
+        "**Out-of-scope edits**",
+      ].join("\n"),
+    );
+    expect(renderIntentCheckOutput(agree, no).title).toBe(
+      "Risk: sensitive · verifier agrees · 2 more changes",
+    );
+    // A card stored before intent-v5 says "disagree" for missing changes alone: no warning either.
+    const legacy = okView({
+      verifier: {
+        ...okView().verifier,
+        status: "disagree",
+        claims: supported,
+        missing: missing.slice(0, 1),
+      },
+    });
+    expect(renderIntentSection(legacy, no)).not.toContain("[!WARNING]");
+    expect(renderIntentCheckOutput(legacy, no).title).toBe(
+      "Risk: sensitive · verifier agrees · 1 more change",
+    );
+    // A failed verifier lists nothing.
+    const err = okView({
+      verifier: { status: "error", claims: [], missing, unexplained: [], failure: "llm_timeout" },
+    });
+    expect(renderIntentSection(err, no)).not.toContain("Also changed");
   });
 });

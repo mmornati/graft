@@ -20,6 +20,7 @@ For every open PR, Graft writes an **intent card** into the `intent` section of 
 
 - **Goal**: one sentence stating what the diff does.
 - **Behavior changes**: observable effects, most important first.
+- **Also changed** (since `intent-v5`): observable effects the verifier found in the diff that the writer left out. They complete the card; they do not make it wrong.
 - **Out-of-scope edits**: files the goal does not explain (from the writer, plus any the verifier flags).
 - **Risk**: `trivial`, `logic` or `sensitive`, shown with where it came from (`rules`, `writer`, `verifier`).
 
@@ -41,7 +42,7 @@ Without a checked card (no API key, model down, budget used up) the risk is at l
 
 **Verdicts.** Each claim is `supported`, `unsupported` (the diff does not show it), `contradicted` (the diff shows something else), or `unverifiable`: the changed lines do what the claim says, but whether it holds depends on unchanged code the verifier was not shown, such as a function in an untouched file. An unverifiable claim is listed in a note under the card and does not count as a disagreement. The hidden part of a truncated or omitted file is part of the change, so a claim that depends on it stays `unsupported`.
 
-**"The verifier disagrees"** means that at least one claim on the card is unsupported or contradicted, or that the verifier found observable behavior changes the card does not mention. The comment then shows a warning listing them, and the risk is at least `logic`. "Not verified" means the verifier call failed.
+**"The verifier disagrees"** means that at least one claim on the card is unsupported or contradicted. The comment then shows a warning listing those claims, and the risk is at least `logic`. Behavior changes the verifier found that the card does not mention are listed under **Also changed** and do not count as a disagreement (before `intent-v5` they did, so most cards carried the warning). "Not verified" means the verifier call failed.
 
 **Rating a card.** Click 👍 or 👎 on the Graft comment, or press "Card is accurate" / "Card is wrong" on the `graft/intent` check. Reactions are picked up within 15 minutes. One vote counts per user and card, and the latest wins. The data feeds the 90% accuracy gate.
 

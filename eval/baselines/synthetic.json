@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "runId": "20261025T145256Z-dd4c",
-  "createdAt": "2026-10-25T14:52:56.929Z",
+  "runId": "20261026T210812Z-86bb",
+  "createdAt": "2026-10-26T21:08:12.397Z",
   "set": {
     "setId": "synthetic",
     "kind": "synthetic",
@@ -12,8 +12,8 @@
     "needsAdjudication": 0
   },
   "prompt": {
-    "promptVersion": "intent-v4",
-    "promptFingerprint": "55515adfe9e010762c7692b44f6755aa6d71c9bd1110077a8c29c5844d14aca1"
+    "promptVersion": "intent-v5",
+    "promptFingerprint": "0c72065e92c152eca517785aee74c78d38064f42143310d0c041486df990c1bd"
   },
   "models": {
     "fast": "claude-haiku-5-5",
@@ -21,14 +21,14 @@
   },
   "llm": "fake",
   "git": {
-    "commit": "84800281d54e2f6301168221466f813faa29522b",
+    "commit": "6e2d86c9116ec91e5165b0b9b56b1b2d6a0c1c3a",
     "dirty": true
   },
   "run": {
     "complete": true,
     "skippedBudget": 0,
     "cachedResults": 0,
-    "durationMs": 24
+    "durationMs": 23
   },
   "metrics": {
     "scored": 30,
@@ -1161,12 +1161,11 @@
       "final": "logic",
       "status": "ok",
       "failureReason": null,
-      "verifierStatus": "disagree",
+      "verifierStatus": "agree",
       "raisedBy": [
         "writer",
         "first_pass",
-        "verifier",
-        "verifier_disagrees"
+        "verifier"
       ],
       "floorRules": [],
       "instructionsInData": false,
@@ -1531,11 +1530,11 @@
     },
     {
       "name": "matchBaseline",
-      "value": null,
-      "limit": "equal to baseline (no baseline)",
-      "pass": true,
+      "value": 0,
+      "limit": "equal to baseline",
+      "pass": false,
       "provisional": false
     }
   ],
-  "pass": true
+  "pass": false
 }

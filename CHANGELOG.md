@@ -11,6 +11,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Changed
 
+- Behavior changes the verifier finds that the card leaves out are listed under **Also changed** and no longer count as a disagreement (`intent-v5`). The "verifier disagrees" warning and its `logic` floor are kept for claims the diff does not show or contradicts. [Intent cards](docs/features/intent-cards.md)
 - Lower model cost per card (`intent-v4`): the writer and the verifier share one system prompt and a cached start of the user message holding the diff, so the verifier reads the diff from the prompt cache instead of paying for it again.
 
 ## v0.1.0 (2026-10-24): Phase 1 built, report mode by default

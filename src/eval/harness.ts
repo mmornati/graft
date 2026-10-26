@@ -95,7 +95,9 @@ export function rowFromResult(
   const flagged = result.verifier.status === "agree" || result.verifier.status === "disagree";
   let flag: CaseRow["flag"] = "na";
   if (g !== null && ok && flagged) {
-    const predictedFlag = result.verifier.status === "disagree";
+    // The reviewer is alerted by a disagreement or by the "Also changed" list (intent-v5).
+    const predictedFlag =
+      result.verifier.status === "disagree" || result.verifier.missing.length > 0;
     flag = predictedFlag ? (g.shouldFlag ? "tp" : "fp") : g.shouldFlag ? "fn" : "tn";
   }
   return {

@@ -568,9 +568,11 @@ export async function runCard(
       reason: c.reason,
     }));
     // "unverifiable" leans on code outside what was shown: a note on the card, not a disagreement.
-    const disagree =
-      claims.some((c) => c.verdict === "unsupported" || c.verdict === "contradicted") ||
-      ver.out.missing.length > 0;
+    // Missing behavior changes complete the card ("Also changed") without contradicting it
+    // (intent-v5): only a claim the diff does not show, or shows otherwise, is a disagreement.
+    const disagree = claims.some(
+      (c) => c.verdict === "unsupported" || c.verdict === "contradicted",
+    );
     verifierResult = {
       status: disagree ? "disagree" : "agree",
       claims,
