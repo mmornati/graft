@@ -1,6 +1,7 @@
 import type { Config } from "../config/index.js";
 import type { Logger } from "../core/logger.js";
 import { anthropicCredential, createAnthropicLlm, isClaudeApi } from "./anthropic.js";
+import { createOpenAiCompatibleLlm } from "./openai-compatible.js";
 import type { LlmProvider } from "./registry.js";
 import { createRouterLlm } from "./router.js";
 import type { LlmClient } from "./types.js";
@@ -8,6 +9,7 @@ import { unconfiguredLlm } from "./unconfigured.js";
 
 export { anthropicCredential, createAnthropicLlm, isClaudeApi } from "./anthropic.js";
 export { type AnthropicFederation, FederationError } from "./federation.js";
+export { createOpenAiCompatibleLlm, parseJsonAnswer } from "./openai-compatible.js";
 export {
   type LlmProvider,
   type LlmRegistry,
@@ -89,12 +91,25 @@ function providerClient(
   config: Pick<Config, "llmMaxRetries" | "llmRefusalFallback">,
   log: Logger,
 ): LlmClient {
-  return createAnthropicLlm({
-    ...p.credential(),
-    ...(p.baseUrl ? { baseURL: p.baseUrl } : {}),
-    maxRetries: config.llmMaxRetries,
-    refusalFallback: config.llmRefusalFallback && isClaudeApi(p.baseUrl),
-    capabilities: p.capabilities,
-    log,
-  });
+  switch (p.kind) {
+    case "anthropic":
+      return createAnthropicLlm({
+        ...p.credential(),
+        ...(p.baseUrl ? { baseURL: p.baseUrl } : {}),
+        maxRetries: config.llmMaxRetries,
+        refusalFallback: config.llmRefusalFallback && isClaudeApi(p.baseUrl),
+        capabilities: p.capabilities,
+        log,
+      });
+    case "openai-compatible":
+      return createOpenAiCompatibleLlm({
+        baseURL: p.baseUrl,
+        apiKey: p.credential(),
+        maxRetries: config.llmMaxRetries,
+        capabilities: p.capabilities,
+        zeroRetention: p.zeroRetention,
+        maxTokensParam: p.maxTokensParam,
+        log,
+      });
+  }
 }

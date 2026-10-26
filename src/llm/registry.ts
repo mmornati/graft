@@ -56,8 +56,19 @@ const anthropicEntry = z
   })
   .strict();
 
-const entrySchema = z.discriminatedUnion("kind", [anthropicEntry], {
-  error: 'kind must be "anthropic"',
+const openAiCompatibleEntry = z
+  .object({
+    ...common,
+    kind: z.literal("openai-compatible"),
+    baseUrl: httpUrl,
+    apiKeyEnv: envName.optional(),
+    zeroRetention: z.boolean().optional(),
+    maxTokensParam: z.enum(["max_tokens", "max_completion_tokens"]).optional(),
+  })
+  .strict();
+
+const entrySchema = z.discriminatedUnion("kind", [anthropicEntry, openAiCompatibleEntry], {
+  error: 'kind must be "anthropic" or "openai-compatible"',
 });
 
 const roleRef = z.string().min(3).max(200);
@@ -89,7 +100,35 @@ export interface AnthropicProvider extends ProviderCommon {
   readonly credential: () => AnthropicCredential;
 }
 
-export type LlmProvider = AnthropicProvider;
+export interface OpenAiCompatibleProvider extends ProviderCommon {
+  readonly kind: "openai-compatible";
+  /** Chat Completions base URL (it ends before `/chat/completions`). */
+  readonly baseUrl: string;
+  /** Always false: the `ANTHROPIC_*` credential never goes to another format's endpoint. */
+  readonly sharedCredential: false;
+  /** The bearer token, or undefined for a server that needs none. */
+  readonly credential: () => string | undefined;
+  /** OpenRouter: zero-data-retention endpoints only, no data collection. */
+  readonly zeroRetention: boolean;
+  readonly maxTokensParam: "max_tokens" | "max_completion_tokens";
+}
+
+export type LlmProvider = AnthropicProvider | OpenAiCompatibleProvider;
+
+/**
+ * What each kind assumes before an entry's overrides. An OpenAI-format server is only assumed to
+ * take JSON-schema output (Graft validates the answer anyway): many models reject
+ * `reasoning_effort`, and caching, where it exists, needs no markers.
+ */
+export const DEFAULT_CAPABILITIES: Record<ProviderKind, LlmCapabilities> = {
+  anthropic: FULL_CAPABILITIES,
+  "openai-compatible": Object.freeze({
+    nativeSchema: true,
+    promptCache: false,
+    effort: false,
+    reportsUsage: true,
+  }),
+};
 
 export interface LlmRoles {
   readonly fast: string;
@@ -106,6 +145,7 @@ export interface LlmRegistry {
 /** Which model IDs each kind accepts. */
 const MODEL_PATTERN: Record<ProviderKind, { re: RegExp; message: string }> = {
   anthropic: { re: MODEL_ID, message: "must be a Claude model ID" },
+  "openai-compatible": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
 };
 
 /** The `ANTHROPIC_*` settings an `anthropic` entry without its own key falls back to. */
@@ -122,7 +162,7 @@ export function splitModelRef(ref: string): { provider: string; model: string } 
 }
 
 function capabilitiesOf(e: Entry): LlmCapabilities {
-  return Object.freeze({ ...FULL_CAPABILITIES, ...(e.capabilities ?? {}) });
+  return Object.freeze({ ...DEFAULT_CAPABILITIES[e.kind], ...(e.capabilities ?? {}) });
 }
 
 function pricesOf(e: Entry): Readonly<Record<string, Price>> {
@@ -202,6 +242,36 @@ function anthropicProvider(
   return { ...base, baseUrl: defaults.baseUrl, sharedCredential: true, credential: () => shared };
 }
 
+function openAiCompatibleProvider(
+  e: Extract<Entry, { kind: "openai-compatible" }>,
+  at: string,
+  env: Readonly<Record<string, string | undefined>>,
+  problems: string[],
+): OpenAiCompatibleProvider | null {
+  let apiKey: string | undefined;
+  if (e.apiKeyEnv !== undefined) {
+    apiKey = secretFrom(env, e.apiKeyEnv, `${at}.apiKeyEnv`, problems);
+    if (apiKey === undefined) return null;
+  }
+  const host = new URL(e.baseUrl).hostname;
+  if (e.zeroRetention === true && host !== "openrouter.ai") {
+    problems.push(`${at}.zeroRetention: is only understood by OpenRouter (openrouter.ai)`);
+    return null;
+  }
+  return {
+    id: e.id,
+    kind: "openai-compatible",
+    capabilities: capabilitiesOf(e),
+    prices: pricesOf(e),
+    baseUrl: e.baseUrl,
+    sharedCredential: false,
+    credential: () => apiKey,
+    zeroRetention: e.zeroRetention ?? false,
+    maxTokensParam:
+      e.maxTokensParam ?? (host === "api.openai.com" ? "max_completion_tokens" : "max_tokens"),
+  };
+}
+
 function issuePath(path: readonly PropertyKey[]): string {
   return path
     .map((p) => (typeof p === "number" ? `[${p}]` : `.${String(p)}`))
@@ -247,7 +317,10 @@ export function parseRegistry(
       return;
     }
     seen.add(e.id);
-    const p = anthropicProvider(e, at, env, defaults, problems);
+    const p =
+      e.kind === "anthropic"
+        ? anthropicProvider(e, at, env, defaults, problems)
+        : openAiCompatibleProvider(e, at, env, problems);
     if (p) providers.push(Object.freeze(p));
   });
 

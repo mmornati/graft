@@ -265,12 +265,12 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 5. **Done** (see 2).
 6. **Not done.** Vertex, Foundry and Bedrock SDK variants wait for an operator who needs them. Bedrock Mantle already works as an `anthropic` entry with `capabilities: { nativeSchema: false }`.
 
-### Step 3: OpenAI-compatible transport (PR 2)
+### Step 3: OpenAI-compatible transport (PR 2), implemented
 
-1. `src/llm/openai-compatible.ts` on the `openai` package: `response_format: { type: "json_schema", strict: true }`, plus `provider.require_parameters` and, when `zeroRetention` is set, `provider.zdr` and `data_collection: deny` on OpenRouter.
-2. Map errors to the same taxonomy. A content-filter finish reason maps to `refusal`, `length` to `max_tokens`, and a body that is not JSON to `invalid_json`.
-3. Contract tests with a fake `fetch`, mirroring the U-LLM tests. Run a live eval against Ollama with Qwen3-Coder-30B-A3B and one hosted model (OpenAI or Mistral).
-4. This one transport covers OpenAI, OpenRouter, Mistral, DeepSeek, Gemini (compat), Ollama, vLLM, LM Studio, llama.cpp and the LiteLLM proxy.
+1. **Done.** `src/llm/openai-compatible.ts` on the `openai` package. It uses `response_format: json_schema` (strict only when the schema's root is an object; Graft's combined schema is an `anyOf`), and `provider.require_parameters` on OpenRouter, plus `zdr` and `data_collection: deny` with `zeroRetention`. Every option the SDK would read from `OPENAI_*` is passed explicitly, and its own logging is off.
+2. **Done.** Errors map to the same taxonomy: `refusal` (a `refusal` message or `content_filter`), `max_tokens` (`length`) and `invalid_json`. One Markdown fence around the answer is accepted. Cached prompt tokens are counted apart from input, as Anthropic counts them.
+3. **Done:** contract tests with a fake `fetch` (U-OAI-1 to U-OAI-11). **Not done:** the live eval against Ollama and a hosted model. It needs `pnpm eval` to read the registry, which is the next PR.
+4. **Done.** Default capabilities for the kind: JSON schema and usage only, with no `reasoning_effort` and no cache markers. Prices match on `-`, `:` or `@` after the key, for Ollama tags.
 
 ### Step 4: CLI transport and the `claude` adapter (PR 3)
 
