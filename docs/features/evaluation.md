@@ -18,7 +18,7 @@ pnpm eval label --set ~/.graft-eval/pilot-acme --as ada               # blind, i
 pnpm eval agreement --set ~/.graft-eval/pilot-acme                    # Cohen's kappa; target risk >= 0.6
 pnpm eval adjudicate --set ~/.graft-eval/pilot-acme --as judge
 pnpm eval run --set ~/.graft-eval/pilot-acme                          # fake model: floor + a model that says "trivial"
-pnpm eval run --set ~/.graft-eval/pilot-acme --live                   # the only way to reach the Anthropic API
+pnpm eval run --set ~/.graft-eval/pilot-acme --live                   # the only way to call a model (Claude, or the registry's providers)
 pnpm eval purge --set ~/.graft-eval/pilot-acme --confirm pilot-acme   # when the pilot leaves
 pnpm eval:ci                                       # the synthetic set against eval/baselines/synthetic.json
 ```

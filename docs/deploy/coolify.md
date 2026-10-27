@@ -47,6 +47,7 @@ In the resource's **Environment Variables** page, Coolify already shows what the
 | `GITHUB_APP_PRIVATE_KEY` | The PEM file's contents. Mark the variable **multiline** (or paste it on one line with literal `\n`). |
 | `GITHUB_WEBHOOK_SECRET` | `openssl rand -hex 32`. Keep it for the App's settings. |
 | `ANTHROPIC_API_KEY` | Optional, for intent cards. |
+| `GRAFT_LLM_PROVIDERS` | Optional: a [provider registry](../model-providers.md) inline (one-line JSON is easiest). Each key variable it names must also be added to the `x-graft-env` block of `compose.coolify.yaml`, or the containers never see it. |
 | `GRAFT_MODE_CEILING` | Leave unset (`report`). |
 
 Do not mark these as **build** variables: the image build needs none of them, and build variables can end up in image layers.

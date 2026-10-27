@@ -50,6 +50,7 @@ What you should see:
 ### Next steps
 
 - Without `ANTHROPIC_API_KEY` the service still runs: every intent card shows as unavailable with the rule-based risk floor. See [features/intent-cards.md](features/intent-cards.md).
+- To write cards with another model (OpenAI, OpenRouter, a local Ollama, a CLI subscription or Copilot), see [Choosing a model provider](model-providers.md).
 - `pnpm eval:ci` runs the synthetic evaluation set against the fake model, offline ([features/evaluation.md](features/evaluation.md)).
 - `pnpm graft policy check docs/examples/graft.yaml` validates a policy file with an empty environment ([features/policy.md](features/policy.md)).
 - `pnpm graft e2e run --only-offline` runs the live end-to-end suite against a fake GitHub world ([e2e.md](e2e.md)).

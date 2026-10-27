@@ -20,6 +20,12 @@ x-graft-env: &graft-env
   GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:?}
   GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+  ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+  # Model providers (docs/model-providers.md). Add a line here for each key variable the registry
+  # names in apiKeyEnv or authTokenEnv, for example OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}.
+  GRAFT_LLM_PROVIDERS: ${GRAFT_LLM_PROVIDERS:-}
+  GRAFT_DEPLOYMENT: ${GRAFT_DEPLOYMENT:-self-hosted}
   GRAFT_MODE_CEILING: ${GRAFT_MODE_CEILING:-report}
 
 # Each Graft service builds the same Dockerfile; they share the build cache. Do not give them a

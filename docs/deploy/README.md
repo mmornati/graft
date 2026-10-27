@@ -34,7 +34,7 @@ Set these as secrets on the platform, never in a file in the repository:
 | `GITHUB_APP_PRIVATE_KEY` | The App's PEM key, inline. Real newlines and literal `\n` both work. (`GITHUB_APP_PRIVATE_KEY_PATH` also works if the platform mounts files.) |
 | `GITHUB_WEBHOOK_SECRET` | At least 16 characters. `openssl rand -hex 32`. Must equal the App's webhook secret. |
 | `GITHUB_APP_SLUG` | The App's slug (recommended, see [GitHub App](../github-app.md)). |
-| `ANTHROPIC_API_KEY` | Optional. Without it every intent card shows as unavailable, with the rule-based risk floor. Or use a token or [federation](../configuration.md#deploying-with-federation). |
+| `ANTHROPIC_API_KEY` | Optional. Without it every intent card shows as unavailable, with the rule-based risk floor. Or use a token or [federation](../configuration.md#deploying-with-federation). Other providers: [Choosing a model provider](../model-providers.md). |
 
 The image sets `NODE_ENV=production`, `HOST=0.0.0.0` and `PORT=3000`. In production the example webhook secret from `.env.example` is refused. Leave `GRAFT_MODE_CEILING` at `report` (the default) until the Phase 1 rollout runbook says otherwise. Every other variable is in [configuration](../configuration.md).
 
