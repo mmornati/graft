@@ -76,7 +76,7 @@ The server, the worker and the `pnpm graft` commands read their settings from th
 
 ## Model providers
 
-By default Graft sends every model call to one Anthropic Messages API endpoint, configured with the `ANTHROPIC_*` variables. A **provider registry** lists several providers instead and says which one each role uses. It is operator configuration only: repositories cannot choose a provider in `graft.yaml`, because the provider decides where diffs go and who pays.
+By default Graft sends every model call to one Anthropic Messages API endpoint, configured with the `ANTHROPIC_*` variables. A **provider registry** lists several providers instead and says which one each role uses. This section is the reference; for a step-by-step guide per provider, see [Choosing a model provider](model-providers.md). It is operator configuration only: repositories cannot choose a provider in `graft.yaml`, because the provider decides where diffs go and who pays.
 
 ```yaml
 # GRAFT_LLM_PROVIDERS_FILE=/etc/graft/providers.yaml

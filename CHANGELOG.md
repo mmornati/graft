@@ -6,6 +6,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Added
 
+- A guide to [choosing a model provider](docs/model-providers.md): which provider fits which need, step-by-step setup for the Claude API, gateways, OpenAI-compatible and local models, the CLI providers and Copilot, checking a model with `pnpm eval --live`, deploying a registry, and the startup and card errors. `.env.example` and `compose.coolify.yaml` now show the registry variables.
 - The `copilot` provider kind (dormant until configured): calls billed to the installing organization's Copilot through an installation token limited to `copilot_requests: write`, only for installations listed as opted in, with a fallback model for the rest. Empty sessions: no tools, no MCP, a replaced system message. Needs `@github/copilot-sdk` in the image and the Copilot requests permission on the App. [Copilot provider](docs/configuration.md#copilot-provider)
 - The console's System page lists the models that wrote, first-passed and verified cards in the window (with their registry provider), and the failure classes of unavailable cards and failed verifiers. [Operator console](docs/console.md)
 - The `cli:codex` and `cli:opencode` provider kinds, with the same isolation as `cli:claude`: every tool feature off by name, nothing saved, and a call fails if a tool ran anyway. Self-hosted only. [CLI providers](docs/configuration.md#cli-providers)

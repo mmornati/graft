@@ -35,6 +35,7 @@ Coding agents open pull requests faster than people can review them, and a PR de
 | **Evaluation set**<br/>`pnpm eval`: encrypted pilot case sets outside the repo, blind labeling, Cohen's kappa, fake and live runs, and a synthetic set with a saved baseline in CI. [More](docs/features/evaluation.md) | **Pilots and the gate**<br/>Onboarding kit, verified-reviewer votes, a Wilson-interval Phase 0 gate report, review-time baseline, daily rollup, incidents and offboarding. [More](docs/features/pilots-and-gate.md) |
 | **Modes, approvals and break-glass**<br/>Per-repository `policy_mode`, `guard_mode` and `mcp_write` under a server ceiling, and a write allow-list that refuses anything a mode does not permit. In enforce mode `graft/policy` counts real approvals (write access, current head, verified teams); a maintainer's `graft:break-glass` label bypasses it for one commit, and every bypass is audited. [More](docs/features/modes.md) | **Post-merge guard and revert PRs**<br/>Watches `main`'s CI, names the culprit commit once a failure is confirmed, and in enforce mode opens a labelled revert PR built from blob SHAs, without reading code. Auto-merge of `trivial` or `logic` reverts is opt-in, never for `sensitive`. [More](docs/features/guard.md) |
 | **MCP server**<br/>`get_status`, `get_policy`, `report_provenance` and `open_change` at `/mcp` for agents, with per-repository tokens stored as hashes. Reported provenance can only tighten a verdict; `open_change` needs `mcp_write`. [More](docs/features/mcp.md) | **Gates from data**<br/>`pnpm graft gate report` decides the Phase 0 gate (card accuracy) and the Phase 1 gate (PRs merged with no human, review minutes, breakages caught, escaped defects), measured from enforce-mode rows and previewed from report mode. [More](docs/features/pilots-and-gate.md) |
+| **Any model provider**<br/>The Claude API by default, or a server-side provider registry: Anthropic-format gateways, OpenAI-compatible APIs (OpenAI, OpenRouter, Mistral, DeepSeek, Gemini), local models (Ollama, vLLM, LM Studio), isolated `claude`, `codex` and `opencode` CLIs for self-hosted installs, and per-installation Copilot billing. [More](docs/model-providers.md) | **Operator console**<br/>An optional, read-only console: a daily journal, every PR's record, what needs a human, the gate, the token budget, the job queue and the models that wrote the cards. [More](docs/console.md) |
 | **Privacy by design**<br/>No file contents, diffs, PR titles or bodies are stored or logged: only paths, SHAs, numbers and the model's own prose. [More](docs/architecture.md#contracts) | **Live e2e scenarios**<br/>`pnpm graft e2e` proves the fakes' assumptions against real GitHub in a guarded sandbox repository, or fully offline. [More](docs/e2e.md) |
 
 ## How it works
@@ -45,7 +46,7 @@ flowchart LR
     SRV -->|"delivery row + job, one transaction"| PG[("Postgres 17 + pg-boss")]
     PG --> WRK["Worker"]
     WRK -->|"read PR, commits, diff, graft.yaml"| GH
-    WRK -->|"writer + verifier"| AI["Anthropic API"]
+    WRK -->|"writer + verifier"| AI["Model provider<br/>(Claude API by default)"]
     WRK -->|"3 neutral check runs + 1 managed comment"| GH
     WRK --> PG
 ```
@@ -57,7 +58,7 @@ sequenceDiagram
     autonumber
     participant GH as GitHub
     participant W as Graft worker
-    participant AI as Anthropic API
+    participant AI as Model provider
     GH->>W: pull_request opened (via server and queue)
     W->>GH: read commits
     W->>W: provenance from Graft-* trailers
@@ -154,7 +155,7 @@ The same information appears in the `graft/provenance`, `graft/intent` (with "Ca
 
 | Topic | Read |
 | --- | --- |
-| Install, run, test | [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) |
+| Install, run, test | [Getting started](docs/getting-started.md) · [Choosing a model provider](docs/model-providers.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) |
 | Real GitHub App | [Registration, smee, permissions](docs/github-app.md) |
 | Features | [Provenance](docs/features/provenance.md) · [Intent cards](docs/features/intent-cards.md) · [Policy](docs/features/policy.md) ([graft.yaml reference](docs/graft-yaml.md)) · [Modes](docs/features/modes.md) · [Post-merge guard](docs/features/guard.md) · [MCP server](docs/features/mcp.md) · [Evaluation](docs/features/evaluation.md) · [Pilots and gates](docs/features/pilots-and-gate.md) |
 | Videos | [Graft, explained](docs/video.md) · [What a reviewer sees](docs/video-reviewer-tour.md) · [Enforce mode, step by step](docs/video-enforce-tour.md) |
@@ -218,7 +219,7 @@ src/
   webhooks/   receiver, handler registry, dispatch job
   http/       health and readiness routes
   github/     Octokit factory, managed comment, markdown safety
-  llm/        model-client interface, Anthropic client, fake
+  llm/        model-client interface, provider registry and router, Anthropic, OpenAI-compatible, CLI and Copilot clients, fake
   policy/     graft.yaml schema, safe YAML parse, evaluator, loader
   modules/    installations, changes, provenance, intent, policy, pilot, modes, audit, guard, mcp
   eval/       the evaluation tool

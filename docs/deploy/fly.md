@@ -43,7 +43,7 @@ fly secrets set --app <app-name> --stage \
   GITHUB_APP_PRIVATE_KEY="$(cat /path/to/your-app.private-key.pem)"
 ```
 
-Add `ANTHROPIC_API_KEY=…` for intent cards. `--stage` stores the secrets without restarting anything, and the first deploy picks them up. Write down the webhook secret you generated (`fly secrets list` does not show values), because the App's settings need the same value.
+Add `ANTHROPIC_API_KEY=…` for intent cards, or a [provider registry](../model-providers.md#deploying-with-a-registry) (`GRAFT_LLM_PROVIDERS="$(cat providers.yaml)"`) and the key variables it names. `--stage` stores the secrets without restarting anything, and the first deploy picks them up. Write down the webhook secret you generated (`fly secrets list` does not show values), because the App's settings need the same value.
 
 ## 4. Deploy
 

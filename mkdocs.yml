@@ -124,6 +124,7 @@ nav:
     - getting-started.md
     - GitHub App: github-app.md
     - Configuration: configuration.md
+    - Choosing a model provider: model-providers.md
     - Deploying:
       - deploy/README.md
       - Fly.io: deploy/fly.md
