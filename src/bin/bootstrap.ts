@@ -85,7 +85,11 @@ export async function bootstrap(opts: { supervise: boolean }): Promise<Bootstrap
       ),
   });
 
-  const llm = createLlmClient(config, log);
+  const llm = createLlmClient(
+    config,
+    log,
+    github.copilotToken ? { copilotToken: github.copilotToken.bind(github) } : {},
+  );
 
   const signals = createSignals(registry.signalListeners);
 

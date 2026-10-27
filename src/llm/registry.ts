@@ -94,6 +94,29 @@ const cliEntry = <K extends CliKind>(kind: K) =>
     })
     .strict();
 
+const copilotEntry = z
+  .object({
+    ...common,
+    kind: z.literal("copilot"),
+    /** The installations that opted into billing their own Copilot: every other one falls back. */
+    installations: z.array(z.number().int().positive()).min(1).max(1000),
+    /** For each model a role uses on this provider, the `<provider id>/<model>` to use instead. */
+    fallbackModels: z.record(
+      z.string().regex(GENERIC_MODEL_ID, "must be a model ID"),
+      z.string().min(3).max(200),
+    ),
+    passEnv: z
+      .array(
+        envName.refine(
+          (n) => !FORBIDDEN_ENV.test(n),
+          "names a variable Graft never passes to the Copilot runtime",
+        ),
+      )
+      .max(20)
+      .optional(),
+  })
+  .strict();
+
 const entrySchema = z.discriminatedUnion(
   "kind",
   [
@@ -102,6 +125,7 @@ const entrySchema = z.discriminatedUnion(
     cliEntry("cli:claude"),
     cliEntry("cli:codex"),
     cliEntry("cli:opencode"),
+    copilotEntry,
   ],
   {
     error: `kind must be "anthropic", "openai-compatible" or ${CLI_KINDS.map((k) => `"${k}"`).join(", ")}`,
@@ -160,7 +184,26 @@ export interface CliProvider extends ProviderCommon {
   readonly sharedCredential: false;
 }
 
-export type LlmProvider = AnthropicProvider | OpenAiCompatibleProvider | CliProvider;
+/**
+ * GitHub Copilot through `@github/copilot-sdk`, billed to the installation that owns the pull
+ * request (an installation token with `copilot_requests: write`). Multi-tenant, so allowed when
+ * hosted, but only for installations that opted in; the rest use `fallbackModels`.
+ */
+export interface CopilotProvider extends ProviderCommon {
+  readonly kind: "copilot";
+  readonly installations: ReadonlySet<number>;
+  /** Bare Copilot model → `<provider id>/<model>` on another provider. */
+  readonly fallbackModels: Readonly<Record<string, string>>;
+  readonly passEnv: readonly string[];
+  readonly baseUrl: undefined;
+  readonly sharedCredential: false;
+}
+
+export type LlmProvider =
+  | AnthropicProvider
+  | OpenAiCompatibleProvider
+  | CliProvider
+  | CopilotProvider;
 
 /** `self-hosted` (the default) allows the CLI kinds; `hosted` refuses them. */
 export type Deployment = "hosted" | "self-hosted";
@@ -180,6 +223,13 @@ export const DEFAULT_CAPABILITIES: Record<ProviderKind, LlmCapabilities> = {
   }),
   // The CLI caches on its own; Graft cannot place markers.
   "cli:claude": Object.freeze({
+    nativeSchema: true,
+    promptCache: false,
+    effort: true,
+    reportsUsage: true,
+  }),
+  // `responseSchema` is checked by the runtime; Graft validates again.
+  copilot: Object.freeze({
     nativeSchema: true,
     promptCache: false,
     effort: true,
@@ -219,6 +269,7 @@ const MODEL_PATTERN: Record<ProviderKind, { re: RegExp; message: string }> = {
   "openai-compatible": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
   "cli:claude": { re: MODEL_ID, message: "must be a Claude model ID" },
   "cli:codex": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
+  copilot: { re: GENERIC_MODEL_ID, message: "must be a model ID" },
   // opencode names models `<provider>/<model>`.
   "cli:opencode": { re: GENERIC_MODEL_ID, message: "must be a model ID" },
 };
@@ -383,6 +434,20 @@ function cliProvider(
   };
 }
 
+function copilotProvider(e: Extract<Entry, { kind: "copilot" }>): CopilotProvider {
+  return {
+    id: e.id,
+    kind: "copilot",
+    capabilities: capabilitiesOf(e),
+    prices: pricesOf(e),
+    installations: new Set(e.installations),
+    fallbackModels: Object.freeze({ ...e.fallbackModels }),
+    passEnv: Object.freeze([...(e.passEnv ?? [])]),
+    baseUrl: undefined,
+    sharedCredential: false,
+  };
+}
+
 function issuePath(path: readonly PropertyKey[]): string {
   return path
     .map((p) => (typeof p === "number" ? `[${p}]` : `.${String(p)}`))
@@ -434,7 +499,9 @@ export function parseRegistry(
         ? anthropicProvider(e, at, env, defaults, problems)
         : e.kind === "openai-compatible"
           ? openAiCompatibleProvider(e, at, env, problems)
-          : cliProvider(e, at, deployment, problems);
+          : e.kind === "copilot"
+            ? copilotProvider(e)
+            : cliProvider(e, at, deployment, problems);
     if (p) providers.push(Object.freeze(p));
   });
 
@@ -450,7 +517,7 @@ export function parseRegistry(
     ),
   );
   parsed.data.providers.forEach((e, i) => {
-    if (!isCliKind(e.kind) || !("passEnv" in e)) return;
+    if (!(isCliKind(e.kind) || e.kind === "copilot") || !("passEnv" in e)) return;
     (e.passEnv ?? []).forEach((name, j) => {
       if (keyVars.has(name)) {
         problems.push(`${source}: providers[${i}].passEnv[${j}]: is another provider's key`);
@@ -479,6 +546,33 @@ export function parseRegistry(
     }
     return ref;
   };
+  // A Copilot model needs a fallback for installations that did not opt in, on a provider that
+  // is not billed per installation.
+  const checkFallback = (at: string, ref: string) => {
+    const split = splitModelRef(ref);
+    const p = split ? byId.get(split.provider) : undefined;
+    if (!split || !p) {
+      if (!split || !seen.has(split.provider)) problems.push(`${at}: names no configured provider`);
+    } else if (p.kind === "copilot") {
+      problems.push(`${at}: must not be another copilot provider`);
+    } else if (!MODEL_PATTERN[p.kind].re.test(split.model)) {
+      problems.push(`${at}: ${MODEL_PATTERN[p.kind].message} for a ${p.kind} provider`);
+    }
+  };
+  parsed.data.providers.forEach((e, i) => {
+    if (e.kind !== "copilot") return;
+    for (const [model, ref] of Object.entries(e.fallbackModels)) {
+      checkFallback(`${source}: providers[${i}].fallbackModels.${model}`, ref);
+    }
+  });
+  for (const [name, ref] of Object.entries(parsed.data.roles)) {
+    const split = ref === undefined ? null : splitModelRef(ref);
+    const p = split ? byId.get(split.provider) : undefined;
+    if (split && p?.kind === "copilot" && p.fallbackModels[split.model] === undefined) {
+      problems.push(`${source}: roles.${name}: has no fallbackModels entry on provider ${p.id}`);
+    }
+  }
+
   const fast = role("fast", parsed.data.roles.fast);
   const strong = role("strong", parsed.data.roles.strong);
   const refusalFallback = role("refusalFallback", parsed.data.roles.refusalFallback);

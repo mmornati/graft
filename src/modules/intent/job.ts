@@ -235,6 +235,7 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   const opts = defaultGenerateOptions(config, settings.floor, settings.language);
   opts.log = ctx.log;
   opts.startedAtMs = startedAtMs;
+  opts.installationId = data.installationId;
   const prepared = prepareCardInputs(inputs, opts);
 
   const fresh = (current: Change | undefined): boolean =>

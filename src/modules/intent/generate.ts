@@ -77,6 +77,8 @@ export interface GenerateOptions {
   startedAtMs?: number;
   /** Metadata only. */
   log?: Logger;
+  /** The installation the card is for; routes per-installation providers (Copilot). */
+  installationId?: number;
 }
 
 export interface VerifierClaim {
@@ -428,11 +430,12 @@ export async function runCard(
     for (let attempt = 0; attempt < 2; attempt++) {
       const remaining = deadlineAt - o.nowMs();
       if (remaining < MIN_REMAINING_MS) return { ok: false, reason: "deadline_exceeded" };
-      const native = llm.capabilities?.(model).nativeSchema ?? true;
+      const native = llm.capabilities?.(model, o.installationId).nativeSchema ?? true;
       const res = await llm.complete({
         ...base,
         system: systemWithSchema(base.system, base.outputSchema, native),
         model,
+        ...(o.installationId !== undefined ? { installationId: o.installationId } : {}),
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         timeoutMs: Math.min(o.timeoutMs, remaining),
         deadlineMs: remaining,
@@ -462,7 +465,7 @@ export async function runCard(
         !fellBack &&
         fallback !== undefined &&
         fallback !== model &&
-        !llm.serverRefusalFallback?.(model)
+        !llm.serverRefusalFallback?.(model, o.installationId)
       ) {
         o.log?.info({ purpose: base.purpose, from: model, to: fallback }, "llm refusal fallback");
         model = fallback;

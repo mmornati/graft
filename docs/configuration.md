@@ -108,6 +108,7 @@ roles:
   - `cli:claude`: Claude Code (`claude -p`) on this machine, logged in however the operator set it up (a subscription, `CLAUDE_CODE_OAUTH_TOKEN`, an API key). **Self-hosted, single-tenant only**: a personal login may not serve other people's pull requests, so `GRAFT_DEPLOYMENT=hosted` refuses it, and the worker logs a warning at startup. `command` is the binary (default `claude` on `PATH`, or an absolute path). Its roles take Claude model IDs; pass explicit IDs, as aliases can resolve to older models. See [CLI providers](#cli-providers).
   - `cli:codex`: OpenAI Codex (`codex exec`), with the same rules. Model IDs are Codex's (`gpt-5.5`). Built against codex-cli 0.162.1 and checked offline (every flag and feature name is accepted), but not yet run against a live login: run `pnpm eval --live` with it before putting it in a role. Graft puts the schema in the prompt, because `--output-schema` is strict and Graft's schema has an `anyOf` root.
   - `cli:opencode`: opencode (`opencode run`), with the same rules. Model IDs are opencode's `<provider>/<model>` (`openrouter/qwen/qwen3-coder`). Checked against opencode 1.19.3. No schema flag: the schema goes in the prompt.
+  - `copilot`: GitHub Copilot, billed to the installation that owns the pull request. Allowed on a hosted deployment, but only for the installations listed in `installations`; every other installation (and the eval tool) gets the model named in `fallbackModels`. See [Copilot provider](#copilot-provider).
 - **Capabilities.** An `anthropic` provider is assumed to support JSON-schema output, prompt caching, effort and usage counts. An `openai-compatible` one is assumed to support JSON-schema output and usage counts only: many models reject `reasoning_effort`, and caching, where it exists, needs no markers. Set `capabilities: { effort: true }` to send Graft's effort as `reasoning_effort`. Override what an endpoint lacks, for example `capabilities: { nativeSchema: false }` for Bedrock Mantle: Graft then puts the schema in the system prompt and relies on its own validation and retry.
 - **Prices.** Calls on an `anthropic` provider are priced from the built-in Claude table unless the entry's `prices` names the model. An `openai-compatible` provider has only its `prices`. The longest key that equals the model or is followed by `-`, `:` or `@` wins, so `qwen3-coder` prices `qwen3-coder:30b`. A model with no price leaves the card's cost unknown; the daily token budget still counts its tokens.
 - **Refusal fallback.** `GRAFT_LLM_REFUSAL_FALLBACK` applies to every `anthropic` provider whose URL is the Claude API.
@@ -133,6 +134,41 @@ Per CLI:
 - **All three:** for `cli:codex` and `cli:opencode`, a call whose event stream shows a tool that actually ran fails as `bad_request`, and nothing it produced is used.
 
 Run the worker as a dedicated user whose `HOME` holds only the CLI's login. The default Docker image ships no CLI: build `FROM` the Graft image, install the CLI, and mount its login read-only. Usage comes from the CLI's own counters. Calls are unpriced unless the entry has `prices`, since the login, not Graft, decides what they cost.
+
+### Copilot provider
+
+A `copilot` provider bills each call to the Copilot plan of the organization that installed Graft, through an installation token limited to `copilot_requests: write`. It is built against `@github/copilot-sdk` 1.0.19 and **has not yet been run against a live installation**. Run `pnpm eval --live` with it on an opted-in test installation before relying on it.
+
+```yaml
+providers:
+  - id: claude
+    kind: anthropic
+  - id: copilot
+    kind: copilot
+    installations: [12345678]            # installations that opted into billing their Copilot
+    fallbackModels:                      # required for every model a role uses on copilot
+      gpt-5-mini: claude/claude-haiku-5-5
+      claude-sonnet-4.5: claude/claude-sonnet-5-5
+roles:
+  fast: copilot/gpt-5-mini
+  strong: copilot/claude-sonnet-4.5
+```
+
+Before it serves an installation, set up all of the following:
+
+1. **Install the SDK.** `@github/copilot-sdk` is not one of Graft's dependencies: its runtime is large and most deployments never use it. Add it to your image (`pnpm add @github/copilot-sdk@1.0.19` in a derived Dockerfile). Without it every Copilot call fails `not_configured`, the card falls back to "unavailable", and the worker logs `copilot provider: the SDK is not installed`.
+2. **Grant the permission.** In the GitHub App's settings, add the **Copilot requests** permission (read and write). Graft's shipped manifests do not request it, so an App created from them never asks installers for Copilot billing. Each installing organization then has to accept the new permission.
+3. **Let the organization allow it.** The organization's Copilot policy must allow Copilot requests from GitHub Apps. GitHub also requires the App to be installed on all repositories.
+4. **Opt the installation in.** Add the installation ID to `installations`. Removing it switches that installation back to the fallback at the next restart.
+
+How it runs:
+
+- Each call mints a fresh installation token limited to `copilot_requests: write`. It lasts an hour and is never logged or cached with Graft's other tokens.
+- One Copilot runtime runs per worker, in multi-user (`"empty"`) mode, with no logged-in user and the same stripped environment as the CLI providers (`passEnv` adds to it).
+- Every session gets `availableTools: []` and `mcpServers: {}`, with config discovery, skills, the session store and infinite sessions off.
+- The system message is replaced, not appended to; every permission request is rejected; each session runs in an empty directory removed afterwards.
+- A call fails as `bad_request` if a tool ran anyway.
+- The card names the model that answered, `copilot/...` or the fallback, and calls are unpriced unless the entry has `prices`, since GitHub bills AI credits to the organization.
 
 ## Deploying with federation
 
