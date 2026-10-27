@@ -86,6 +86,9 @@ beforeAll(async () => {
   await sql`update intent_cards set goal = 'Add a login rate limiter.' where id = ${a2}`.execute(
     writer,
   );
+  await sql`update intent_cards
+               set writer_model = 'ollama/qwen3-coder:30b', verifier_model = 'claude/claude-sonnet-5-5'
+             where change_id = ${A}`.execute(writer);
   await addVerdict(writer, {
     changeId: A,
     headSha: SHA(101),
@@ -370,6 +373,12 @@ describe("system", () => {
     ]);
     expect(s.audit).toHaveLength(1);
     expect(s.mcpTokens).toEqual([]);
+    // Cards from the seed: two on A today; the registry-qualified names come through untouched.
+    expect(s.models).toEqual([
+      { model: "claude/claude-sonnet-5-5", writer: 0, firstPass: 0, verifier: 2 },
+      { model: "ollama/qwen3-coder:30b", writer: 2, firstPass: 0, verifier: 0 },
+    ]);
+    expect(s.modelFailures).toEqual([{ kind: "card", reason: "budget_exceeded", count: 1 }]);
   });
 
   it("answers health checks without a session and 404s unknown API routes", async () => {

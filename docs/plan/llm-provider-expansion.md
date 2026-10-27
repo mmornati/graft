@@ -300,10 +300,10 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 3. A `copilot` provider entry is installation-aware: the router passes the job's installation so the client uses that org's token. An installation opts in through a setting (stored with the installation, not in `graft.yaml`, since it is a billing decision). Without the opt-in, or when the org does not allow Copilot requests from apps, the role falls back to the provider named in `fallback`.
 4. The same no-tools security test as Step 4.
 
-### Step 7: Providers in the console (PR 6)
+### Step 7: Providers in the console (PR 6), implemented
 
-1. Show the configured providers, their kind, host, capabilities and role assignments in the read-only console. Never show `apiKeyEnv` values, only whether the variable is set.
-2. Per-provider call counts, failure classes and spend from the existing `llm call` data.
+1. **Changed from the plan.** The console runs in its own container with a SELECT-only role and never sees the worker's environment, so it cannot show the registry's configuration. Copying the registry into the console would put a second copy of provider settings (and key variable names) in a second container. Instead the System page shows the models as Graft recorded them on cards: with a registry these are `<provider id>/<model>`, so the provider is visible.
+2. **Done.** Per model in the window: how many cards it wrote, first-passed and verified. The failure classes of unavailable cards (`failure_reason`) and failed verifiers (`verifier_failure`). Spend stays where it was (Overview, per repository): the ledger records spend per change, not per model.
 
 ### Step 8: Cost cascade (Section 3)
 
