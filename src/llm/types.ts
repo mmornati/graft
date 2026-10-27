@@ -37,6 +37,11 @@ export interface LlmRequest {
    * per-attempt timeout.
    */
   deadlineMs?: number;
+  /**
+   * The GitHub App installation the card is for. Only a provider billed per installation (Copilot)
+   * reads it; without it such a provider sends the call to its fallback.
+   */
+  installationId?: number;
 }
 
 export interface LlmUsage {
@@ -89,9 +94,12 @@ export interface LlmClient {
    * True when this client already retries a refused call on another model server-side, so the
    * caller must not add its own refusal fallback. Absent means false.
    */
-  serverRefusalFallback?(model: string): boolean;
-  /** What the provider behind `model` supports. Absent means `FULL_CAPABILITIES`. */
-  capabilities?(model: string): LlmCapabilities;
+  serverRefusalFallback?(model: string, installationId?: number): boolean;
+  /**
+   * What the provider behind `model` supports, for this installation (a provider billed per
+   * installation may hand the call to a fallback). Absent means `FULL_CAPABILITIES`.
+   */
+  capabilities?(model: string, installationId?: number): LlmCapabilities;
   /**
    * The USD cost of one call's usage, for clients that know their providers' prices. Absent means
    * the built-in Claude price table (`src/llm/pricing.ts`); null means unpriced.

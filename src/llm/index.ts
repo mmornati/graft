@@ -6,6 +6,7 @@ import { type CliAdapter, createCliLlm } from "./cli.js";
 import { claudeCliAdapter } from "./cli-claude.js";
 import { codexCliAdapter } from "./cli-codex.js";
 import { opencodeCliAdapter } from "./cli-opencode.js";
+import { type CopilotTokenSource, createCopilotLlm } from "./copilot.js";
 import { createOpenAiCompatibleLlm } from "./openai-compatible.js";
 import type { CliKind, LlmProvider, LlmRegistry } from "./registry.js";
 import { createRouterLlm } from "./router.js";
@@ -45,8 +46,9 @@ export function createLlmClient(
     | "llmRefusalFallback"
   >,
   log: Logger,
+  deps: LlmDeps = {},
 ): LlmClient {
-  if (config.llmRegistry) return createRegistryLlm(config.llmRegistry, config, log);
+  if (config.llmRegistry) return createRegistryLlm(config.llmRegistry, config, log, deps);
   const credential = anthropicCredential(config);
   if (credential) {
     // The host only, never the whole URL: it could carry credentials. Of the federation settings
@@ -70,11 +72,18 @@ export function createLlmClient(
   return unconfiguredLlm();
 }
 
+/** What some providers need from the rest of Graft. */
+export interface LlmDeps {
+  /** Mints an installation token with `copilot_requests: write`, for `copilot` providers. */
+  copilotToken?: CopilotTokenSource;
+}
+
 /** A router over one client per registered provider. Also used by the eval tool. */
 export function createRegistryLlm(
   registry: LlmRegistry,
   settings: Pick<Config, "llmMaxRetries" | "llmRefusalFallback">,
   log: Logger,
+  deps: LlmDeps = {},
 ): LlmClient {
   log.info(
     { providers: registry.providers.map(describeProvider), roles: { ...registry.roles } },
@@ -83,7 +92,7 @@ export function createRegistryLlm(
   return createRouterLlm(
     registry.providers.map((provider) => ({
       provider,
-      client: providerClient(provider, settings, log.child({ provider: provider.id })),
+      client: providerClient(provider, settings, log.child({ provider: provider.id }), deps),
     })),
   );
 }
@@ -99,7 +108,14 @@ function describeProvider(p: LlmProvider) {
   return {
     id: p.id,
     kind: p.kind,
-    host: p.baseUrl ? new URL(p.baseUrl).host : "command" in p ? "local" : "default",
+    host: p.baseUrl
+      ? new URL(p.baseUrl).host
+      : "command" in p
+        ? "local"
+        : p.kind === "copilot"
+          ? "github"
+          : "default",
+    ...(p.kind === "copilot" ? { installations: p.installations.size } : {}),
     auth: p.sharedCredential ? "shared" : "own",
   };
 }
@@ -108,8 +124,18 @@ function providerClient(
   p: LlmProvider,
   config: Pick<Config, "llmMaxRetries" | "llmRefusalFallback">,
   log: Logger,
+  deps: LlmDeps,
 ): LlmClient {
   switch (p.kind) {
+    case "copilot":
+      return createCopilotLlm({
+        capabilities: p.capabilities,
+        // The eval tool has no installations: the router never sends it here.
+        tokenFor:
+          deps.copilotToken ?? (() => Promise.reject(new Error("no installation token source"))),
+        passEnv: p.passEnv,
+        log,
+      });
     case "anthropic":
       return createAnthropicLlm({
         ...p.credential(),

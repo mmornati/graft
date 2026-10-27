@@ -19,6 +19,11 @@ export interface GitHubClientFactory {
   forInstallation(installationId: number, opts?: { feature?: Feature }): Promise<GitHubClient>;
   /** JWT-authenticated. Guarded too: it makes no writes of its own. */
   asApp(): GitHubClient;
+  /**
+   * A fresh installation token limited to `copilot_requests: write`, for the Copilot provider.
+   * It never reaches Octokit's cache or a log; it lasts an hour, so one is minted per call.
+   */
+  copilotToken?(installationId: number): Promise<{ token: string; expiresAt: string }>;
 }
 
 export function createGitHubClientFactory(o: {
@@ -63,6 +68,16 @@ export function createGitHubClientFactory(o: {
       return client;
     },
     asApp: () => appClient,
+    async copilotToken(installationId) {
+      const res = await appClient.request(
+        "POST /app/installations/{installation_id}/access_tokens",
+        {
+          installation_id: installationId,
+          permissions: { copilot_requests: "write" } as Record<string, string>,
+        },
+      );
+      return { token: res.data.token, expiresAt: res.data.expires_at };
+    },
   };
 }
 

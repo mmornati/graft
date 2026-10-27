@@ -289,16 +289,19 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 3. **Done.** `cli:opencode`: an inline config with one locked-down agent; schema in the prompt; one live call through the adapter succeeded.
 4. **Done.** Both adapters fail a call whose events show a tool that ran (`bad_request`). U-CLI-K-2 runs the Step 4 injection cases through both. **Open:** a live `cli:codex` run, which needs an OpenAI login.
 
-### Step 6: Copilot provider (PR 5)
+### Step 6: Copilot provider (PR 5), implemented and dormant
 
-1. Add the "Copilot Requests" permission to `github/app-manifest.json`. Mint installation tokens with `copilot_requests: write` per job; they last one hour, so fetch one per job.
-2. Write `src/llm/copilot.ts` on `@github/copilot-sdk`:
-   - one headless CLI process per worker
-   - an empty session per call: **no tools**, no MCP, system message in replace mode
-   - `responseSchema`, then Graft's own validation
-   - usage from `assistant.usage`
-3. A `copilot` provider entry is installation-aware: the router passes the job's installation so the client uses that org's token. An installation opts in through a setting (stored with the installation, not in `graft.yaml`, since it is a billing decision). Without the opt-in, or when the org does not allow Copilot requests from apps, the role falls back to the provider named in `fallback`.
-4. The same no-tools security test as Step 4.
+Built dormant at the operator's choice: nothing changes until a `copilot` entry is configured and the prerequisites in [Copilot provider](../configuration.md#copilot-provider) are met. Not yet run against a live installation.
+
+1. **Changed from the plan.** The shipped App manifests do **not** gain the Copilot requests permission: with it, every new install would grant Copilot billing even when nobody uses it. The operator adds the permission to their App when they enable the provider. `GitHubClientFactory.copilotToken` mints a token limited to `copilot_requests: write` per call through the guarded App client, whose existing `access_tokens` route allows it.
+2. **Done.** `src/llm/copilot.ts`, against `@github/copilot-sdk` 1.0.19:
+   - one runtime per worker in `"empty"` mode with no logged-in user and a stripped environment;
+   - every session has `availableTools: []` and `mcpServers: {}`, with config discovery, skills, the session store and infinite sessions off;
+   - a replace-mode system message, every permission rejected, an empty working directory;
+   - `responseSchema` plus Graft's own validation, and usage from `assistant.usage`;
+   - the SDK is loaded on first use and is not a dependency; without it calls fail `not_configured`.
+3. **Changed from the plan: opt-in lives in the registry.** The registry's `installations` list replaces a per-installation setting in the database (no migration). `fallbackModels` is required for every role model on Copilot. The router sends non-opted-in installations, and calls with none (the eval tool), to that fallback. `capabilities` and `serverRefusalFallback` take the installation, so the schema-in-prompt choice follows the provider that will actually answer. The intent job passes its installation through `GenerateOptions.installationId`.
+4. **Done.** U-COP-5 checks every isolation setting of the session against a fake SDK. U-COP-6 checks that a `tool.execution*` event fails the call. The injection cases need a live session to mean more than that, which is open.
 
 ### Step 7: Providers in the console (PR 6)
 
