@@ -7,6 +7,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 ### Added
 
 - The `copilot` provider kind (dormant until configured): calls billed to the installing organization's Copilot through an installation token limited to `copilot_requests: write`, only for installations listed as opted in, with a fallback model for the rest. Empty sessions: no tools, no MCP, a replaced system message. Needs `@github/copilot-sdk` in the image and the Copilot requests permission on the App. [Copilot provider](docs/configuration.md#copilot-provider)
+- The console's System page lists the models that wrote, first-passed and verified cards in the window (with their registry provider), and the failure classes of unavailable cards and failed verifiers. [Operator console](docs/console.md)
 - The `cli:codex` and `cli:opencode` provider kinds, with the same isolation as `cli:claude`: every tool feature off by name, nothing saved, and a call fails if a tool ran anyway. Self-hosted only. [CLI providers](docs/configuration.md#cli-providers)
 - The `cli:claude` provider kind: Claude Code on the worker's machine, run per call with no tools, MCP servers or settings, in an empty directory, with a clean environment. For self-hosted single-tenant installs only: the new `GRAFT_DEPLOYMENT=hosted` refuses it. [CLI providers](docs/configuration.md#cli-providers)
 - `pnpm eval` reads the provider registry, so a candidate model can be run against the saved baseline before it is put in a role. [Evaluation](docs/features/evaluation.md)

@@ -450,6 +450,68 @@ export function System({ ov }: { ov: Loaded<OverviewResponse> }) {
 
             <div class="cabinet__grid">
               <div class="ctable-wrap">
+                <h3>Models · {plural(data.hours, "hour")}</h3>
+                {data.models.length === 0 ? (
+                  <p class="cnote">No card was written in this window.</p>
+                ) : (
+                  <table class="ctable">
+                    <thead>
+                      <tr>
+                        <th scope="col">Model</th>
+                        <th scope="col" class="r">
+                          Wrote
+                        </th>
+                        <th scope="col" class="r">
+                          First pass
+                        </th>
+                        <th scope="col" class="r">
+                          Verified
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.models.map((m) => (
+                        <tr key={m.model}>
+                          <td>
+                            <code>{m.model}</code>
+                          </td>
+                          <td class={`r${m.writer ? "" : " dim"}`}>{num(m.writer)}</td>
+                          <td class={`r${m.firstPass ? "" : " dim"}`}>{num(m.firstPass)}</td>
+                          <td class={`r${m.verifier ? "" : " dim"}`}>{num(m.verifier)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <p class="cnote">
+                  As recorded on the cards. With a provider registry the part before the first{" "}
+                  <code>/</code> is the provider.
+                </p>
+              </div>
+              <div class="ctable-wrap">
+                <h3>Model failures · {plural(data.hours, "hour")}</h3>
+                {data.modelFailures.length === 0 ? (
+                  <p class="cnote">No card or verifier failed in this window.</p>
+                ) : (
+                  <table class="ctable">
+                    <tbody>
+                      {data.modelFailures.map((f) => (
+                        <tr key={`${f.kind}${f.reason}`}>
+                          <td>
+                            {f.kind === "card" ? "Card unavailable" : "Verifier failed"}:{" "}
+                            {words(f.reason)}
+                          </td>
+                          <td class="r">{num(f.count)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            <div class="cabinet__grid">
+              <div class="ctable-wrap">
                 <h3>Mode changes</h3>
                 {data.modeChanges.length === 0 ? (
                   <p class="cnote">

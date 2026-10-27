@@ -16,7 +16,7 @@ Graft does not need the console. It runs in a container of its own, from its own
 | **Changes** (`#/changes`) | Every pull request, newest first, one column per handler (author, writer, verifier, floor, policy, guard). Filters by repository, state, risk, verifier and author. |
 | **Change** (`#/changes/<id>`) | One pull request's whole record, with every intent card written for it. |
 | **Gate** (`#/gate`) | Card votes split the way the Phase 0 gate splits them (a vote by the PR's author never counts), the Wilson interval against the 90% target, and what the models did. A preview: `pnpm graft gate report --phase 0` is the authoritative report. |
-| **System** (`#/system`) | Jobs by name (done, waiting, oldest waiting, failed), webhook deliveries by event, repositories and modes, mode changes, the break-glass audit and MCP tokens (name and prefix, never the token). |
+| **System** (`#/system`) | Jobs by name (done, waiting, oldest waiting, failed), webhook deliveries by event, the models that wrote, first-passed or verified cards (as recorded: `<provider id>/<model>` with a [provider registry](configuration.md#model-providers)), why cards were unavailable and why verifiers failed, repositories and modes, mode changes, the break-glass audit and MCP tokens (name and prefix, never the token). |
 
 **Needs you** pins, newest and most urgent first:
 

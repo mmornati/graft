@@ -291,6 +291,13 @@ export interface ChangeRecord {
 export interface SystemResponse {
   hours: number;
   schemaVersion: string | null;
+  /**
+   * The models that wrote or checked cards in the window, as Graft recorded them: with a provider
+   * registry, `<provider id>/<model>`. The console never sees the worker's configuration.
+   */
+  models: { model: string; writer: number; firstPass: number; verifier: number }[];
+  /** Why cards in the window had no model output, and why verifiers failed. */
+  modelFailures: { kind: "card" | "verifier"; reason: string; count: number }[];
   jobs:
     | {
         name: string;

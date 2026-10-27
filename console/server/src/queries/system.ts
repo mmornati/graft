@@ -55,6 +55,36 @@ export async function system(
      where received_at > ${now}::timestamptz - make_interval(hours => ${hours})
      group by 1, 2 order by 3 desc`.execute(db);
 
+  // Each card names up to three models; count each role apart.
+  const models = await sql<{ model: string; writer: number; first_pass: number; verifier: number }>`
+    with uses as (
+      select writer_model as model, 'writer' as role from intent_cards
+       where created_at > ${now}::timestamptz - make_interval(hours => ${hours}) and writer_model is not null
+      union all
+      select first_pass_model, 'first_pass' from intent_cards
+       where created_at > ${now}::timestamptz - make_interval(hours => ${hours}) and first_pass_model is not null
+      union all
+      select verifier_model, 'verifier' from intent_cards
+       where created_at > ${now}::timestamptz - make_interval(hours => ${hours}) and verifier_model is not null
+    )
+    select model,
+           count(*) filter (where role = 'writer')::int as writer,
+           count(*) filter (where role = 'first_pass')::int as first_pass,
+           count(*) filter (where role = 'verifier')::int as verifier
+      from uses group by model order by count(*) desc, model limit 50`.execute(db);
+
+  const failures = await sql<{ kind: "card" | "verifier"; reason: string; n: number }>`
+    select 'card' as kind, failure_reason as reason, count(*)::int as n from intent_cards
+     where created_at > ${now}::timestamptz - make_interval(hours => ${hours})
+       and status = 'unavailable' and failure_reason is not null
+     group by 2
+    union all
+    select 'verifier', verifier_failure, count(*)::int from intent_cards
+     where created_at > ${now}::timestamptz - make_interval(hours => ${hours})
+       and verifier_status = 'error' and verifier_failure is not null
+     group by 2
+    order by 3 desc, 1, 2`.execute(db);
+
   const modeChanges = await db
     .selectFrom("mode_changes as m")
     .innerJoin("repositories as r", "r.id", "m.repository_id")
@@ -108,6 +138,13 @@ export async function system(
   return {
     hours,
     schemaVersion: migration.rows[0]?.name ?? null,
+    models: models.rows.map((m) => ({
+      model: m.model,
+      writer: m.writer,
+      firstPass: m.first_pass,
+      verifier: m.verifier,
+    })),
+    modelFailures: failures.rows.map((f) => ({ kind: f.kind, reason: f.reason, count: f.n })),
     jobs,
     jobsUnavailable,
     webhooks: webhooks.rows.map((w) => ({ event: w.event, status: w.status, count: w.n })),

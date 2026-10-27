@@ -303,10 +303,10 @@ Built dormant at the operator's choice: nothing changes until a `copilot` entry 
 3. **Changed from the plan: opt-in lives in the registry.** The registry's `installations` list replaces a per-installation setting in the database (no migration). `fallbackModels` is required for every role model on Copilot. The router sends non-opted-in installations, and calls with none (the eval tool), to that fallback. `capabilities` and `serverRefusalFallback` take the installation, so the schema-in-prompt choice follows the provider that will actually answer. The intent job passes its installation through `GenerateOptions.installationId`.
 4. **Done.** U-COP-5 checks every isolation setting of the session against a fake SDK. U-COP-6 checks that a `tool.execution*` event fails the call. The injection cases need a live session to mean more than that, which is open.
 
-### Step 7: Providers in the console (PR 6)
+### Step 7: Providers in the console (PR 6), implemented
 
-1. Show the configured providers, their kind, host, capabilities and role assignments in the read-only console. Never show `apiKeyEnv` values, only whether the variable is set.
-2. Per-provider call counts, failure classes and spend from the existing `llm call` data.
+1. **Changed from the plan.** The console runs in its own container with a SELECT-only role and never sees the worker's environment, so it cannot show the registry's configuration. Copying the registry into the console would put a second copy of provider settings (and key variable names) in a second container. Instead the System page shows the models as Graft recorded them on cards: with a registry these are `<provider id>/<model>`, so the provider is visible.
+2. **Done.** Per model in the window: how many cards it wrote, first-passed and verified. The failure classes of unavailable cards (`failure_reason`) and failed verifiers (`verifier_failure`). Spend stays where it was (Overview, per repository): the ledger records spend per change, not per model.
 
 ### Step 8: Cost cascade (Section 3)
 
