@@ -12,7 +12,7 @@
  * `--json-schema` is validated and re-prompted by the CLI, not constrained decoding; Graft
  * validates the answer again either way.
  */
-import type { CliAdapter, CliParsed } from "./cli.js";
+import { type CliAdapter, type CliParsed, failureForMessage, failureForStatus } from "./cli.js";
 import { parseJsonAnswer } from "./openai-compatible.js";
 import { type LlmFailure, type LlmUsage, ZERO_USAGE } from "./types.js";
 
@@ -31,13 +31,6 @@ interface ClaudeResult {
     cache_creation_input_tokens?: number;
   };
   modelUsage?: Record<string, unknown>;
-}
-
-function statusFailure(status: number): LlmFailure {
-  if (status === 429) return "rate_limited";
-  if (status >= 500) return "unavailable";
-  if (status === 401 || status === 403) return "auth";
-  return "bad_request";
 }
 
 /** The answering model: the one `modelUsage` reports, when it reports exactly one. */
@@ -94,7 +87,7 @@ export const claudeCliAdapter: CliAdapter = {
       ...(model ? { model } : {}),
     });
 
-    if (typeof r.api_error_status === "number") return fail(statusFailure(r.api_error_status));
+    if (typeof r.api_error_status === "number") return fail(failureForStatus(r.api_error_status));
     if (r.subtype === "error_max_structured_output_retries" || r.subtype === "error_max_turns") {
       return fail("invalid_json");
     }
@@ -102,7 +95,7 @@ export const claudeCliAdapter: CliAdapter = {
     if (r.stop_reason === "max_tokens") return fail("max_tokens");
     if (r.is_error || r.type !== "result") {
       // An error without an HTTP status: most often no login. Its text is never logged.
-      return fail(/log ?in|credential|api key|auth/i.test(r.result ?? "") ? "auth" : "unavailable");
+      return fail(failureForMessage(r.result ?? ""));
     }
     if (r.structured_output !== undefined && r.structured_output !== null) {
       return { ok: true, value: r.structured_output, usage, ...(model ? { model } : {}) };
