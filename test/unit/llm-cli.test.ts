@@ -173,7 +173,8 @@ describe("CLI transport", () => {
     expect(rec?.stdin).toBe("USER_CANARY_DIFF");
     // An empty directory of its own, removed afterwards.
     expect(rec?.entries).toEqual([]);
-    expect(path.basename(rec?.cwd ?? "")).toMatch(/^graft-cli-/);
+    expect(path.basename(rec?.cwd ?? "")).toBe("work");
+    expect(path.basename(path.dirname(rec?.cwd ?? ""))).toMatch(/^graft-cli-/);
     expect(existsSync(rec?.cwd ?? "/")).toBe(false);
     // Only the allow-list reaches it.
     const env = rec?.env ?? {};

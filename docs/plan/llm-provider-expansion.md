@@ -280,12 +280,14 @@ The `cli:*` kinds spawn a coding agent's CLI (`claude`, `codex`, `opencode`) log
 4. **Done.** `GRAFT_DEPLOYMENT=hosted` makes the registry refuse every `cli:*` kind. **Changed from the plan:** the warning is a startup log line per CLI provider, not a line on the card. The card already names the provider in the model (`local/claude-sonnet-5-5`).
 5. **Done.** U-CLI-T-9 runs syn-019, syn-020, syn-021 and syn-030 through `generateCard` against a fake `claude` that records its arguments, environment and directory. It checks that no tool flag is enabled, no secret is in the environment, the directory is empty and the untrusted text travels only on stdin.
 
-### Step 5: `codex` and `opencode` adapters (PR 4)
+### Step 5: `codex` and `opencode` adapters (PR 4), implemented
 
-1. Spike first: confirm the current flags for non-interactive JSON output, a schema option, and turning tools and MCP off, on the installed versions. Record them in this document.
-2. `cli:codex`: `codex exec` with `--output-schema` (or `@openai/codex-sdk` with `outputSchema` if the CLI flag is missing). Read-only sandbox, no approvals.
-3. `cli:opencode`: `opencode run` with JSON output. Schema support is unverified, so the default is `nativeSchema: false` and Graft's own validation.
-4. Extend the Step 4 security test to both adapters.
+1. **Done: the spike.**
+   - **opencode 1.19.3** (installed and run live). `opencode run` has no flag that turns tools off and no schema flag. It reads a whole config from `OPENCODE_CONFIG_CONTENT` and has `OPENCODE_DISABLE_*` switches. **Finding:** an agent with `tools: {"*": false}` was still offered `bash`, and only `permission: {"*": "deny"}` stopped it running. With every tool named, the model sees no tool at all. Sessions go to `XDG_DATA_HOME`, so the adapter points it into the call's scratch directory; the login then comes from `OPENCODE_AUTH_CONTENT` or a provider key.
+   - **codex-cli 0.162.1** (help and feature list; no login available). `exec` has `--json`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--sandbox read-only` and `--disable <feature>`. More than twenty features that give the model a tool are on by default (`shell_tool`, `unified_exec`, `browser_use`, `computer_use`, `apps`, `plugins`, `hooks`, `multi_agent`, ...). An offline run with the adapter's exact arguments reached the API, so every flag and feature name is accepted. It also showed transient `error` events ("Reconnecting...") before the final outcome.
+2. **Done.** `cli:codex`: every tool feature disabled by name; web search, MCP and `AGENTS.md` off; shell environment `none`; the system prompt in `developer_instructions`. Graft puts the schema in the prompt, since `--output-schema` is strict and Graft's root is `anyOf`.
+3. **Done.** `cli:opencode`: an inline config with one locked-down agent; schema in the prompt; one live call through the adapter succeeded.
+4. **Done.** Both adapters fail a call whose events show a tool that ran (`bad_request`). U-CLI-K-2 runs the Step 4 injection cases through both. **Open:** a live `cli:codex` run, which needs an OpenAI login.
 
 ### Step 6: Copilot provider (PR 5)
 
