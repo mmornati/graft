@@ -1204,5 +1204,56 @@ describe("break-glass and audit log (integration)", () => {
         breakGlassActorId: MAYA.id,
       });
     });
+
+    it("I-BG-30 a later evaluation that read the audit log before the label run committed does not publish over the bypass; its re-evaluation keeps it", async () => {
+      label(MAYA);
+      const at = (s: number) => ({ now: () => new Date(FIXED_NOW.getTime() + s * 1000) });
+      // The label run publishes between the later run's break-glass read and its lock: the first
+      // transaction the later run opens is its publish lock (nothing before it uses one).
+      let fired = false;
+      const db = new Proxy(t.db, {
+        get(target, prop) {
+          if (prop !== "transaction" || fired) {
+            const v = Reflect.get(target, prop, target);
+            return typeof v === "function" ? v.bind(target) : v;
+          }
+          return () => ({
+            execute: async (fn: Parameters<ReturnType<typeof t.db.transaction>["execute"]>[0]) => {
+              fired = true;
+              expect(
+                await evaluatePolicyJobRun(
+                  { ...EVAL_DATA, breakGlassHeadSha: HEAD_SHA, breakGlassActorId: MAYA.id },
+                  { ...jobContext(t), config: config(), clock: at(5) },
+                ),
+              ).toBe("published");
+              expect(lastCheck()).toMatchObject({ conclusion: "success" });
+              return target.transaction().execute(fn);
+            },
+          });
+        },
+      });
+      expect(
+        await evaluatePolicyJobRun(
+          { ...EVAL_DATA, trigger: "review" },
+          { ...jobContext(t), db, config: config(), clock: at(10) },
+        ),
+      ).toBe("stale");
+      expect(fired).toBe(true);
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      const queued = await jobsNamed(t.db, "policy.evaluate");
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.singleton_key).toMatch(/^policy:audit:/);
+      expect(
+        await evaluatePolicyJobRun(queued[0]?.data as EvaluateData, {
+          ...jobContext(t),
+          config: config(),
+          clock: at(20),
+        }),
+      ).toBe("unchanged");
+      expect(lastCheck()).toMatchObject({ conclusion: "success" });
+      expect((await auditRows()).map((r) => [r.kind, r.actor_login])).toEqual([
+        ["applied", "maya"],
+      ]);
+    });
   });
 });

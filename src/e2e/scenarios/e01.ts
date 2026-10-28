@@ -180,6 +180,9 @@ export const e01: ScenarioDef = {
       // (e)
       commit("c3", "branch", "Tune the zone note a third time"),
       ...policyIs("e", "e01.c3"),
+      // The policy check can complete before provenance and intent are published for the new
+      // head: INV-1E reads all three right after the scenario, so wait for the head to settle.
+      settleStep("e01.settle.e", "e01.pr", "e01.c3"),
     ];
   },
 };

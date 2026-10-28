@@ -86,6 +86,19 @@ export async function activeBreakGlassForChange(
 }
 
 /**
+ * How many rows the change has. The log is append-only and every writer holds the change lock, so
+ * a different count under the lock means another run wrote rows since this one read the log.
+ */
+export async function auditRowCount(ex: Executor, changeId: string): Promise<number> {
+  const row = await ex
+    .selectFrom("audit_log")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .where("change_id", "=", changeId)
+    .executeTakeFirstOrThrow();
+  return Number(row.n);
+}
+
+/**
  * D8, for the post-merge guard (step 5): was this change merged under break-glass? True when an
  * `applied` row exists for its final head with no later `removed` row of the change (any head).
  */
