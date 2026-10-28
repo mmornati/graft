@@ -48,6 +48,13 @@ const loginList = z
     message: "must be comma-separated GitHub logins (letters, digits, '-', optional [bot])",
   });
 
+const accountList = z
+  .string()
+  .transform(csv)
+  .refine((l) => l.every((x) => /^[a-z0-9-]+$/.test(x)), {
+    message: "must be comma-separated GitHub account logins (letters, digits, '-')",
+  });
+
 const emailList = z
   .string()
   .transform(csv)
@@ -264,6 +271,8 @@ const EnvSchema = z.object({
   GRAFT_MCP_OPEN_CHANGE_PER_HOUR: withDefault(intString(1, 100), "10"),
   GRAFT_MCP_MAX_TOKENS_PER_REPO: withDefault(intString(1, 50), "10"),
   GRAFT_TRUST_PROXY: withDefault(proxyList, ""),
+  GRAFT_ALLOWED_ACCOUNTS: withDefault(accountList, ""),
+  GRAFT_UNINSTALL_UNLISTED: withDefault(onOff, "off"),
 });
 
 export interface Config {
@@ -387,6 +396,14 @@ export interface Config {
    * Empty: Fastify's `trustProxy` is off and `req.ip` is the connection's peer.
    */
   readonly trustProxy: readonly string[];
+  /**
+   * Lowercased logins of the users and organizations whose installations Graft serves. Empty:
+   * every installation is served. Otherwise a delivery from any other account is dropped before
+   * it is stored, so a public App installed by a stranger costs nothing.
+   */
+  readonly allowedAccounts: readonly string[];
+  /** Uninstall the App when an account outside `allowedAccounts` installs it. */
+  readonly uninstallUnlisted: boolean;
 }
 
 /**
@@ -452,6 +469,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     EXAMPLE_WEBHOOK_SECRETS.has(parsed.data.GITHUB_WEBHOOK_SECRET)
   ) {
     problems.push("GITHUB_WEBHOOK_SECRET: is the .env.example placeholder; set the App's secret");
+  }
+
+  if (
+    parsed.success &&
+    parsed.data.GRAFT_UNINSTALL_UNLISTED &&
+    parsed.data.GRAFT_ALLOWED_ACCOUNTS.length === 0
+  ) {
+    problems.push("GRAFT_UNINSTALL_UNLISTED: needs GRAFT_ALLOWED_ACCOUNTS");
   }
 
   const inline = parsed.success
@@ -552,5 +577,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     mcpOpenChangePerHour: d.GRAFT_MCP_OPEN_CHANGE_PER_HOUR,
     mcpMaxTokensPerRepo: d.GRAFT_MCP_MAX_TOKENS_PER_REPO,
     trustProxy: Object.freeze([...d.GRAFT_TRUST_PROXY]),
+    allowedAccounts: Object.freeze([...d.GRAFT_ALLOWED_ACCOUNTS]),
+    uninstallUnlisted: d.GRAFT_UNINSTALL_UNLISTED,
   });
 }

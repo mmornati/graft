@@ -25,6 +25,7 @@ describe("mutation guard: classification", () => {
     const rows: [string, string, unknown][] = [
       ["POST", "/app/installations/45/access_tokens", { kind: "auth" }],
       ["POST", "/app/hook/deliveries/7/attempts", { kind: "app" }],
+      ["DELETE", "/app/installations/45", { kind: "app" }],
       ["POST", "/repos/o/r/check-runs", p0],
       ["PATCH", "/repos/o/r/check-runs/12", p0],
       ["POST", "/repos/o/r/issues/3/comments", p0],
@@ -301,6 +302,25 @@ describe("mutation guard: the hook", () => {
     expect(sent).not.toBeInstanceOf(MutationRefusedError);
     expect(api.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       "POST /app/hook/deliveries/5/attempts",
+    ]);
+  });
+
+  it("U-MG-23 removing an installation passes for the App client only; an installation client is refused", async () => {
+    const api = createFakeGitHubApi();
+    const factory = fakeGitHubFactory(api, allowAll);
+    const installation = await factory.forInstallation(1, { feature: "guard" });
+    const e = await refusal(
+      installation.request("DELETE /app/installations/{installation_id}", { installation_id: 5 }),
+    );
+    expect(e.refusal).toBe("unknown_route");
+    expect(api.requests).toEqual([]);
+    const sent = await factory
+      .asApp()
+      .request("DELETE /app/installations/{installation_id}", { installation_id: 5 })
+      .catch((x: unknown) => x);
+    expect(sent).not.toBeInstanceOf(MutationRefusedError);
+    expect(api.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "DELETE /app/installations/5",
     ]);
   });
 
