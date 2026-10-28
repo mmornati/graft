@@ -25,6 +25,18 @@ Registering the report manifest is the safest default. See [Modes](features/mode
 
 After registering, record the App's **slug** too. Setting `GITHUB_APP_SLUG` enables the `<slug>[bot]` fallback that recognises Graft's own comment when `performed_via_github_app` is missing from the comments API (decision D13; see [architecture.md](architecture.md#managed-pr-comment)). Install the App on **selected** repositories only; [docs/pilots/onboarding.md](pilots/onboarding.md) explains why and lists what Graft reads and stores.
 
+## More than one account
+
+One Graft server holds one App's credentials (`GITHUB_APP_ID`, the key, `GITHUB_WEBHOOK_SECRET`), but an App can be installed on any number of accounts, and Graft keeps each installation apart. To serve a second user or organization, install the same App there instead of registering a second one.
+
+The manifests are `"public": false`, and a private App installs only on the account that owns it. To install it elsewhere:
+
+1. Set `GRAFT_ALLOWED_ACCOUNTS` to every account Graft should serve (for example `mmornati,horae-dev`) and restart. Do this first: GitHub cannot limit who installs a public App, and it signs a stranger's deliveries with your webhook secret. With the list set, those deliveries are answered `202 ignored` and never stored or enqueued. Add `GRAFT_UNINSTALL_UNLISTED=on` to also remove the App from such an account when it installs it ([configuration](configuration.md)).
+2. In the App's settings, **Advanced → Make public**.
+3. Open `https://github.com/apps/<slug>/installations/new`, pick the account and select its repositories. For an organization, an owner approves the install and its permissions.
+
+Optionally, let only GitHub reach the webhook: at the proxy, allow `/webhooks/github` from the `hooks` ranges of <https://api.github.com/meta> only. That does not replace the list, since a stranger's installation also sends from those ranges.
+
 To run Graft on a server instead of your laptop (a stable HTTPS webhook URL, no tunnel), see [Deploying Graft](deploy/README.md).
 
 The human steps (sandbox org, test repositories, smee channel, registration, install checks) are tracked in [docs/phase-0/HUMAN-TODO.md](phase-0/HUMAN-TODO.md).

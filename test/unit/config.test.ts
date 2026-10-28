@@ -422,4 +422,23 @@ describe("config: Phase 1 step 7", () => {
     expect(loadConfig({ ...valid, GITHUB_APP_SLUG: "Graft-Dev" }).githubAppSlug).toBe("graft-dev");
     expect(loadConfig(valid).githubAppSlug).toBeUndefined();
   });
+
+  it("U-CFG-42 GRAFT_ALLOWED_ACCOUNTS is lowercased, empty by default; a [bot] login is refused; uninstall needs a list", () => {
+    expect(loadConfig(valid).allowedAccounts).toEqual([]);
+    expect(loadConfig(valid).uninstallUnlisted).toBe(false);
+    const c = loadConfig({ ...valid, GRAFT_ALLOWED_ACCOUNTS: " mmornati , Horae-Dev " });
+    expect(c.allowedAccounts).toEqual(["mmornati", "horae-dev"]);
+    expect(errorOf({ ...valid, GRAFT_ALLOWED_ACCOUNTS: "renovate[bot]" }).message).toContain(
+      "GRAFT_ALLOWED_ACCOUNTS:",
+    );
+    expect(errorOf({ ...valid, GRAFT_UNINSTALL_UNLISTED: "on" }).message).toContain(
+      "GRAFT_UNINSTALL_UNLISTED: needs GRAFT_ALLOWED_ACCOUNTS",
+    );
+    const u = loadConfig({
+      ...valid,
+      GRAFT_ALLOWED_ACCOUNTS: "mmornati",
+      GRAFT_UNINSTALL_UNLISTED: "on",
+    });
+    expect(u.uninstallUnlisted).toBe(true);
+  });
 });

@@ -6,6 +6,7 @@ import type { Logger } from "../core/logger.js";
 import type { Db } from "../db/client.js";
 import { sanitizeError } from "../queue/errors.js";
 import type { JobQueue } from "../queue/queue.js";
+import { checkAccount } from "./accounts.js";
 import { recordDelivery } from "./deliveries.js";
 import type { Registry } from "./registry.js";
 
@@ -14,8 +15,13 @@ export interface ReceiverDeps {
   queue: JobQueue;
   registry: Registry;
   clock: Clock;
-  config: Pick<Config, "githubWebhookSecret" | "webhookBodyLimitBytes">;
+  config: Pick<
+    Config,
+    "githubWebhookSecret" | "webhookBodyLimitBytes" | "allowedAccounts" | "uninstallUnlisted"
+  >;
   log: Logger;
+  /** Removes the App from an installation (`GRAFT_UNINSTALL_UNLISTED`). */
+  uninstall?: (installationId: number) => Promise<void>;
 }
 
 /** Matches the CHECK constraint on webhook_deliveries.delivery_id. */
@@ -97,6 +103,38 @@ export const webhookReceiver =
         const repositoryId = numericId(payload.repository);
 
         try {
+          const verdict = await checkAccount(
+            deps.db,
+            deps.config.allowedAccounts,
+            installationId,
+            payload,
+          );
+          if (!verdict.allowed) {
+            // Answered with a 2xx so GitHub does not redeliver it; nothing is stored or enqueued.
+            log.warn(
+              { action, installationId, account: verdict.account, outcome: "account_not_allowed" },
+              "webhook from an account outside GRAFT_ALLOWED_ACCOUNTS dropped",
+            );
+            if (
+              deps.config.uninstallUnlisted &&
+              deps.uninstall &&
+              installationId !== undefined &&
+              event === "installation" &&
+              action === "created"
+            ) {
+              const id = installationId;
+              // Not awaited: GitHub's delivery timeout is 10 s and the answer does not depend on it.
+              void deps.uninstall(id).then(
+                () => log.warn({ installationId: id }, "unlisted installation removed"),
+                (err: unknown) =>
+                  log.error(
+                    { err: sanitizeError(err), installationId: id },
+                    "removing an unlisted installation failed",
+                  ),
+              );
+            }
+            return reply.code(202).send({ status: "ignored" });
+          }
           const outcome = await recordDelivery(deps, {
             deliveryId,
             event,

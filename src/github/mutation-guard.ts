@@ -119,6 +119,9 @@ const ROUTES: readonly Route[] = [
   // which is why a production allow-list holds it. Graft's own code never calls it. Only a client
   // without an installation (`forApp`) may send it: an installation client is refused.
   { method: "POST", re: /^\/app\/hook\/deliveries\/\d+\/attempts$/, kind: "app" },
+  // App-level, with the App JWT: the receiver removes the App from an account outside
+  // GRAFT_ALLOWED_ACCOUNTS when GRAFT_UNINSTALL_UNLISTED is on. An installation client is refused.
+  { method: "DELETE", re: /^\/app\/installations\/\d+$/, kind: "app" },
   { method: "POST", re: new RegExp(`${OWNER_REPO}/check-runs$`), kind: "phase0" },
   { method: "PATCH", re: new RegExp(`${OWNER_REPO}/check-runs/\\d+$`), kind: "phase0" },
   { method: "POST", re: new RegExp(`${OWNER_REPO}/issues/\\d+/comments$`), kind: "phase0" },

@@ -285,3 +285,56 @@ describe("webhook receiver (real Postgres + pg-boss)", () => {
     expect(await countJobs(t.db)).toBe(1);
   });
 });
+
+describe("webhook receiver: GRAFT_ALLOWED_ACCOUNTS (real Postgres)", () => {
+  let a: TestApp;
+  let srv: Awaited<ReturnType<typeof buildServer>>;
+  beforeAll(async () => {
+    a = await createTestApp({ config: { GRAFT_ALLOWED_ACCOUNTS: "graft-sandbox" } });
+    srv = await buildServer(a.deps);
+  });
+  afterAll(async () => {
+    await srv.close();
+    await a.close();
+  });
+  beforeEach(() => truncateAll(a.db));
+  const rows = () => a.db.selectFrom("webhook_deliveries").selectAll().execute();
+
+  it("I-WH-7 a listed account is enqueued; ping (no installation) still reaches the store", async () => {
+    expect((await postFixture(srv, "installation.created", "acc-1")).json()).toEqual({
+      status: "enqueued",
+    });
+    expect((await postFixture(srv, "ping", "acc-2")).json()).toEqual({ status: "ignored" });
+    expect((await rows()).map((r) => r.delivery_id).sort()).toEqual(["acc-1", "acc-2"]);
+  });
+
+  it("I-WH-8 an unlisted account leaves no delivery row and no job", async () => {
+    const f = loadFixture("installation.created");
+    const p = f.payload as { installation: { account: { login: string } } };
+    p.installation.account.login = "stranger";
+    const res = await postRaw(srv, "installation", JSON.stringify(p), "acc-3");
+    expect(res.json()).toEqual({ status: "ignored" });
+    expect(await rows()).toEqual([]);
+    expect(await countJobs(a.db)).toBe(0);
+  });
+
+  it("I-WH-9 a payload naming no account is matched on the stored installation; unknown is refused", async () => {
+    const bare = JSON.stringify({ action: "requested", installation: { id: 1000001 } });
+    expect((await postRaw(srv, "check_suite", bare, "acc-4")).json()).toEqual({
+      status: "ignored",
+    });
+    expect(await rows()).toEqual([]);
+    await a.db
+      .insertInto("installations")
+      .values({
+        id: 1000001,
+        account_id: 9000001,
+        account_login: "Graft-Sandbox",
+        account_type: "User",
+        repository_selection: "selected",
+      })
+      .execute();
+    await postRaw(srv, "check_suite", bare, "acc-5");
+    expect((await rows()).map((r) => r.delivery_id)).toEqual(["acc-5"]);
+  });
+});

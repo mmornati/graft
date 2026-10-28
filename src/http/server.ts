@@ -39,6 +39,11 @@ export async function buildServer(deps: AppDeps): Promise<AppServer> {
       clock: deps.clock,
       config: deps.config,
       log: deps.log,
+      uninstall: async (installationId) => {
+        await deps.github.asApp().request("DELETE /app/installations/{installation_id}", {
+          installation_id: installationId,
+        });
+      },
     }),
   );
   // Phase 1 step 6 (D22): off means the route is not registered (the not-found handler answers).
