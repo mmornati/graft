@@ -30,7 +30,7 @@ import { type LoadedPolicy, loadBasePolicy, resolveBaseCommit } from "../../poli
 import { canonicalHash } from "../../policy/parse.js";
 import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
-import { insertAuditRow, type NewAuditRow } from "../audit/index.js";
+import { auditRowCount, insertAuditRow, type NewAuditRow } from "../audit/index.js";
 import { type Change, getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import {
   ensureRepository,
@@ -425,8 +425,11 @@ export async function evaluatePolicyJobRun(
 
   // 4b. Break-glass (step 3, §6): only when the feature is on. Outside the lock; it writes nothing.
   let breakGlass: BreakGlassFacts = { state: "none", revoke: null };
+  // The audit log as this run reads it, checked again under the lock (step 7).
+  let auditSeen: number | null = null;
   if (config.breakGlassLabel !== null) {
     try {
+      auditSeen = await auditRowCount(ctx.db, change.id);
       breakGlass = await resolveBreakGlass(octokit, ctx.db, {
         owner: data.owner,
         repo: data.repo,
@@ -530,6 +533,8 @@ export async function evaluatePolicyJobRun(
   };
   // A newly verified break-glass whose run lost the race to a later evaluation (below).
   let auditWrittenWhileStale = false;
+  // Another run wrote audit rows after this one read the log: its break-glass state is out of date.
+  let auditMoved = false;
 
   const identity = { changeId: change.id, headSha, policyFileSha: view.fileSha };
   const fresh = (current: Change | undefined): boolean =>
@@ -569,6 +574,14 @@ export async function evaluatePolicyJobRun(
       // The later run may not have been the label's own trigger, so it did not verify the
       // break-glass. Keep what this run verified for the same head, and re-evaluate (below).
       if (await recordAudit(tx)) auditWrittenWhileStale = true;
+      return "stale" as const;
+    }
+    // A run that read the log before a break-glass run committed its row, and got here after it,
+    // would publish over the bypass with a later read time. It writes nothing (its rows were
+    // decided on the old log) and queues one re-evaluation, which reads the log again (below).
+    if (auditSeen !== null && (await auditRowCount(tx, change.id)) !== auditSeen) {
+      ctx.log.info({ changeId: change.id }, "stale: the audit log changed since it was read");
+      auditMoved = true;
       return "stale" as const;
     }
     const existing = await findVerdict(tx, identity);
@@ -716,6 +729,13 @@ export async function evaluatePolicyJobRun(
       },
       { singletonKey: `policy:breakglass:${change.id}:${headSha}:${factsReadAt.getTime()}` },
     );
+  }
+
+  // The same data, so a label run is sent again with its filters (they only refuse).
+  if (auditMoved) {
+    await ctx.queue.send(policyEvaluateJob, data, {
+      singletonKey: `policy:audit:${change.id}:${headSha}:${factsReadAt.getTime()}`,
+    });
   }
 
   // D9: re-evaluate at the end of the card wait, in every mode (the singleton key makes it once).

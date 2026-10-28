@@ -79,6 +79,7 @@ describe("plans as data", () => {
           "act:e01.c3",
           "custom:e01.e.expect",
           "wait:e01.e.policy",
+          "wait:e01.settle.e",
         ],
         "s01": [
           "act:s01.issue",
