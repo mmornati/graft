@@ -50,6 +50,7 @@ In the resource's **Environment Variables** page, Coolify already shows what the
 | `ANTHROPIC_API_KEY` | Optional, for intent cards. |
 | `GRAFT_LLM_PROVIDERS` | Optional: a [provider registry](../model-providers.md) inline (one-line JSON is easiest). Each key variable it names must also be added to the `x-graft-env` block of `compose.coolify.yaml`, or the containers never see it. |
 | `GRAFT_MODE_CEILING` | Leave unset (`report`). |
+| `GRAFT_PUBLIC_URL` | Optional: the server's domain, for example `https://graft.example.com`. Set, the [review summary](../features/review-summary.md#the-status-card) shows a status card image the server draws. Not the console's domain. |
 
 Do not mark these as **build** variables: the image build needs none of them, and build variables can end up in image layers.
 

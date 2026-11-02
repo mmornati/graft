@@ -29,6 +29,8 @@ x-graft-env: &graft-env
   GRAFT_LLM_PROVIDERS: ${GRAFT_LLM_PROVIDERS:-}
   GRAFT_DEPLOYMENT: ${GRAFT_DEPLOYMENT:-self-hosted}
   GRAFT_MODE_CEILING: ${GRAFT_MODE_CEILING:-report}
+  # The server's domain (https://..., no trailing slash): the review summary's status card image.
+  GRAFT_PUBLIC_URL: ${GRAFT_PUBLIC_URL:-}
 
 # Each Graft service builds the same Dockerfile; they share the build cache. Do not give them a
 # common `image:` name: Coolify builds services in parallel and a shared tag makes all but one fail.
