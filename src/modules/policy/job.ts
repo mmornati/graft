@@ -43,6 +43,7 @@ import { getEffectiveModes } from "../modes/effective.js";
 import { getChangeProvenance } from "../provenance/index.js";
 import { resolveApprovers } from "./approvals.js";
 import { type BreakGlassFacts, type BreakGlassState, resolveBreakGlass } from "./break-glass.js";
+import { cardKey, cardMarkdown } from "./card.js";
 import { buildFacts, listChangedPaths, listCommitLogins, listReviews } from "./facts.js";
 import {
   type BreakGlassView,
@@ -496,18 +497,24 @@ export async function evaluatePolicyJobRun(
   const title = policyTitle(view);
   const summary = renderPolicySection(view);
   const details = renderPolicyDetails(view);
-  const overview = renderSummarySection({
-    headSha,
-    card: card === undefined ? null : rowToView(card),
-    policy: view,
-    signals,
-    author: {
-      kind: provenance?.head_sha === headSha ? provenance.author_kind : null,
-      model: provenance?.head_sha === headSha ? provenance.model : null,
-      agent: provenance?.head_sha === headSha ? provenance.agent : null,
-      modelDisputed: (provenance?.conflicts.model?.length ?? 0) > 1,
+  const publicUrl = config.publicUrl;
+  const statusCard =
+    publicUrl === null ? undefined : { publicUrl, key: cardKey(config.githubWebhookSecret) };
+  const overview = renderSummarySection(
+    {
+      headSha,
+      card: card === undefined ? null : rowToView(card),
+      policy: view,
+      signals,
+      author: {
+        kind: provenance?.head_sha === headSha ? provenance.author_kind : null,
+        model: provenance?.head_sha === headSha ? provenance.model : null,
+        agent: provenance?.head_sha === headSha ? provenance.agent : null,
+        modelDisputed: (provenance?.conflicts.model?.length ?? 0) > 1,
+      },
     },
-  });
+    statusCard === undefined ? {} : { cardImage: (m) => cardMarkdown(m, statusCard) },
+  );
   const folded = foldPolicySection(view, summary);
   const factsHash = policyFactsHash({
     verdict: view.verdict,

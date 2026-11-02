@@ -42,7 +42,7 @@ describe("provenance rendering", () => {
       "Head `ec26c3e` · no `Graft-*` trailers found. Agents can declare provenance with `Graft-Agent`, `Graft-Model`, `Graft-Task` and `Graft-Session` git trailers.",
     );
     expect(text).not.toContain("provenance warning");
-    expect(text).toContain("<summary>Provenance: written by a human</summary>");
+    expect(text).toContain("<summary>🧬 Provenance · written by a human</summary>");
   });
 
   it("U-REN-3 the truncated footer sentence, and singular 'commit'", () => {

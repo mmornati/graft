@@ -91,7 +91,7 @@ const SUMMARY_WHO: Record<ProvenanceResult["authorKindReason"], string> = {
 
 export function renderProvenanceSection(r: ProvenanceResult, o: RenderOptions): string {
   const lines = [
-    `<details><summary>Provenance: ${SUMMARY_WHO[r.authorKindReason]}</summary>`,
+    `<details><summary>🧬 Provenance · ${SUMMARY_WHO[r.authorKindReason]}</summary>`,
     "",
     "| | |",
     "| --- | --- |",

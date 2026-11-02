@@ -148,6 +148,12 @@ const REQUESTED_MARK: Record<RequestedStatus, string> = {
   missing: "❌",
   deferred: "⏭️",
 };
+const REQUESTED_COUNT: Record<RequestedStatus, string> = {
+  done: "done",
+  partial: "partly done",
+  missing: "not done",
+  deferred: "for later",
+};
 const REQUESTED_NOTE: Record<RequestedStatus, string> = {
   done: "",
   partial: " (partly done)",
@@ -197,10 +203,14 @@ function askedBlock(v: CardResult, o: { maxOos: number; maxBullets: number }): s
   }
   body.push(...asked, ...shownExtra, ...shownOos);
   if (body.length === 0) return [];
+  const counts = (["done", "partial", "missing", "deferred"] as const).flatMap((st) => {
+    const n = card.requested.filter((r) => r.status === st).length;
+    return n === 0 ? [] : [`${n} ${REQUESTED_COUNT[st]}`];
+  });
   const title =
     card.requested.length > 0 || card.intentMatch === "unknown"
-      ? "What was asked vs what was done"
-      : `Also changed (${extra.length + oos.length})`;
+      ? `🎯 What was asked vs what was done${counts.length > 0 ? ` · ${counts.join(" · ")}` : ""}`
+      : `➕ Also changed · ${extra.length + oos.length}`;
   return [`<details><summary>${title}</summary>`, "", ...body, "", "</details>"];
 }
 
@@ -281,7 +291,7 @@ function detailsBlock(v: CardResult): string[] {
       ? "; verifier unavailable"
       : `; verifier ${codeSpan(v.models.verifier ?? "unknown")} supported ${supported} of ${claims.length} claims${unchecked > 0 ? ` (${unchecked} could not be checked)` : ""}`;
   return [
-    "<details><summary>How this card was made</summary>",
+    "<details><summary>🔍 How this card was made</summary>",
     "",
     `- ${riskLine(v)}`,
     `- ${floorLine(v)}`,
@@ -303,7 +313,7 @@ function renderOk(
   const asked = askedBlock(v, o);
   if (asked.length > 0) lines.push(...asked, "");
   lines.push(
-    `<details><summary>Behavior changes (${n})</summary>`,
+    `<details><summary>📝 Behavior changes · ${n}</summary>`,
     "",
     ...card.behaviorChanges.map((b) => `- ${escapeProse(b, 200)}`),
     "",

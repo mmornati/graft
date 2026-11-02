@@ -313,7 +313,7 @@ describe("intent.generate job", () => {
     const section = renderIntentSection(view, { retryScheduled: false });
     const sections = parseManagedComment(body);
     expect(sections?.get("intent")).toBe(section);
-    expect(sections?.get("provenance")).toContain("<summary>Provenance:");
+    expect(sections?.get("provenance")).toContain("<summary>🧬 Provenance ·");
 
     // Each module's write keeps the other's section byte for byte.
     const before = new Map(sections);

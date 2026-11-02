@@ -97,7 +97,7 @@ function okView(over: Partial<IntentView> = {}): IntentView {
 
 const EXPECTED_CARD = `**Goal:** Retry failed webhook deliveries up to 5 times with exponential backoff.
 
-<details><summary>What was asked vs what was done</summary>
+<details><summary>🎯 What was asked vs what was done · 1 done · 1 for later</summary>
 
 - ✅ Retry failed deliveries with exponential backoff.
 - ⏭️ Alert the operator after repeated failures. (left for later)
@@ -106,7 +106,7 @@ const EXPECTED_CARD = `**Goal:** Retry failed webhook deliveries up to 5 times w
 
 </details>
 
-<details><summary>Behavior changes (2)</summary>
+<details><summary>📝 Behavior changes · 2</summary>
 
 - Failed deliveries are retried up to 5 times, waiting 1, 2, 4, 8 and 16 seconds.
 - A delivery that still fails after 5 retries is marked failed and logged at error level.
@@ -118,7 +118,7 @@ const EXPECTED_CARD = `**Goal:** Retry failed webhook deliveries up to 5 times w
 >
 > - Behavior change 1 is contradicted: src/retry.ts caps retries at 3, not 5.
 
-<details><summary>How this card was made</summary>
+<details><summary>🔍 How this card was made</summary>
 
 - **Risk:** \`sensitive\` · rules \`sensitive\` · writer \`logic\` · verifier \`logic\`
 - Rules set the floor to \`sensitive\`: dependency manifest or lockfile (\`package.json\`, \`pnpm-lock.yaml\`)
@@ -204,13 +204,15 @@ describe("intent rendering", () => {
     const empty = { goal: "g.", behaviorChanges: ["b."], outOfScopeEdits: [], requested: [] };
     const none = okView({ card: { ...empty, intentMatch: null } });
     expect(renderIntentSection(none, no)).not.toContain("Out of scope");
-    expect(renderIntentSection(none, no)).toContain("<details><summary>Also changed (1)</summary>");
+    expect(renderIntentSection(none, no)).toContain(
+      "<details><summary>➕ Also changed · 1</summary>",
+    );
     const flagged = okView({
       card: { ...empty, intentMatch: null },
       verifier: { ...okView().verifier, missing: [], unexplained: ["docs/x.md"] },
     });
     expect(renderIntentSection(flagged, no)).toContain(
-      "<details><summary>Also changed (1)</summary>\n\n- ➕ Out of scope: `docs/x.md`: flagged by the verifier",
+      "<details><summary>➕ Also changed · 1</summary>\n\n- ➕ Out of scope: `docs/x.md`: flagged by the verifier",
     );
     // Nothing asked, nothing extra: no fold at all.
     const bare = okView({
@@ -222,7 +224,7 @@ describe("intent rendering", () => {
     // No stated intent says so.
     const unknown = okView({ card: { ...empty, intentMatch: "unknown" } });
     expect(renderIntentSection(unknown, no)).toContain(
-      "<details><summary>What was asked vs what was done</summary>\n\nNeither a linked issue nor the description says what was wanted.",
+      "<details><summary>🎯 What was asked vs what was done</summary>\n\nNeither a linked issue nor the description says what was wanted.",
     );
   });
 

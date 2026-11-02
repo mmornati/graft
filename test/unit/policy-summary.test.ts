@@ -7,6 +7,7 @@ import {
   assess,
   renderSummarySection,
   type SummaryInput,
+  summaryModel,
 } from "../../src/modules/policy/summary.js";
 import { enforcedConclusion } from "../../src/policy/enforce.js";
 import { evaluatePolicy, type PolicyFacts } from "../../src/policy/evaluate.js";
@@ -202,19 +203,45 @@ describe("review summary", () => {
   it("U-SUM-1 the upload example renders byte for byte", () => {
     expect(renderSummarySection(input())).toBe(
       [
-        "### ⚠️ Needs human review · 3 points to check",
+        "> [!WARNING]",
+        "> **Needs human review** · 3 things to check · 2 approvals needed",
+        "",
+        "| 🎯 Intent | 🛡️ Risk | 🧪 CI | 🤖 AI review | 👥 Approvals |",
+        "| :---: | :---: | :---: | :---: | :---: |",
+        "| ✅ **Matches** | 🟠 **Sensitive** | ⏳ **15/16 running** | ➖ **Ran** | 🟠 **0/2** |",
+        "",
+        "**Before you merge**",
+        "",
+        "- 👀 **Not read in full by Graft** · `scripts/arc_chat.py`, `scripts/arc_chat_upload.py`, `tests/install/test_chat_attachments.py`: check these files yourself.",
+        "- ➕ **Also changed, not in the description** · Uploaded files are never purged and there is no total disk quota.",
+        "- 🛡️ **Sensitive files** · configured sensitive path (`scripts/arc_chat.py`, `scripts/arc_serve.py`)",
+        "",
+        "<details><summary>Why this verdict</summary>",
         "",
         "- **Matches the intent?** ✅ **Yes.** Does what issue #342 asks. 1 change not in the description. 1 item left for later on purpose.",
         "- **Safe to merge?** ⚠️ **Not without a human review.** Risk `sensitive`: Adds a public upload endpoint that writes files to disk. **CI:** 15 of 16 passed, 1 still running. **AI review `claude-review`** on `34290fb`: ran (its check does not say whether it found issues); same model family as the author. **Graft:** 2 of 2 claims supported, 3 files not read in full.",
         "- **Human review:** **2 approvals needed** · 0 so far · *report mode: Graft blocks nothing*",
         "",
-        "**Where to look**",
+        "</details>",
         "",
-        "1. **Not read in full by Graft** · `scripts/arc_chat.py`, `scripts/arc_chat_upload.py`, `tests/install/test_chat_attachments.py`: check these files yourself.",
-        "2. **Also changed, not in the description** · Uploaded files are never purged and there is no total disk quota.",
-        "3. **Sensitive files** · configured sensitive path (`scripts/arc_chat.py`, `scripts/arc_serve.py`)",
+        "---",
       ].join("\n"),
     );
+  });
+
+  it("U-SUM-1b with a card image, the card replaces the gate table", () => {
+    const out = renderSummarySection(input(), {
+      cardImage: (m) => `<picture>${m.gates.map((g) => g.value).join("|")}</picture>`,
+    });
+    expect(out).toContain("<picture>Matches|Sensitive|15/16 running|Ran|0/2</picture>");
+    expect(out).not.toContain("| 🎯 Intent |");
+    expect(summaryModel(input()).gates.map((g) => g.status)).toEqual([
+      "ok",
+      "warn",
+      "running",
+      "neutral",
+      "warn",
+    ]);
   });
 
   it("U-SUM-2 a sensitive change is never safe, whatever CI and AI reviews say", () => {
@@ -247,7 +274,7 @@ describe("review summary", () => {
     const clean = [...ci(4), { name: "review", state: "passed" as const }];
     expect(assess(logic({ signals: signals(clean, gpt) }))).toBe("green");
     expect(renderSummarySection(logic({ signals: signals(clean, gpt) }))).toMatch(
-      /^### 🟢 Low risk\n/,
+      /^> \[!TIP\]\n> \*\*Low risk\*\*/,
     );
     // Same family as the author, no verdict in the conclusion, or no review: a normal review.
     expect(assess(logic({ signals: signals(clean, claude) }))).toBe("yellow");
@@ -288,7 +315,7 @@ describe("review summary", () => {
     });
     expect(assess(i)).toBe("green");
     const out = renderSummarySection(i);
-    expect(out).toMatch(/^### 🟢 Safe to merge\n/);
+    expect(out).toMatch(/^> \[!TIP\]\n> \*\*Safe to merge\*\* · no approval needed\n/);
     expect(out).toContain("- **Human review:** **None required** by the policy");
     expect(out).not.toContain("Where to look");
   });
@@ -299,8 +326,8 @@ describe("review summary", () => {
     });
     expect(assess(failing)).toBe("red");
     const out = renderSummarySection(failing);
-    expect(out).toMatch(/^### ❌ Don't merge yet\n/);
-    expect(out).toContain("1. **CI fails** · `unit @octocat`: fix it before merging.");
+    expect(out).toMatch(/^> \[!CAUTION\]\n> \*\*Don't merge yet\*\*/);
+    expect(out).toContain("- 🧪 **CI fails** · `unit @octocat`: fix it before merging.");
     expect(out).toContain("**CI:** 1 of 3 failing (`unit @octocat`).");
 
     const trusted: AiReviewCheck[] = [
@@ -311,7 +338,7 @@ describe("review summary", () => {
     });
     expect(assess(issues)).toBe("red");
     expect(renderSummarySection(issues)).toContain(
-      "1. **AI review found issues** · `review`: read its comments.",
+      "- 🤖 **AI review found issues** · `review`: read its comments.",
     );
 
     const wrong = input({
@@ -337,7 +364,7 @@ describe("review summary", () => {
       "- **Matches the intent?** ❌ **The card does not match the diff.** Read the diff instead of the card.",
     );
     expect(w).toContain(
-      "1. **The card is wrong** · Behavior change 1 is contradicted: Caps at 10 MB.",
+      "- ❌ **The card is wrong** · Behavior change 1 is contradicted: Caps at 10 MB.",
     );
 
     const injected = input({ card: card({ instructionsInData: true }) });
@@ -362,7 +389,7 @@ describe("review summary", () => {
     ]);
     const p = renderSummarySection(partial);
     expect(p).toContain("⚠️ **Partly.** 1 of 2 requested items done.");
-    expect(p).toContain("1. **Asked, not done** · Attach photos.");
+    expect(p).toContain("- 🎯 **Asked, not done** · Attach photos.");
     expect(assess(withMatch("differs"))).toBe("red");
     expect(renderSummarySection(withMatch("differs"))).toContain(
       "❌ **No.** The change does something other than what issue #342 asks.",
@@ -376,7 +403,7 @@ describe("review summary", () => {
     const old = input({ card: card({ headSha: "0".repeat(40) }) });
     expect(assess(old)).toBe("pending");
     expect(renderSummarySection(old)).toMatch(
-      /^### ⏳ Graft is still reviewing\n\n- \*\*Matches the intent\?\*\* ⏳ \*\*Waiting for the intent card\.\*\*/,
+      /^> \[!NOTE\]\n> \*\*Graft is still reviewing\*\* · 2 approvals needed\n/,
     );
   });
 
@@ -402,7 +429,9 @@ describe("review summary", () => {
     });
     const m = renderSummarySection(met);
     expect(m).toContain("✅ **Required approvals present** (2 of 2)");
-    expect(m).toMatch(/^### ⚠️ Needs human review · 3 points to check · approvals in\n/);
+    expect(m).toMatch(
+      /^> \[!WARNING\]\n> \*\*Needs human review\*\* · 3 things to check · approvals in\n/,
+    );
     const team = parsePolicyText(
       Buffer.from(
         "version: 1\nrules:\n  - match: { risk: sensitive }\n    require: { humans: 1, team: security }\n",
@@ -557,11 +586,11 @@ describe("policy fold", () => {
   it("U-FOLD-1 the comment folds the policy section under a plain summary; the check keeps it", () => {
     const section = "### Policy\n\n**Would require 2 humans** · report only\n\nfooter";
     expect(foldPolicySection(policyView(), section)).toBe(
-      "<details><summary>Policy: why 2 humans (report only)</summary>\n\n**Would require 2 humans** · report only\n\nfooter\n\n</details>",
+      "<details><summary>👥 Policy · why 2 humans (report only)</summary>\n\n**Would require 2 humans** · report only\n\nfooter\n\n</details>",
     );
     expect(
       foldPolicySection({ ...policyView(), state: "missing", verdict: null }, section),
-    ).toContain("<summary>Policy: no graft.yaml</summary>");
+    ).toContain("<summary>👥 Policy · no graft.yaml</summary>");
   });
 
   it("U-FOLD-2 the summary comes first in the managed comment", () => {

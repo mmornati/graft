@@ -325,7 +325,7 @@ function humanRow(v: PolicyView): string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Where to look
+// Before you merge
 // ---------------------------------------------------------------------------------------------
 
 function points(i: SummaryInput): string[] {
@@ -338,58 +338,59 @@ function points(i: SummaryInput): string[] {
     if (first !== undefined) {
       const more = failing.length > 1 ? ` (and ${failing.length - 1} more)` : "";
       out.push(
-        `**The card is wrong** · ${LABEL_FOR_KIND(first, idx)} is ${first.verdict}: ${escapeProse(first.reason, 200)}${more}`,
+        `❌ **The card is wrong** · ${LABEL_FOR_KIND(first, idx)} is ${first.verdict}: ${escapeProse(first.reason, 200)}${more}`,
       );
     }
   }
   if (card?.instructionsInData) {
     out.push(
-      "**Text addressed to AI reviewers** · Graft ignored it. Read the description and the diff yourself.",
+      "⚠️ **Text addressed to AI reviewers** · Graft ignored it. Read the description and the diff yourself.",
     );
   }
   const s = i.signals;
   if (s !== null && s.ci.failed > 0) {
     out.push(
-      `**CI fails** · ${s.ci.failing.map((n) => codeSpan(n, 80)).join(", ")}: fix it before merging.`,
+      `🧪 **CI fails** · ${s.ci.failing.map((n) => codeSpan(n, 80)).join(", ")}: fix it before merging.`,
     );
   }
   for (const r of s?.aiReviews ?? []) {
     if (r.state === "failed") {
       out.push(
         distrust(r, card) === null
-          ? `**AI review found issues** · ${codeSpan(r.check, 80)}: read its comments.`
-          : `**AI review failed** · ${codeSpan(r.check, 80)}: see its check run.`,
+          ? `🤖 **AI review found issues** · ${codeSpan(r.check, 80)}: read its comments.`
+          : `🤖 **AI review failed** · ${codeSpan(r.check, 80)}: see its check run.`,
       );
     }
   }
   if (card?.card) {
     for (const r of card.card.requested) {
-      if (r.status === "missing") out.push(`**Asked, not done** · ${escapeProse(r.item, 150)}`);
-      if (r.status === "partial") out.push(`**Asked, partly done** · ${escapeProse(r.item, 150)}`);
+      if (r.status === "missing") out.push(`🎯 **Asked, not done** · ${escapeProse(r.item, 150)}`);
+      if (r.status === "partial")
+        out.push(`🎯 **Asked, partly done** · ${escapeProse(r.item, 150)}`);
     }
     const unread = card.risk.floorReasons.find((r) => r.rule === "partial_view");
     if (unread !== undefined && unread.paths.length > 0) {
       const shown = unread.paths.slice(0, 3).map((p) => codeSpan(p));
       const more = unread.count - shown.length;
       out.push(
-        `**Not read in full by Graft** · ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}: check ${unread.count === 1 ? "this file" : "these files"} yourself.`,
+        `👀 **Not read in full by Graft** · ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}: check ${unread.count === 1 ? "this file" : "these files"} yourself.`,
       );
     }
     for (const e of card.card.outOfScopeEdits) {
-      out.push(`**Out of scope** · ${codeSpan(e.path)}: ${escapeProse(e.reason, 200)}`);
+      out.push(`📦 **Out of scope** · ${codeSpan(e.path)}: ${escapeProse(e.reason, 200)}`);
     }
     for (const p of card.verifier.unexplained) {
-      out.push(`**Out of scope** · ${codeSpan(p)}: flagged by the verifier`);
+      out.push(`📦 **Out of scope** · ${codeSpan(p)}: flagged by the verifier`);
     }
     if (card.verifier.status !== "error") {
       for (const m of card.verifier.missing) {
-        out.push(`**Also changed, not in the description** · ${escapeProse(m, 200)}`);
+        out.push(`➕ **Also changed, not in the description** · ${escapeProse(m, 200)}`);
       }
     }
     const sensitive = card.risk.floorReasons.filter((r) => SENSITIVE_RULES.has(r.rule));
     if (sensitive.length > 0) {
       out.push(
-        `**Sensitive files** · ${sensitive
+        `🛡️ **Sensitive files** · ${sensitive
           .slice(0, 2)
           .map((r) => describeFloorReason(r, card, 3))
           .join("; ")}`,
@@ -400,42 +401,245 @@ function points(i: SummaryInput): string[] {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Section
+// Gates: the five statuses the table and the card show
 // ---------------------------------------------------------------------------------------------
 
-function headline(level: Level, i: SummaryInput, nPoints: number, approved: boolean): string {
-  const tail = approved && level !== "red" ? " · approvals in" : "";
-  switch (level) {
-    case "pending":
-      return "### ⏳ Graft is still reviewing";
-    case "red":
-      return "### ❌ Don't merge yet";
-    case "orange":
-      return `### ⚠️ Needs human review${nPoints > 0 ? ` · ${plural(nPoints, "point", "points")} to check` : ""}${tail}`;
-    case "yellow":
-      return `### 🟡 Needs a normal review${tail}`;
-    case "green":
-      return `### ${riskOf(i) === "trivial" ? "🟢 Safe to merge" : "🟢 Low risk"}${tail}`;
+export type GateStatus = "ok" | "warn" | "bad" | "neutral" | "running";
+export type GateKey = "intent" | "risk" | "ci" | "review" | "approvals";
+
+/** A gate's label and value are written by Graft, never by a model: they go into table cells. */
+export interface Gate {
+  key: GateKey;
+  label: string;
+  value: string;
+  status: GateStatus;
+}
+
+export interface SummaryModel {
+  level: Level;
+  title: string;
+  subtitle: string;
+  gates: Gate[];
+  headSha: string;
+  report: boolean;
+}
+
+const GATE_LABEL: Record<GateKey, string> = {
+  intent: "Intent",
+  risk: "Risk",
+  ci: "CI",
+  review: "AI review",
+  approvals: "Approvals",
+};
+
+const LEVEL_STATUS: Record<Level, GateStatus> = {
+  pending: "running",
+  green: "ok",
+  yellow: "neutral",
+  orange: "warn",
+  red: "bad",
+};
+
+function intentGate(i: SummaryInput): [string, GateStatus] {
+  const card = cardForHead(i);
+  if (card === null) return ["Waiting", "running"];
+  if (card.status === "unavailable" || card.card === null) return ["Unknown", "warn"];
+  if (disagrees(card)) return ["Card wrong", "bad"];
+  const status = LEVEL_STATUS[intentRow(i).level];
+  switch (card.card.intentMatch) {
+    case null:
+      return ["Not checked", "neutral"];
+    case "unknown":
+      return ["Unknown", "neutral"];
+    case "matches":
+      return ["Matches", status];
+    case "partial":
+      return ["Partly", "warn"];
+    case "differs":
+      return ["No", "bad"];
   }
 }
 
-export function renderSummarySection(i: SummaryInput): string {
+function riskGate(i: SummaryInput): [string, GateStatus] {
+  switch (riskOf(i)) {
+    case "trivial":
+      return ["Trivial", "ok"];
+    case "logic":
+      return ["Logic", "neutral"];
+    case "sensitive":
+      return ["Sensitive", "warn"];
+    default:
+      return ["Pending", "running"];
+  }
+}
+
+function ciGate(i: SummaryInput): [string, GateStatus] {
+  const s = i.signals;
+  if (s === null) return ["Not read", "neutral"];
+  const { passed, failed, pending } = s.ci;
+  const total = passed + failed + pending;
+  if (total === 0) return ["None", "neutral"];
+  if (failed > 0) return [`${failed} failing`, "bad"];
+  if (pending > 0) return [`${passed}/${total} running`, "running"];
+  return [`${total}/${total} passed`, s.ci.incomplete ? "neutral" : "ok"];
+}
+
+function reviewGate(i: SummaryInput): [string, GateStatus] {
+  const reviews = i.signals?.aiReviews ?? [];
+  if (reviews.length === 0) return ["None", "neutral"];
+  const card = cardForHead(i);
+  if (reviews.some((r) => r.state === "failed")) {
+    return reviews.some((r) => r.state === "failed" && distrust(r, card) === null)
+      ? ["Found issues", "bad"]
+      : ["Failed", "bad"];
+  }
+  if (reviews.some((r) => r.state === "pending")) return ["Running", "running"];
+  if (cleanIndependentReview(i)) return ["No issues", "ok"];
+  const trusted = reviews.some((r) => r.state === "passed" && distrust(r, card) === null);
+  return trusted ? ["Same model", "warn"] : ["Ran", "neutral"];
+}
+
+function approvalsGate(v: PolicyView): [string, GateStatus] {
+  if (v.state === "missing") return ["No policy", "neutral"];
+  const verdict = v.verdict;
+  if (v.state === "invalid" || verdict === null) return ["Invalid policy", "warn"];
+  if (v.enforced?.reason === "break_glass") return ["Break-glass", "warn"];
+  if (verdict.outcome === "would_block") return ["Blocked", "bad"];
+  if (verdict.outcome === "would_approve") return ["None needed", "ok"];
+  const counted = v.approvers?.counted.length ?? v.approvals?.current ?? 0;
+  const met = v.enforced?.reason === "requirements_met";
+  return [`${Math.min(counted, verdict.humans)}/${verdict.humans}`, met ? "ok" : "warn"];
+}
+
+/** Short words for the verdict's subtitle. */
+function approvalsShort(v: PolicyView): string | null {
+  const verdict = v.verdict;
+  if (v.state !== "ok" || verdict === null) return null;
+  if (verdict.outcome === "would_block") return "blocked by the policy";
+  if (verdict.outcome === "would_approve") return "no approval needed";
+  if (v.enforced?.reason === "requirements_met") return "approvals in";
+  const counted = v.approvers?.counted.length ?? v.approvals?.current ?? 0;
+  const missing = Math.max(0, verdict.humans - counted);
+  return missing === 0 ? "approvals in" : `${plural(missing, "approval", "approvals")} needed`;
+}
+
+const TITLE: Record<Exclude<Level, "green">, string> = {
+  pending: "Graft is still reviewing",
+  red: "Don't merge yet",
+  orange: "Needs human review",
+  yellow: "Needs a normal review",
+};
+
+export function summaryModel(i: SummaryInput): SummaryModel {
   const level = assess(i);
+  const nPoints = points(i).length;
+  const title =
+    level === "green" ? (riskOf(i) === "trivial" ? "Safe to merge" : "Low risk") : TITLE[level];
+  const parts: string[] = [];
+  if (level !== "pending" && nPoints > 0)
+    parts.push(`${plural(nPoints, "thing", "things")} to check`);
+  const approvals = approvalsShort(i.policy);
+  if (approvals !== null) parts.push(approvals);
+  const gate = (key: GateKey, [value, status]: [string, GateStatus]): Gate => ({
+    key,
+    label: GATE_LABEL[key],
+    value,
+    status,
+  });
+  return {
+    level,
+    title,
+    subtitle: parts.join(" · "),
+    gates: [
+      gate("intent", intentGate(i)),
+      gate("risk", riskGate(i)),
+      gate("ci", ciGate(i)),
+      gate("review", reviewGate(i)),
+      gate("approvals", approvalsGate(i.policy)),
+    ],
+    headSha: i.headSha,
+    report: i.policy.mode.effective !== "enforce",
+  };
+}
+
+/** The sentence a screen reader, or an email without images, gets for the card. */
+export function modelText(m: SummaryModel): string {
+  const head = m.subtitle === "" ? m.title : `${m.title}: ${m.subtitle}`;
+  return `${head}. ${m.gates.map((g) => `${g.label}: ${g.value}`).join(". ")}.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Section
+// ---------------------------------------------------------------------------------------------
+
+const CALLOUT: Record<Level, string> = {
+  pending: "NOTE",
+  red: "CAUTION",
+  orange: "WARNING",
+  yellow: "NOTE",
+  green: "TIP",
+};
+
+const GATE_ICON: Record<GateKey, string> = {
+  intent: "🎯",
+  risk: "🛡️",
+  ci: "🧪",
+  review: "🤖",
+  approvals: "👥",
+};
+
+const STATUS_ICON: Record<GateStatus, string> = {
+  ok: "✅",
+  warn: "🟠",
+  bad: "❌",
+  neutral: "➖",
+  running: "⏳",
+};
+
+function gateTable(m: SummaryModel): string[] {
+  return [
+    `| ${m.gates.map((g) => `${GATE_ICON[g.key]} ${g.label}`).join(" | ")} |`,
+    `| ${m.gates.map(() => ":---:").join(" | ")} |`,
+    `| ${m.gates.map((g) => `${STATUS_ICON[g.status]} **${g.value}**`).join(" | ")} |`,
+  ];
+}
+
+export interface SummaryRenderOptions {
+  /**
+   * Markdown for the status card image of this model (a `<picture>`), or null for none. With a
+   * card, the card replaces the gate table; its alt text carries the same words.
+   */
+  cardImage?: (m: SummaryModel) => string | null;
+}
+
+export function renderSummarySection(i: SummaryInput, o: SummaryRenderOptions = {}): string {
+  const m = summaryModel(i);
   const all = points(i);
   const shown = all.slice(0, MAX_POINTS);
-  const approved = i.policy.enforced?.reason === "requirements_met";
   const lines = [
-    headline(level, i, all.length, approved),
+    `> [!${CALLOUT[m.level]}]`,
+    `> **${m.title}**${m.subtitle === "" ? "" : ` · ${m.subtitle}`}`,
     "",
-    `- **Matches the intent?** ${intentRow(i).text}`,
-    `- **Safe to merge?** ${safeRow(i, level)}`,
-    `- **Human review:** ${humanRow(i.policy)}`,
   ];
+  const image = o.cardImage?.(m) ?? null;
+  lines.push(...(image === null ? gateTable(m) : [image]));
   if (shown.length > 0) {
-    lines.push("", "**Where to look**", "", ...shown.map((p, n) => `${n + 1}. ${p}`));
+    lines.push("", "**Before you merge**", "", ...shown.map((p) => `- ${p}`));
     if (all.length > shown.length) {
-      lines.push("", `…and ${all.length - shown.length} more in the details below.`);
+      lines.push(`- …and ${all.length - shown.length} more in the details below`);
     }
   }
+  lines.push(
+    "",
+    "<details><summary>Why this verdict</summary>",
+    "",
+    `- **Matches the intent?** ${intentRow(i).text}`,
+    `- **Safe to merge?** ${safeRow(i, m.level)}`,
+    `- **Human review:** ${humanRow(i.policy)}`,
+    "",
+    "</details>",
+    "",
+    "---",
+  );
   return lines.join("\n");
 }

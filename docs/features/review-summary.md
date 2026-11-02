@@ -1,28 +1,51 @@
 # Review summary
 
-The top of the Graft comment answers three questions before anything else:
+The top of the Graft comment says, at a glance, whether a pull request can be merged and what a human has to look at:
 
-- **Matches the intent?** Does the change do what was asked?
-- **Safe to merge?** What risk, what CI and AI reviews say, how much of the diff Graft read.
-- **Human review:** what the policy asks for, and how many approvals there are.
+- **The verdict**, in a colored box: ❌ don't merge yet, ⚠️ needs human review, ℹ️ needs a normal review, 💡 low risk or safe to merge (GitHub's `CAUTION`, `WARNING`, `NOTE` and `TIP` alerts), with how many things to check and the approvals still needed.
+- **Five gates**: 🎯 Intent, 🛡️ Risk, 🧪 CI, 🤖 AI review and 👥 Approvals, each ✅ fine, 🟠 needs attention, ❌ blocking, ⏳ still running or ➖ nothing to say. With [`GRAFT_PUBLIC_URL`](../configuration.md) set they are drawn as a status card image; otherwise they are a one-row table.
+- **Before you merge**: up to three things the human reviewer should check, and why.
+- **Why this verdict**, folded: the full answers to "matches the intent?", "safe to merge?" and "human review".
 
-Then come up to three **Where to look** points: what the human reviewer should check, and why. Everything Graft knows in detail follows, folded: what was asked against what was done, the behavior changes, how the card was made, provenance and the policy rules.
+Everything else Graft knows follows, folded, each fold titled with an icon and a count: what was asked against what was done, the behavior changes, how the card was made, provenance and the policy rules.
 
 An example, for a pull request that adds file uploads to a chat:
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../assets/review-summary/card-dark.svg">
+  <img alt="Needs human review: 3 things to check · 2 approvals needed. Intent: Matches. Risk: Sensitive. CI: 15/16 running. AI review: Ran. Approvals: 0/2." src="../../assets/review-summary/card-light.svg" width="720">
+</picture>
+
+Without a public URL, the same gates as markdown:
+
 ```markdown
-### ⚠️ Needs human review · 3 points to check
+> [!WARNING]
+> **Needs human review** · 3 things to check · 2 approvals needed
+
+| 🎯 Intent | 🛡️ Risk | 🧪 CI | 🤖 AI review | 👥 Approvals |
+| :---: | :---: | :---: | :---: | :---: |
+| ✅ **Matches** | 🟠 **Sensitive** | ⏳ **15/16 running** | ➖ **Ran** | 🟠 **0/2** |
+
+**Before you merge**
+
+- 👀 **Not read in full by Graft** · `scripts/arc_chat.py`, `scripts/arc_chat_upload.py`, `tests/install/test_chat_attachments.py`: check these files yourself.
+- ➕ **Also changed, not in the description** · Uploaded files are never purged and there is no total disk quota.
+- 🛡️ **Sensitive files** · configured sensitive path (`scripts/arc_chat.py`, `scripts/arc_serve.py`)
+
+<details><summary>Why this verdict</summary>
 
 - **Matches the intent?** ✅ **Yes.** Does what issue #342 asks. 1 change not in the description. 1 item left for later on purpose.
 - **Safe to merge?** ⚠️ **Not without a human review.** Risk `sensitive`: Adds a public upload endpoint that writes files to disk. **CI:** 15 of 16 passed, 1 still running. **AI review `claude-review`** on `34290fb`: ran (its check does not say whether it found issues); same model family as the author. **Graft:** 10 of 10 claims supported, 3 files not read in full.
 - **Human review:** **2 approvals needed** · 0 so far · *report mode: Graft blocks nothing*
 
-**Where to look**
-
-1. **Not read in full by Graft** · `scripts/arc_chat.py`, `scripts/arc_chat_upload.py`, `tests/install/test_chat_attachments.py`: check these files yourself.
-2. **Also changed, not in the description** · Uploaded files are never purged and there is no total disk quota.
-3. **Sensitive files** · configured sensitive path (`scripts/arc_chat.py`, `scripts/arc_serve.py`)
+</details>
 ```
+
+## The status card
+
+Set `GRAFT_PUBLIC_URL` to the address GitHub can reach the Graft server at (for example `https://graft.example.com`) and the gates become an image: the verdict, a "ready to merge" bar (how many of the five gates are fine) and the five gates as colored tiles, in a light and a dark version that follow the reader's GitHub theme (`<picture>` with `prefers-color-scheme`). The image's alt text holds every word, for screen readers and mail clients that block images.
+
+The server draws it at `GET /summary-card/<token>.svg?theme=light|dark`. The token *is* the card: its words, signed with a key derived from `GITHUB_WEBHOOK_SECRET`. The route reads nothing from the database, refuses any token it did not sign (`404`), and only signs Graft's own words (labels, gate values, the verdict, from a closed set of characters), so it cannot be used to draw anything else. The URL holds nothing the comment does not already show. Each change of the card gives a new URL, so the image is served as immutable and GitHub's image proxy may cache it for good. Rotating the webhook secret makes older cards `404`; the next update of each comment links a new one.
 
 ## Matches the intent?
 
@@ -80,7 +103,7 @@ Only a review with `trust_conclusion: true` and `app` set, a `success` on the cu
 
 The policy's requirement, from the same verdict as the `graft/policy` check: approvals needed (with team names as code spans, so no team is notified) and approvals so far, or "none required", "blocked", "no graft.yaml". In report mode it adds that Graft blocks nothing.
 
-## Where to look
+## Before you merge
 
 At most three points, in this order, and a count of the rest:
 

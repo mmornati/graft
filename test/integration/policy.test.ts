@@ -175,11 +175,11 @@ describe("policy engine (integration)", () => {
     const full = checks[0]?.output.summary ?? "";
     expect(full).toContain("### Policy");
     expect(policySection()).toBe(
-      `<details><summary>Policy: why 2 humans (report only)</summary>\n\n${full.replace(/^### Policy\n\n/, "")}\n\n</details>`,
+      `<details><summary>👥 Policy · why 2 humans (report only)</summary>\n\n${full.replace(/^### Policy\n\n/, "")}\n\n</details>`,
     );
     expect(policySection()).toContain("· report only");
     const summary = parseManagedComment(api.state.comments[0]?.body ?? "")?.get("summary") ?? "";
-    expect(summary).toContain("### ⏳ Graft is still reviewing");
+    expect(summary).toContain("> [!NOTE]\n> **Graft is still reviewing** · 2 approvals needed");
     expect(summary).toContain("- **Human review:** **2 approvals needed** (");
     expect(summary).toContain(") · 0 so far · *report mode: Graft blocks nothing*");
 

@@ -3,9 +3,11 @@ import Fastify, { type FastifyInstance, LogController } from "fastify";
 import type { AppDeps } from "../core/context.js";
 import type { Logger } from "../core/logger.js";
 import { mcpRoutes } from "../modules/mcp/index.js";
+import { cardKey } from "../modules/policy/card.js";
 import { sanitizeError } from "../queue/errors.js";
 import { webhookReceiver } from "../webhooks/receiver.js";
 import { healthRoutes } from "./health.js";
+import { summaryCardRoutes } from "./summary-card.js";
 
 export type AppServer = FastifyInstance<Server, IncomingMessage, ServerResponse, Logger>;
 
@@ -31,6 +33,10 @@ export async function buildServer(deps: AppDeps): Promise<AppServer> {
   });
 
   await app.register(healthRoutes({ db: deps.db, queue: deps.queue }));
+  // The review summary's status card; without a public URL no comment links to it.
+  if (deps.config.publicUrl !== null) {
+    await app.register(summaryCardRoutes({ key: cardKey(deps.config.githubWebhookSecret) }));
+  }
   await app.register(
     webhookReceiver({
       db: deps.db,

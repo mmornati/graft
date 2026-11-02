@@ -28,7 +28,7 @@ export function scenarioCommits() {
   ];
 }
 
-export const EXPECTED_SECTION = `<details><summary>Provenance: written by an agent (Graft trailers)</summary>
+export const EXPECTED_SECTION = `<details><summary>🧬 Provenance · written by an agent (Graft trailers)</summary>
 
 | | |
 | --- | --- |

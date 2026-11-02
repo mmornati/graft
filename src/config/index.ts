@@ -271,6 +271,7 @@ const EnvSchema = z.object({
   GRAFT_MCP_OPEN_CHANGE_PER_HOUR: withDefault(intString(1, 100), "10"),
   GRAFT_MCP_MAX_TOKENS_PER_REPO: withDefault(intString(1, 50), "10"),
   GRAFT_TRUST_PROXY: withDefault(proxyList, ""),
+  GRAFT_PUBLIC_URL: opt(httpUrl),
   GRAFT_ALLOWED_ACCOUNTS: withDefault(accountList, ""),
   GRAFT_UNINSTALL_UNLISTED: withDefault(onOff, "off"),
 });
@@ -396,6 +397,11 @@ export interface Config {
    * Empty: Fastify's `trustProxy` is off and `req.ip` is the connection's peer.
    */
   readonly trustProxy: readonly string[];
+  /**
+   * The server's public origin and path prefix, no trailing slash. Set: the review summary embeds
+   * a status card image served from `<publicUrl>/summary-card/...`. Unset: markdown only.
+   */
+  readonly publicUrl: string | null;
   /**
    * Lowercased logins of the users and organizations whose installations Graft serves. Empty:
    * every installation is served. Otherwise a delivery from any other account is dropped before
@@ -577,6 +583,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     mcpOpenChangePerHour: d.GRAFT_MCP_OPEN_CHANGE_PER_HOUR,
     mcpMaxTokensPerRepo: d.GRAFT_MCP_MAX_TOKENS_PER_REPO,
     trustProxy: Object.freeze([...d.GRAFT_TRUST_PROXY]),
+    publicUrl: d.GRAFT_PUBLIC_URL?.replace(/\/+$/, "") ?? null,
     allowedAccounts: Object.freeze([...d.GRAFT_ALLOWED_ACCOUNTS]),
     uninstallUnlisted: d.GRAFT_UNINSTALL_UNLISTED,
   });

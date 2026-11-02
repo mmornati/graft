@@ -762,11 +762,11 @@ function renderDetails(v: PolicyView): string | null {
 function foldLabel(v: PolicyView): string {
   const report = v.mode.effective === "enforce" ? "" : " (report only)";
   const verdict = v.verdict;
-  if (v.state === "missing") return "Policy: no graft.yaml";
-  if (v.state === "invalid" || verdict === null) return "Policy: graft.yaml is invalid";
-  if (verdict.outcome === "would_block") return `Policy: blocked${report}`;
-  if (verdict.outcome === "would_approve") return `Policy: no review required${report}`;
-  return `Policy: why ${plural(verdict.humans, "human", "humans")}${report}`;
+  if (v.state === "missing") return "👥 Policy · no graft.yaml";
+  if (v.state === "invalid" || verdict === null) return "👥 Policy · graft.yaml is invalid";
+  if (verdict.outcome === "would_block") return `👥 Policy · blocked${report}`;
+  if (verdict.outcome === "would_approve") return `👥 Policy · no review required${report}`;
+  return `👥 Policy · why ${plural(verdict.humans, "human", "humans")}${report}`;
 }
 
 /**

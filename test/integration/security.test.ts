@@ -227,7 +227,7 @@ describe("end to end", () => {
       // The check runs come after the comment in each publish.
       return (
         text.includes("**Goal:**") &&
-        text.includes("<summary>Provenance:") &&
+        text.includes("<summary>🧬 Provenance ·") &&
         api.state.checkRuns.some((r) => r.name === "graft/intent") &&
         api.state.checkRuns.some((r) => r.name === "graft/provenance")
       );
