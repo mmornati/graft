@@ -4,6 +4,11 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ## Unreleased
 
+### Added
+
+- A more visual review summary: the verdict in a colored GitHub alert box, five gates (intent, risk, CI, AI review, approvals) with status icons, a "Before you merge" list with an icon per kind of point, and the detailed answers folded under "Why this verdict". Every fold title carries an icon and a count. [Review summary](docs/features/review-summary.md)
+- `GRAFT_PUBLIC_URL`: when set, the gates are drawn as a status card image (light and dark), served by the server at `/summary-card/<signed token>.svg` without any database read. [Status card](docs/features/review-summary.md#the-status-card)
+
 ## v0.2.0 (2026-11-02): Review summary, any model provider, operator console
 
 Graft can run on models other than the Claude API, an optional console shows what it handled, and the PR comment now opens with a verdict a reviewer can act on. Report mode stays the default.
@@ -11,9 +16,6 @@ Graft can run on models other than the Claude API, an optional console shows wha
 **Upgrading.** Run `pnpm db:migrate` (migration `0017` adds two columns to `intent_cards`). Intent cards move from `intent-v2` to `intent-v6`: an open PR keeps its card until Graft writes a new one (on a push, or a re-run of the `graft/intent` check). Each open PR's comment and `graft/policy` check run are republished once with the new layout. The App needs no new permission or event.
 
 ### Added
-
-- A more visual review summary: the verdict in a colored GitHub alert box, five gates (intent, risk, CI, AI review, approvals) with status icons, a "Before you merge" list with an icon per kind of point, and the detailed answers folded under "Why this verdict". Every fold title carries an icon and a count. [Review summary](docs/features/review-summary.md)
-- `GRAFT_PUBLIC_URL`: when set, the gates are drawn as a status card image (light and dark), served by the server at `/summary-card/<signed token>.svg` without any database read. [Status card](docs/features/review-summary.md#the-status-card)
 
 - A **review summary** at the top of the Graft comment: does the change match the intent, is it safe to merge (risk, CI, AI reviews, how much Graft read), what human review the policy asks for, and up to three points for the reviewer to look at. Graft never calls a `sensitive` change safe, and a `logic` one only "low risk" with CI green and an independent AI review that reports no issues. It updates when CI or an AI review finishes on the head. [Review summary](docs/features/review-summary.md)
 - `report.ai_reviews` in `graft.yaml`: the AI review checks the summary reads, with the reviewer's model family, the app that publishes each one (a same-named check from anything else is ignored) and whether a successful check means "no issues". [graft.yaml](docs/graft-yaml.md)
