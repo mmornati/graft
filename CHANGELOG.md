@@ -4,6 +4,12 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ## Unreleased
 
+## v0.2.0 (2026-11-02): Review summary, any model provider, operator console
+
+Graft can run on models other than the Claude API, an optional console shows what it handled, and the PR comment now opens with a verdict a reviewer can act on. Report mode stays the default.
+
+**Upgrading.** Run `pnpm db:migrate` (migration `0017` adds two columns to `intent_cards`). Intent cards move from `intent-v2` to `intent-v6`: an open PR keeps its card until Graft writes a new one (on a push, or a re-run of the `graft/intent` check). Each open PR's comment and `graft/policy` check run are republished once with the new layout. The App needs no new permission or event.
+
 ### Added
 
 - A more visual review summary: the verdict in a colored GitHub alert box, five gates (intent, risk, CI, AI review, approvals) with status icons, a "Before you merge" list with an icon per kind of point, and the detailed answers folded under "Why this verdict". Every fold title carries an icon and a count. [Review summary](docs/features/review-summary.md)

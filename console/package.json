@@ -1,6 +1,6 @@
 {
   "name": "@graft/console",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Optional read-only operator console for Graft: a BFF over Graft's Postgres and a small web app.",
   "type": "module",
