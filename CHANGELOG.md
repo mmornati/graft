@@ -14,6 +14,7 @@ Graft's releases. Until both the Phase 0 and the Phase 1 gates pass on pilot dat
 
 ### Changed
 
+- Risk: the fast model's first pass no longer sets the final class on its own. When the strong writer and the verifier both answered and both rate the change lower, the first pass is shown as `overruled` on the card and does not count. The rule-based floor is unchanged. [Intent cards](docs/features/intent-cards.md)
 - The documentation, the website and the videos catch up with `v0.2.x`: the sample comment in the README and on the website is the current one, the reviewer tour is rebuilt on a new offline run with a new chapter on the verdict, and the explainer no longer says Graft only reports or that only Anthropic receives data. The pilot onboarding guide now speaks of the configured model provider.
 
 ## v0.2.2 (2026-11-05): Gemini on Vertex AI

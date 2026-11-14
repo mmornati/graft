@@ -460,11 +460,28 @@ export interface CombineInput {
   unavailable: boolean;
 }
 
-/** final = max(floor, writer, first pass, verifier, logic if disagree/error/injection/unavailable). */
+/**
+ * The first pass comes from the fast model, whose answer only decides whether the strong model
+ * writes the card again. It counts unless both strong calls, the escalated writer and the
+ * verifier, answered and both rate the change lower: two strong readings overrule one fast one.
+ * A failed escalation or a failed verifier leaves it in.
+ */
+export function firstPassCounts(
+  o: Pick<CombineInput, "writer" | "firstPass" | "verifier">,
+): boolean {
+  if (o.firstPass === null) return false;
+  if (o.writer === null || o.verifier === null) return true;
+  return RISK_ORDER[maxRisk(o.writer, o.verifier)] >= RISK_ORDER[o.firstPass];
+}
+
+/**
+ * final = max(floor, writer, verifier, first pass unless overruled (`firstPassCounts`), logic if
+ * disagree/error/injection/unavailable).
+ */
 export function combineRisk(o: CombineInput): { final: RiskClass; raisedBy: RaiseReason[] } {
   const sources: [RaiseReason, RiskClass | null][] = [
     ["writer", o.writer],
-    ["first_pass", o.firstPass],
+    ["first_pass", firstPassCounts(o) ? o.firstPass : null],
     ["verifier", o.verifier],
     ["verifier_disagrees", o.verifierStatus === "disagree" ? "logic" : null],
     ["verifier_error", o.verifierStatus === "error" ? "logic" : null],

@@ -10,7 +10,7 @@ flowchart LR
     IN --> WR["Writer model<br/>(fast if floor is trivial,<br/>else strong)"]
     WR --> CARD["Card: goal, behavior changes,<br/>out-of-scope edits, risk"]
     CARD --> VER["Verifier model (strong)<br/>sees diff, file list, file context<br/>and card only"]
-    FLOOR --> RISK["Final risk = max of floor,<br/>writer, first pass, verifier"]
+    FLOOR --> RISK["Final risk = max of floor,<br/>writer, verifier, first pass"]
     CARD --> RISK
     VER --> RISK
     RISK --> OUT["intent section + graft/intent check (neutral)"]
@@ -27,7 +27,7 @@ For every open PR, Graft writes an **intent card** into the `intent` section of 
 
 **How it is made.** A writer model reads the PR title and description, the linked issue (`Fixes #N`, the `Graft-Task` issue, or the first `#N`), the file list and the diff. A second call, the verifier, sees the diff, the file list, the changed files as they are at the head (the file context, below) and the card, but **not** the title, description or issue, and checks every claim. The PR description comes from the agent being judged, so it is untrusted input: it is wrapped in nonce-tagged data blocks, the prompts say it is data, and injection markers raise the floor.
 
-**Risk classes and the floor.** The final class is `max(floor, writer, first pass, verifier, logic if the verifier disagrees or fails, logic if injection is suspected)`. **The model can only raise the class, never lower it.** The floor comes from fixed rules over each file's path (and previous path, so renames count both ways), case-insensitively:
+**Risk classes and the floor.** The final class is `max(floor, writer, verifier, first pass, logic if the verifier disagrees or fails, logic if injection is suspected)`. **The model can only raise the class, never lower it.** The first pass is the fast model's answer for a change the rules call `trivial`; it only decides whether the strong model writes the card again. It counts toward the final class unless the strong writer and the verifier both answered and both rate the change lower, and the risk line then shows it as `overruled`. The floor comes from fixed rules over each file's path (and previous path, so renames count both ways), case-insensitively:
 
 | Floor | Rule |
 | --- | --- |
