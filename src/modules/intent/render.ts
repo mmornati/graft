@@ -108,7 +108,7 @@ function riskLine(v: CardResult): string {
   if (v.status === "unavailable") return `${line} · no model check`;
   if (v.risk.writer !== null) line += ` · writer ${code(v.risk.writer)}`;
   if (v.risk.firstPass !== null) {
-    line += firstPassCounts(v.risk)
+    line += firstPassCounts({ ...v.risk, instructionsInData: v.instructionsInData })
       ? ` (first pass ${code(v.risk.firstPass)})`
       : ` (first pass ${code(v.risk.firstPass)}, overruled)`;
   }

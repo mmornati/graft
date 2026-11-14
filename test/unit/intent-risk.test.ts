@@ -259,12 +259,13 @@ describe("combineRisk", () => {
                   }
                   // The first pass counts unless both strong calls answered and rate it lower.
                   const overruled =
+                    !instructionsInData &&
                     firstPass !== null &&
                     writer !== null &&
                     verifier !== null &&
                     ORDER[writer] < ORDER[firstPass] &&
                     ORDER[verifier] < ORDER[firstPass];
-                  expect(firstPassCounts({ writer, firstPass, verifier })).toBe(
+                  expect(firstPassCounts({ writer, firstPass, verifier, instructionsInData })).toBe(
                     firstPass !== null && !overruled,
                   );
                   if (firstPass && !overruled) expect(f).toBeGreaterThanOrEqual(ORDER[firstPass]);
@@ -350,6 +351,19 @@ describe("combineRisk first pass", () => {
     expect(
       combineRisk({ ...base, writer: "logic", firstPass: "sensitive", verifier: "sensitive" }),
     ).toEqual({ final: "sensitive", raisedBy: ["writer", "first_pass", "verifier"] });
+    // A model saw instructions in the data: the lower strong readings are not trusted.
+    expect(
+      combineRisk({
+        ...base,
+        writer: "logic",
+        firstPass: "sensitive",
+        verifier: "logic",
+        instructionsInData: true,
+      }),
+    ).toEqual({
+      final: "sensitive",
+      raisedBy: ["writer", "first_pass", "verifier", "instructions_in_data"],
+    });
     // The verifier failed: one strong reading is not enough.
     expect(
       combineRisk({

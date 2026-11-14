@@ -464,12 +464,14 @@ export interface CombineInput {
  * The first pass comes from the fast model, whose answer only decides whether the strong model
  * writes the card again. It counts unless both strong calls, the escalated writer and the
  * verifier, answered and both rate the change lower: two strong readings overrule one fast one.
- * A failed escalation or a failed verifier leaves it in.
+ * A failed escalation or a failed verifier leaves it in. So does any model reporting instructions
+ * in the data: lower ratings from the strong calls are then what an injection would produce.
  */
 export function firstPassCounts(
-  o: Pick<CombineInput, "writer" | "firstPass" | "verifier">,
+  o: Pick<CombineInput, "writer" | "firstPass" | "verifier" | "instructionsInData">,
 ): boolean {
   if (o.firstPass === null) return false;
+  if (o.instructionsInData) return true;
   if (o.writer === null || o.verifier === null) return true;
   return RISK_ORDER[maxRisk(o.writer, o.verifier)] >= RISK_ORDER[o.firstPass];
 }

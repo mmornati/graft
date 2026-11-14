@@ -131,7 +131,13 @@ export function rowFromResult(
     model:
       written === null
         ? null
-        : maxRisk(r.writer, firstPassCounts(r) ? r.firstPass : null, r.verifier),
+        : maxRisk(
+            r.writer,
+            firstPassCounts({ ...r, instructionsInData: result.instructionsInData })
+              ? r.firstPass
+              : null,
+            r.verifier,
+          ),
     final: r.final,
     status: result.status,
     failureReason: result.failureReason,
