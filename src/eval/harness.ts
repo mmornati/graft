@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import type { LlmClient, LlmUsage } from "../llm/types.js";
 import {
   type CardResult,
+  firstPassCounts,
   type GenerateOptions,
   MAX_OUTPUT_TOKENS,
   maxRisk,
@@ -127,7 +128,16 @@ export function rowFromResult(
       ? { risk: g.risk, shouldFlag: g.shouldFlag, outOfScopeCount: g.outOfScope.length }
       : null,
     floor: r.floor,
-    model: written === null ? null : maxRisk(r.writer, r.firstPass, r.verifier),
+    model:
+      written === null
+        ? null
+        : maxRisk(
+            r.writer,
+            firstPassCounts({ ...r, instructionsInData: result.instructionsInData })
+              ? r.firstPass
+              : null,
+            r.verifier,
+          ),
     final: r.final,
     status: result.status,
     failureReason: result.failureReason,

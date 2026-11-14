@@ -5,6 +5,7 @@ import {
   computeRiskFloor,
   type FloorConfig,
   type FloorInput,
+  firstPassCounts,
   type RaiseReason,
   type RiskClass,
 } from "../../src/modules/intent/risk-floor.js";
@@ -253,9 +254,22 @@ describe("combineRisk", () => {
                   });
                   const f = ORDER[final];
                   expect(f).toBeGreaterThanOrEqual(ORDER[floor]);
-                  for (const c of [writer, firstPass, verifier]) {
+                  for (const c of [writer, verifier]) {
                     if (c) expect(f).toBeGreaterThanOrEqual(ORDER[c]);
                   }
+                  // The first pass counts unless both strong calls answered and rate it lower.
+                  const overruled =
+                    !instructionsInData &&
+                    firstPass !== null &&
+                    writer !== null &&
+                    verifier !== null &&
+                    ORDER[writer] < ORDER[firstPass] &&
+                    ORDER[verifier] < ORDER[firstPass];
+                  expect(firstPassCounts({ writer, firstPass, verifier, instructionsInData })).toBe(
+                    firstPass !== null && !overruled,
+                  );
+                  if (firstPass && !overruled) expect(f).toBeGreaterThanOrEqual(ORDER[firstPass]);
+                  if (overruled) expect(raisedBy).not.toContain("first_pass");
                   if (
                     unavailable ||
                     instructionsInData ||
@@ -312,6 +326,65 @@ describe("combineRisk", () => {
         unavailable: false,
       }),
     ).toEqual({ final: "sensitive", raisedBy: [] });
+  });
+});
+
+describe("combineRisk first pass", () => {
+  const base = {
+    floor: "trivial",
+    verifierStatus: "agree",
+    instructionsInData: false,
+    unavailable: false,
+  } as const;
+
+  it("U-RISK-19 two strong readings overrule a higher first pass", () => {
+    expect(
+      combineRisk({ ...base, writer: "logic", firstPass: "sensitive", verifier: "logic" }),
+    ).toEqual({ final: "logic", raisedBy: ["writer", "verifier"] });
+    expect(
+      combineRisk({ ...base, writer: "trivial", firstPass: "logic", verifier: "trivial" }),
+    ).toEqual({ final: "trivial", raisedBy: [] });
+  });
+
+  it("U-RISK-20 the first pass stays when a strong call agrees with it or did not answer", () => {
+    // One strong reading as high as the first pass: nothing is overruled.
+    expect(
+      combineRisk({ ...base, writer: "logic", firstPass: "sensitive", verifier: "sensitive" }),
+    ).toEqual({ final: "sensitive", raisedBy: ["writer", "first_pass", "verifier"] });
+    // A model saw instructions in the data: the lower strong readings are not trusted.
+    expect(
+      combineRisk({
+        ...base,
+        writer: "logic",
+        firstPass: "sensitive",
+        verifier: "logic",
+        instructionsInData: true,
+      }),
+    ).toEqual({
+      final: "sensitive",
+      raisedBy: ["writer", "first_pass", "verifier", "instructions_in_data"],
+    });
+    // The verifier failed: one strong reading is not enough.
+    expect(
+      combineRisk({
+        ...base,
+        writer: "logic",
+        firstPass: "sensitive",
+        verifier: null,
+        verifierStatus: "error",
+      }),
+    ).toEqual({ final: "sensitive", raisedBy: ["writer", "first_pass", "verifier_error"] });
+    // The escalation failed (U-GEN-14): the first pass is all there is.
+    expect(
+      combineRisk({
+        ...base,
+        writer: null,
+        firstPass: "sensitive",
+        verifier: null,
+        verifierStatus: "skipped",
+        unavailable: true,
+      }),
+    ).toEqual({ final: "sensitive", raisedBy: ["first_pass", "card_unavailable"] });
   });
 });
 

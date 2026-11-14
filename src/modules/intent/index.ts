@@ -46,6 +46,7 @@ export {
   type FloorConfig,
   type FloorReason,
   type FloorRuleId,
+  firstPassCounts,
   globMatcher,
   maxRisk,
   type RaiseReason,

@@ -6,7 +6,7 @@
 import { codeSpan, escapeProse } from "../../github/markdown.js";
 import type { CardResult, FailureReason } from "./generate.js";
 import type { RequestedStatus } from "./prompts.js";
-import type { FloorReason, FloorRuleId } from "./risk-floor.js";
+import { type FloorReason, type FloorRuleId, firstPassCounts } from "./risk-floor.js";
 
 export interface IntentView extends CardResult {
   id: string;
@@ -107,7 +107,11 @@ function riskLine(v: CardResult): string {
   let line = `**Risk:** ${code(v.risk.final)} · rules ${code(v.risk.floor)}`;
   if (v.status === "unavailable") return `${line} · no model check`;
   if (v.risk.writer !== null) line += ` · writer ${code(v.risk.writer)}`;
-  if (v.risk.firstPass !== null) line += ` (first pass ${code(v.risk.firstPass)})`;
+  if (v.risk.firstPass !== null) {
+    line += firstPassCounts({ ...v.risk, instructionsInData: v.instructionsInData })
+      ? ` (first pass ${code(v.risk.firstPass)})`
+      : ` (first pass ${code(v.risk.firstPass)}, overruled)`;
+  }
   if (v.risk.verifier !== null) line += ` · verifier ${code(v.risk.verifier)}`;
   return line;
 }
