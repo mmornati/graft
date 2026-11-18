@@ -37,7 +37,7 @@
     "graft": "tsx src/bin/graft.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0",
+    "@anthropic-ai/sdk": "^1.8.0",
     "@fastify/otel": "1.0.1",
     "@google/genai": "^2.32.0",
     "@modelcontextprotocol/node": "2.1.1",
