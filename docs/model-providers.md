@@ -359,6 +359,12 @@ roles:
   strong: copilot/claude-sonnet-4.5
 ```
 
+For cost estimates, Graft uses the model ID returned by Copilot and the Copilot provider's
+`prices`, without routing that ID through `fallbackModels`. If reported usage is nonzero and no
+price matches the returned model, the cost is unpriced; this does not fail the card. Zero reported
+usage still costs zero for compatibility, even when actual provider charges are unknown. Requests
+from installations that have not opted in still use the configured fallback and its prices.
+
 ## Check a model before you use it
 
 `pnpm eval` reads the same registry, with the same rules, as the server. Run the candidate against the saved baseline before you put it into a role on the server:

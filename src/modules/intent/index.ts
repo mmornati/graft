@@ -31,6 +31,7 @@ export {
   type PreparedCard,
   prepareCardInputs,
   runCard,
+  type SpendCall,
   unavailableResult,
   type VerifierClaim,
 } from "./generate.js";

@@ -872,7 +872,9 @@ describe("review 1: spend, display time, retry notice", () => {
   it("I-INT-24 the ledger row carries the cost of the run, or NULL when a model is unpriced", async () => {
     expect(await runJob()).toBe("published");
     // Sensitive floor (package.json): strong writer + verifier, 1,000 in / 100 out each, Sonnet.
-    const [row] = await t.db.selectFrom("intent_spend").selectAll().execute();
+    const rows = await t.db.selectFrom("intent_spend").selectAll().execute();
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
     expect(row?.llm_calls).toBe(2);
     expect(Number(row?.cost_usd)).toBe(0.006);
 
@@ -883,6 +885,22 @@ describe("review 1: spend, display time, retry notice", () => {
     const [unpriced] = await t.db.selectFrom("intent_spend").selectAll().execute();
     expect(unpriced?.tokens).toBeGreaterThan(0);
     expect(unpriced?.cost_usd).toBeNull();
+  });
+
+  it("saves through a transaction and does not ledger a zero-token run", async () => {
+    const { ch, okResult } = await okAndUnavailable();
+    const zero = {
+      ...okResult,
+      usage: { calls: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      costUsd: 0,
+    };
+    await t.db
+      .transaction()
+      .execute((tx) =>
+        saveCard(tx, { changeId: ch.id, headSha: HEAD_SHA, result: zero, now: FIXED_NOW }),
+      );
+    expect(await cards()).toHaveLength(1);
+    expect(await t.db.selectFrom("intent_spend").selectAll().execute()).toEqual([]);
   });
 
   it("I-INT-20 the display time is taken inside the lock, after the model calls", async () => {

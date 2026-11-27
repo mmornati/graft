@@ -105,6 +105,14 @@ export interface InputStats {
   linkedIssueNumber: number | null;
 }
 
+export interface SpendCall {
+  purpose: LlmPurpose;
+  model: string;
+  usage: LlmUsage;
+  costUsd: number | null;
+  spentAt: string;
+}
+
 export interface CardResult {
   promptVersion: string;
   inputHash: string;
@@ -145,6 +153,8 @@ export interface CardResult {
    * unpriced. Absent in results cached before step 6, which are never ledgered.
    */
   costUsd?: number | null;
+  /** Details of this generation only; absent on cards loaded from storage or older eval caches. */
+  spendCalls?: SpendCall[];
   inputs: InputStats;
 }
 
@@ -351,6 +361,7 @@ interface Spent {
   calls: number;
   /** null: some call used a model without a price (unpriced). */
   costUsd: number | null;
+  spendCalls: SpendCall[];
 }
 
 function buildUnavailable(
@@ -394,13 +405,14 @@ function buildUnavailable(
     models: { writer: null, firstPass: extra.firstPassModel ?? null, verifier: null },
     usage: { ...spent.usage, calls: spent.calls },
     costUsd: spent.costUsd,
+    spendCalls: spent.spendCalls,
     inputs: p.stats,
   };
 }
 
 /** A card without any model call: budget, too large, not configured. */
 export function unavailableResult(p: PreparedCard, reason: FailureReason): CardResult {
-  return buildUnavailable(p, reason, { usage: ZERO_USAGE, calls: 0, costUsd: 0 });
+  return buildUnavailable(p, reason, { usage: ZERO_USAGE, calls: 0, costUsd: 0, spendCalls: [] });
 }
 
 const FAILURE_MAP: Record<LlmFailure, FailureReason> = {
@@ -423,7 +435,7 @@ export async function runCard(
   if (p.tooLarge) return unavailableResult(p, "too_large");
 
   const deadlineAt = (o.startedAtMs ?? o.nowMs()) + o.deadlineMs;
-  const spent: Spent = { usage: { ...ZERO_USAGE }, calls: 0, costUsd: 0 };
+  const spent: Spent = { usage: { ...ZERO_USAGE }, calls: 0, costUsd: 0, spendCalls: [] };
 
   type Called<T> = { ok: true; out: T; model: string } | { ok: false; reason: FailureReason };
 
@@ -460,9 +472,16 @@ export async function runCard(
         deadlineMs: remaining,
       });
       spent.calls += 1;
+      const callPrice = callCost(res.usage, res.model, llm);
+      spent.spendCalls.push({
+        purpose: base.purpose,
+        model: res.model,
+        usage: { ...res.usage },
+        costUsd: callPrice,
+        spentAt: new Date(deadlineAt - remaining).toISOString(),
+      });
       if (spent.costUsd !== null) {
-        const c = callCost(res.usage, res.model, llm);
-        spent.costUsd = c === null ? null : roundUsd(spent.costUsd + c);
+        spent.costUsd = callPrice === null ? null : roundUsd(spent.costUsd + callPrice);
       }
       spent.usage = {
         inputTokens: spent.usage.inputTokens + res.usage.inputTokens,
@@ -663,6 +682,7 @@ export async function runCard(
     models: { writer: writerModel, firstPass: firstPassModel, verifier: verifierModel },
     usage: { ...spent.usage, calls: spent.calls },
     costUsd: spent.costUsd,
+    spendCalls: spent.spendCalls,
     inputs: p.stats,
   };
   o.log?.info(

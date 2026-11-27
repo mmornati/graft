@@ -35,7 +35,7 @@ export interface RoutedProvider {
 /**
  * One `LlmClient` over several providers. A request's model is `<provider id>/<model>`: the
  * provider gets the bare model, and the result's model is qualified again, so the card, the logs
- * and the spend ledger name the provider. A model naming no configured provider is a programmer
+ * and the spend ledger name the provider. A request naming no configured provider is a programmer
  * error (the config checks every role), so it throws.
  *
  * A Copilot provider serves only the installations that opted in: for any other installation, or
@@ -78,9 +78,6 @@ export function createRouterLlm(routes: readonly RoutedProvider[]): LlmClient {
       const { r, model } = route(ref, installationId);
       return r.client.capabilities?.(model) ?? r.provider.capabilities ?? FULL_CAPABILITIES;
     },
-    costOf(usage: LlmUsage, ref: string): number | null {
-      route(ref, undefined); // an unknown provider is a programmer error here too
-      return costOf(usage, ref);
-    },
+    costOf,
   };
 }

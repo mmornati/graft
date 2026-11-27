@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { upsertManagedSection } from "../../src/github/managed-comment.js";
 import { agreeingVerifier, createFakeLlm, forbiddenLlm, scriptedLlm } from "../../src/llm/fake.js";
+import { createRouterLlm } from "../../src/llm/router.js";
 import type { LlmRequest } from "../../src/llm/types.js";
 import { FULL_CAPABILITIES } from "../../src/llm/types.js";
 import {
@@ -13,6 +14,7 @@ import {
 import { OUTPUT_SCHEMA, systemPrompt } from "../../src/modules/intent/prompts.js";
 import { renderIntentSection } from "../../src/modules/intent/render.js";
 import { fakeGitHubFactory } from "../helpers/app.js";
+import { testConfig } from "../helpers/config.js";
 import { createFakeGitHubApi } from "../helpers/fake-github-api.js";
 import { OWNER, PR_NUMBER, REPO } from "../helpers/github-builders.js";
 import { file, genOptions, inputs } from "../helpers/intent-inputs.js";
@@ -636,6 +638,115 @@ describe("prompt injection", () => {
 });
 
 describe("spend cost (step 6)", () => {
+  it("prices a Copilot response alias without rerouting it or failing an unpriced run", async () => {
+    const registry = testConfig({
+      ANTHROPIC_API_KEY: "test-key",
+      GRAFT_LLM_PROVIDERS: `
+providers:
+  - id: claude
+    kind: anthropic
+  - id: copilot
+    kind: copilot
+    installations: [7]
+    fallbackModels: {configured: claude/claude-haiku-5-5}
+    prices:
+      reported-alias: {input: 4, output: 8}
+roles:
+  fast: claude/claude-haiku-5-5
+  strong: copilot/configured
+`,
+    }).llmRegistry;
+    const [claude, copilot] = registry?.providers ?? [];
+    if (!claude || !copilot) throw new Error("expected configured providers");
+    const writer = createFakeLlm(() => ({ ...W(), model: "claude-unknown-9" }));
+    const verifier = createFakeLlm((req, i) => ({
+      ...agreeingVerifier(req),
+      model: i === 0 ? "reported-alias" : "unpriced-alias",
+    }));
+    const llm = createRouterLlm([
+      { provider: claude, client: writer },
+      { provider: copilot, client: verifier },
+    ]);
+
+    const options = genOptions({
+      models: { fast: "claude/claude-haiku-5-5", strong: "copilot/configured" },
+      installationId: 7,
+    });
+    const result = await generateCard(inputs(), llm, options);
+    expect(result.status).toBe("ok");
+    expect(result.costUsd).toBeNull();
+    expect(result.spendCalls).toMatchObject([
+      { model: "claude/claude-unknown-9", costUsd: null },
+      { model: "copilot/reported-alias", costUsd: 0.0048 },
+    ]);
+    const unpriced = await generateCard(inputs(), llm, options);
+    expect(unpriced.status).toBe("ok");
+    expect(unpriced.spendCalls?.[1]).toMatchObject({
+      model: "copilot/unpriced-alias",
+      costUsd: null,
+    });
+  });
+
+  it("collects each call's response model, usage and unrounded cost without changing the run total", async () => {
+    const llm = scriptedLlm({
+      writer: { ...W(), usage: { inputTokens: 20_000, outputTokens: 0 } },
+      verifier: agreeingVerifier,
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(r.spendCalls).toEqual([
+      {
+        purpose: "writer",
+        model: FAST,
+        usage: { inputTokens: 20_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        costUsd: 0.002,
+        spentAt: new Date(1_000_000).toISOString(),
+      },
+      {
+        purpose: "verifier",
+        model: STRONG,
+        usage: { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        costUsd: 0.003,
+        spentAt: new Date(1_000_000).toISOString(),
+      },
+    ]);
+    expect(r.costUsd).toBe(0.005);
+    expect(r.usage.calls).toBe(2);
+  });
+
+  it("keeps every retry, including unpriced and zero-token calls, on an unavailable result", async () => {
+    const llm = scriptedLlm({
+      writer: (_req, i) =>
+        i === 0 ? { json: { invalid: true }, model: "claude-unknown-9" } : { failure: "timeout" },
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(r.status).toBe("unavailable");
+    expect(r.costUsd).toBeNull();
+    expect(r.spendCalls).toMatchObject([
+      { purpose: "writer", model: "claude-unknown-9", costUsd: null },
+      { purpose: "writer", model: FAST, costUsd: 0 },
+    ]);
+    expect(r.spendCalls?.[1]?.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  it("treats successful zero-token calls as free and records no calls without generation", async () => {
+    const zero = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const llm = scriptedLlm({
+      writer: { ...W(), model: "claude-unknown-9", usage: zero },
+      verifier: (req) => ({ ...agreeingVerifier(req), usage: zero }),
+    });
+    const r = await generateCard(inputs(), llm, OPTS);
+    expect(r.costUsd).toBe(0);
+    expect(r.spendCalls?.map((call) => call.costUsd)).toEqual([0, 0]);
+    expect(
+      unavailableResult(prepareCardInputs(inputs(), OPTS), "budget_exceeded").spendCalls,
+    ).toEqual([]);
+  });
+
   it("U-GEN-30 the cost is the exact sum over the calls: Haiku first pass + Sonnet writer + Sonnet verifier", async () => {
     const llm = scriptedLlm({
       writer: W({ risk_class: "logic" }),

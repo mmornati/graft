@@ -132,12 +132,14 @@ describe("copilot provider: routing", () => {
     });
     expect(copilot.calls[0]?.model).toBe("claude-sonnet-4.5");
 
-    expect(
-      await llm.complete(req({ model: "copilot/claude-sonnet-4.5", installationId: 8 })),
-    ).toMatchObject({
+    const fallback = await llm.complete(
+      req({ model: "copilot/claude-sonnet-4.5", installationId: 8 }),
+    );
+    expect(fallback).toMatchObject({
       ok: true,
       model: "claude/claude-sonnet-5-5",
     });
+    expect(llm.costOf?.(fallback.usage, fallback.model)).toBeCloseTo(0.003);
     const { installationId: _, ...noInstallation } = req();
     expect(await llm.complete({ ...noInstallation, model: "copilot/gpt-5-mini" })).toMatchObject({
       model: "claude/claude-haiku-5-5",
