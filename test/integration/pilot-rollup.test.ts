@@ -1,6 +1,7 @@
 import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { applyCronSchedules } from "../../src/app/crons.js";
+import { billingCloseJob } from "../../src/modules/billing/index.js";
 import { feedbackSweepJob } from "../../src/modules/intent/index.js";
 import {
   emptyCounts,
@@ -397,7 +398,7 @@ describe("daily rollup", () => {
     const queue = createPgBossQueue({
       connectionString: t.deps.config.databaseUrl,
       schema: t.deps.config.pgbossSchema,
-      registry: { jobs: [feedbackSweepJob, metricsRollupJob] },
+      registry: { jobs: [feedbackSweepJob, metricsRollupJob, billingCloseJob] },
       log: t.deps.log,
       supervise: true,
     });
@@ -408,6 +409,7 @@ describe("daily rollup", () => {
       expect(rollup).toHaveLength(1);
       expect(rollup[0]?.cron).toBe("15 2 * * *");
       expect(await queue.boss.getSchedules(feedbackSweepJob.name)).toHaveLength(1);
+      expect((await queue.boss.getSchedules(billingCloseJob.name))[0]?.cron).toBe("5 0 * * *");
 
       await applyCronSchedules(
         queue,
@@ -432,6 +434,7 @@ describe("daily rollup", () => {
         permissionsRefreshCron: null,
         guardPruneCron: null,
       });
+      await queue.unschedule(billingCloseJob);
       await queue.stop();
       await sql`delete from pgboss.job where name in (${metricsRollupJob.name}, ${feedbackSweepJob.name})`.execute(
         t.db,

@@ -1,4 +1,5 @@
 import type { Config } from "../config/index.js";
+import { billingCloseJob } from "../modules/billing/index.js";
 import { guardPruneJob } from "../modules/guard/index.js";
 import { feedbackSweepJob } from "../modules/intent/index.js";
 import { modesApplyJob, refreshAllPermissionsJob } from "../modules/modes/index.js";
@@ -37,4 +38,5 @@ export async function applyCronSchedules(
   // Phase 1 step 4 (D15). With GRAFT_GUARD_DETECTION=off the job itself does nothing.
   if (config.guardPruneCron) await queue.schedule(guardPruneJob, config.guardPruneCron, {});
   else await queue.unschedule(guardPruneJob);
+  await queue.schedule(billingCloseJob, "5 0 * * *", {});
 }

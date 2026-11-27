@@ -843,16 +843,17 @@ describe("review 1: spend, display time, retry notice", () => {
     expect(await spent()).toBe(first * 3);
   });
 
-  it("I-INT-18 a concurrent ok save that is dropped still counts its tokens", async () => {
+  it("I-INT-18 a retrying card save deduplicates per-call budget usage", async () => {
     const { ch, okResult } = await okAndUnavailable();
     const save = () =>
       saveCard(t.db, { changeId: ch.id, headSha: HEAD_SHA, result: okResult, now: FIXED_NOW });
     await save();
     await save(); // the second one loses to the existing ok row
     expect(await cards()).toHaveLength(1);
-    expect(await spent()).toBe(tokensOf(okResult) * 2);
+    expect(await spent()).toBe(tokensOf(okResult));
     const ledger = await t.db.selectFrom("intent_spend").selectAll().execute();
-    expect(ledger).toHaveLength(2);
+    expect(ledger).toHaveLength(okResult.spendCalls?.length ?? 0);
+    expect(ledger.every((r) => r.billing_spend_call_id !== null)).toBe(true);
     expect(ledger.every((r) => r.repository_id === REPO_ID && r.change_id === ch.id)).toBe(true);
   });
 
@@ -872,9 +873,9 @@ describe("review 1: spend, display time, retry notice", () => {
   it("I-INT-24 the ledger row carries the cost of the run, or NULL when a model is unpriced", async () => {
     expect(await runJob()).toBe("published");
     // Sensitive floor (package.json): strong writer + verifier, 1,000 in / 100 out each, Sonnet.
-    const [row] = await t.db.selectFrom("intent_spend").selectAll().execute();
-    expect(row?.llm_calls).toBe(2);
-    expect(Number(row?.cost_usd)).toBe(0.006);
+    const rows = await t.db.selectFrom("intent_spend").selectAll().execute();
+    expect(rows.reduce((calls, row) => calls + row.llm_calls, 0)).toBe(2);
+    expect(rows.reduce((cost, row) => cost + Number(row.cost_usd), 0)).toBe(0.006);
 
     await truncateAll(t.db);
     await seedWorld(t.db);

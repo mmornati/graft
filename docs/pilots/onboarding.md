@@ -110,7 +110,7 @@ pnpm graft pilot purge --installation 123 --confirm acme --dry-run
 
 1. The org admin **uninstalls the App** on GitHub.
 2. Confirm that `installations.deleted_at` is set for the installation.
-3. Preview, then delete: `pnpm graft pilot purge --installation <id> --confirm <account login> --dry-run`, then the same command without `--dry-run`. This deletes every row of the installation (the foreign keys cascade from `installations`), its `webhook_deliveries` and the pg-boss jobs that name it, and writes one `pilot_purges` row (installation id, counts, time; no login).
+3. Preview, then delete: `pnpm graft pilot purge --installation <id> --confirm <account login> --dry-run`, then the same command without `--dry-run`. This deletes installation-scoped operational rows (the foreign keys cascade from `installations`), its `webhook_deliveries` and the pg-boss jobs that name it, and writes one `pilot_purges` row (installation id, deleted/preserved counts, time; no login). **Billing spend, allocations, adjustments, and statements are retained indefinitely for reconciliation, including repository names and usage;** purge removes current team/repository memberships only. There is no billing-history expiry or purge option.
 4. Run `pnpm eval purge --set <dir> --confirm <setId>` on **every labeler machine** that holds an evaluation set for the pilot.
 5. If the agreement says so, ask the model provider to delete the data under the organisation's terms.
 6. Record the `pilot_purges` id in the pilot agreement.

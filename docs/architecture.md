@@ -63,6 +63,8 @@ Each publish happens under a per-change advisory lock (`withChangeLock`) after a
 
 **How later steps plug in.** Each feature is a folder `src/modules/<name>/` whose `index.ts` exports `webhookHandlers: WebhookHandler[]` and `jobs: JobDefinition[]`. `src/app/registry.ts` is the only file that lists modules. Step 2 added `modules/changes` (the `changes` row and its guarded upsert; store only, no handlers) and `modules/provenance` (trailers, handlers, the `provenance.refresh` job). Step 3 added `modules/intent` (handlers, the `intent.generate` job, card generation, rendering, feedback) and `src/llm/` (the model-client interface, the Anthropic client, the fake). Step 4 added `eval/` with `src/bin/eval.ts`, and step 5 added `modules/policy`, the `src/policy/` library and `src/bin/graft.ts`. Step 6 added `modules/pilot` (reviewer eligibility sync, label-based incident detection, the daily rollup), `src/pilot/` (the CLI-side libraries: baseline, review-time arithmetic, gate, doctor, purge), `src/bin/graft-ops.ts` and `scripts/pilot/`. Phase 1 step 6 added `src/mcp/` (pure token and tool-schema code) and `modules/mcp` (the `/mcp` routes and the `mcp-token` helpers; no handlers, no jobs). A module may also export `signalListeners` (see "Policy contract"). Modules import from `config`, `core`, `db`, `github`, `queue` and `webhooks`. They import another module only through its `index.ts`, never its internals.
 
+Team token chargeback adds `modules/billing` for per-call allocations, billing teams and statement closing.
+
 ## Contracts
 
 - Webhook handlers must be idempotent, because a failed job retries every handler for that delivery. They must also be fast: DB writes, or enqueueing a follow-up job with `ctx.queue.send(...)`. Slow work such as LLM calls or many GitHub API calls goes into its own `JobDefinition`.
@@ -178,7 +180,7 @@ Spec: [phase-1/step-6-mcp-server.md](phase-1/step-6-mcp-server.md). User page: [
 
 ## Data model
 
-Defined in [`src/db/schema.ts`](../src/db/schema.ts) (Kysely types) and created by the migrations in [`src/db/migrations/`](../src/db/migrations/). Every app table cascades from `installations` through `repositories`, which is what makes `pnpm graft pilot purge` complete; `webhook_deliveries` and `pilot_purges` have no foreign key (the purge deletes the installation's deliveries itself, and `pilot_purges` outlives the purge). `guard_events` is written by the Phase 1 post-merge guard (steps 4 and 5), with `main_commits` and `ci_results`; step 5 adds the revert columns (outcome and reason codes, counts, the revert's commit SHA, branch and PR number, auto-merge state), never a path, title or body. Only paths, SHAs, numbers, logins or user IDs where needed, and the model's own prose are stored; never file contents, diffs, PR titles or bodies.
+Defined in [`src/db/schema.ts`](../src/db/schema.ts) (Kysely types) and created by the migrations in [`src/db/migrations/`](../src/db/migrations/). Most repository-owned tables cascade from `installations` through `repositories`; `webhook_deliveries` and `pilot_purges` have no foreign key (the purge deletes the installation's deliveries itself, and `pilot_purges` outlives the purge). Team billing deliberately preserves its immutable usage ledger, allocations, adjustments and closed statements when a repository is purged; current billing-team memberships are removed with the repository. The purge records counts of retained billing rows in `pilot_purges.rows_preserved`. `intent_spend` remains the repository-owned aggregate used by the token budget and is deleted with the repository; chargeback statements use the separate ledger. `guard_events` is written by the Phase 1 post-merge guard (steps 4 and 5), with `main_commits` and `ci_results`; step 5 adds the revert columns (outcome and reason codes, counts, the revert's commit SHA, branch and PR number, auto-merge state), never a path, title or body. Only paths, SHAs, numbers, logins or user IDs where needed, and the model's own prose are stored; never file contents, diffs, PR titles or bodies.
 
 ```mermaid
 erDiagram
@@ -211,6 +213,10 @@ erDiagram
     repositories ||--o{ mcp_tokens : "token hashes"
     repositories ||--o{ mcp_changes : "PRs opened through MCP"
     mcp_tokens ||--o{ mcp_changes : "opened with"
+    billing_teams ||--o{ billing_team_repositories : "memberships"
+    repositories ||--o{ billing_team_repositories : "memberships"
+    billing_spend_calls ||--o{ billing_spend_allocations : "frozen split"
+    billing_periods ||--o{ billing_statement_lines : "closed snapshot"
 
     installations {
         bigint id PK
@@ -398,7 +404,69 @@ erDiagram
         uuid id PK
         bigint installation_id
         jsonb rows_deleted
+        jsonb rows_preserved
+    }
+    billing_teams {
+        uuid id PK
+        text name
+        timestamptz archived_at
+    }
+    billing_team_repositories {
+        uuid team_id FK
+        bigint repository_id FK
+        text created_by
+    }
+    billing_spend_calls {
+        uuid id PK
+        bigint repository_id
+        text repository_name
+        uuid change_id
+        text model
+        bigint input_tokens
+        bigint output_tokens
+        bigint cache_read_tokens
+        bigint cache_write_tokens
+        numeric cost_usd
+        text price_version
+        timestamptz spent_at
+    }
+    billing_spend_allocations {
+        uuid spend_call_id FK
+        uuid team_id
+        text team_name
+        bigint input_tokens
+        bigint output_tokens
+        bigint cache_read_tokens
+        bigint cache_write_tokens
+        numeric cost_usd
+    }
+    billing_periods {
+        date period_start PK
+        timestamptz closed_at
+        text closed_by
+    }
+    billing_adjustments {
+        uuid id PK
+        date period_start
+        uuid team_id
+        bigint repository_id
+        text repository_name
+        text model
+        numeric cost_usd
+        uuid source_call_id
+        text reason
+    }
+    billing_statement_lines {
+        uuid id PK
+        date period_start FK
+        uuid team_id
+        bigint repository_id
+        text repository_name
+        text model
+        text line_type
+        bigint calls
+        numeric cost_usd
     }
 ```
 
-`TABLE_NAMES` in `src/db/schema.ts` lists all 27 tables (Phase 1 added `mode_changes`, `service_state`, `audit_log`, `main_commits`, `ci_results`, `mcp_tokens` and `mcp_changes`); `OWNED_ROWS` in `src/pilot/purge.ts` must cover each of them (I-PURGE-2).
+The diagram shows the core relationships and the team-chargeback ledger; it omits some operational columns and tables. `TABLE_NAMES` in `src/db/schema.ts` is the authoritative table list. `OWNED_ROWS` in `src/pilot/purge.ts` handles repository-owned rows, with the chargeback ledger reported separately as preserved history.

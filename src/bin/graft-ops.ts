@@ -499,6 +499,8 @@ async function pilot(sub: string | undefined, rest: string[], r: Run): Promise<n
       });
       r.out(`${res.dryRun ? "would delete" : "deleted"} for installation ${installationId}:\n`);
       for (const [table, n] of Object.entries(res.counts)) r.out(`  ${table}: ${n}\n`);
+      r.out("retained billing history (indefinitely; includes repository names and usage):\n");
+      for (const [table, n] of Object.entries(res.preservedCounts)) r.out(`  ${table}: ${n}\n`);
       if (res.purgeId !== null) r.out(`pilot_purges id: ${res.purgeId}\n`);
       return 0;
     } catch (e) {

@@ -43,12 +43,14 @@ async function tableNames(d: Kysely<Database>): Promise<string[]> {
 }
 
 describe("database", () => {
-  it("I-DB-1 after migration, all twenty-nine tables exist", async () => {
+  it("I-DB-1 after migration, all thirty-six tables exist", async () => {
     const names = await tableNames(db);
     for (const t of TABLE_NAMES) expect(names).toContain(t);
-    expect(TABLE_NAMES).toHaveLength(29);
+    expect(TABLE_NAMES).toHaveLength(36);
     expect(TABLE_NAMES).toContain("intent_feedback");
     expect(TABLE_NAMES).toContain("change_provenance");
+    expect(TABLE_NAMES).toContain("billing_spend_calls");
+    expect(TABLE_NAMES).toContain("billing_statement_lines");
   });
 
   it("I-DB-2 down to zero, then up again, succeeds; the pgboss schema is untouched", async () => {
@@ -97,6 +99,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
       expect(await migrateToLatest(db)).toEqual([]);
       const again = await tableNames(db);
@@ -463,6 +467,66 @@ describe("database", () => {
       })
       .execute();
 
+    const team = await db
+      .insertInto("billing_teams")
+      .values({ name: "Platform", created_by: "tester" })
+      .returning(["id", "name"])
+      .executeTakeFirstOrThrow();
+    await db
+      .insertInto("billing_team_repositories")
+      .values({ team_id: team.id, repository_id: 2, created_by: "tester" })
+      .execute();
+    const usage = {
+      input_tokens: 20,
+      output_tokens: 5,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      cost_usd: "0.01",
+    };
+    const source = { repository_id: 2, repository_name: "acme/app", model: "test-model" };
+    const call = await db
+      .insertInto("billing_spend_calls")
+      .values({ ...source, ...usage, change_id: change.id, price_version: "v1", spent_at: now })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const allocation = { team_id: team.id, team_name: team.name };
+    await db
+      .insertInto("billing_spend_allocations")
+      .values({ ...allocation, ...usage, spend_call_id: call.id })
+      .execute();
+    const period_start = "2026-10-01";
+    await db
+      .insertInto("billing_periods")
+      .values({ period_start, closed_at: new Date("2026-11-02T00:00:00Z"), closed_by: "tester" })
+      .execute();
+    await db
+      .insertInto("billing_statement_lines")
+      .values({
+        ...source,
+        ...allocation,
+        ...usage,
+        period_start,
+        calls: 1,
+        unpriced_calls: 0,
+        line_type: "usage",
+      })
+      .execute();
+    await db
+      .insertInto("billing_adjustments")
+      .values({
+        ...source,
+        ...allocation,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        cost_usd: "-0.01",
+        period_start: "2026-11-01",
+        reason: "Provider credit",
+        created_by: "tester",
+      })
+      .execute();
+
     for (const t of TABLE_NAMES) {
       const rows = await db.selectFrom(t).selectAll().execute();
       expect(rows, t).toHaveLength(t === "provenance" ? 2 : 1);
@@ -615,6 +679,12 @@ describe("database", () => {
     const migrator = createMigrator(db);
     try {
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -679,6 +749,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     expect(await tableNames(db)).toContain("change_provenance");
@@ -690,6 +762,12 @@ describe("database", () => {
   it("I-DB-8 0003 down then up: down restores the 0001 intent_cards and drops intent_feedback", async () => {
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
@@ -755,6 +833,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     expect(await tableNames(db)).toContain("intent_feedback");
@@ -805,6 +885,12 @@ describe("database", () => {
       );
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
@@ -890,6 +976,12 @@ describe("database", () => {
     const migrator = createMigrator(db);
     try {
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
@@ -953,6 +1045,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     expect(await policyColumns()).toEqual(upColumns);
@@ -980,6 +1074,12 @@ describe("database", () => {
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
@@ -1028,6 +1128,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     for (const t of stepSix) expect(await tableNames(db), t).toContain(t);
@@ -1065,6 +1167,12 @@ describe("database", () => {
       .executeTakeFirstOrThrow();
     const migrator = createMigrator(db);
     try {
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0020_billing_auditability",
+      );
+      expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
+        "0019_team_chargeback",
+      );
       expect((await migrator.migrateDown()).results?.[0]?.migrationName).toBe(
         "0018_repository_filter",
       );
@@ -1108,6 +1216,8 @@ describe("database", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     const rows = await sql<{ user_id: number; verified: boolean }>`

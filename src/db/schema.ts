@@ -264,10 +264,101 @@ export interface IntentSpendTable {
   id: Generated<string>;
   repository_id: number;
   change_id: string | null;
+  billing_spend_call_id: string | null;
   tokens: number;
   llm_calls: Optional<number>;
   spent_at: Date;
   /** Step 6: USD at spend time; NULL = unpriced (unknown model, or a row from before 0006). */
+  cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+}
+
+export interface BillingTeamTable {
+  id: Generated<string>;
+  name: string;
+  created_by: string;
+  created_at: Timestamp;
+  archived_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+}
+
+export interface BillingTeamRepositoriesTable {
+  team_id: string;
+  repository_id: number;
+  created_by: string;
+  created_at: Timestamp;
+}
+
+export interface BillingSpendCallsTable {
+  id: Generated<string>;
+  repository_id: number;
+  repository_name: string;
+  change_id: string | null;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+  price_version: string | null;
+  price_snapshot: Json<Record<string, number>> | null;
+  spent_at: Date;
+}
+
+export interface BillingSpendAllocationsTable {
+  spend_call_id: string;
+  team_id: string | null;
+  team_name: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+}
+
+export interface BillingPeriodTable {
+  period_start: ColumnType<string, string | Date, string | Date>;
+  closed_at: Date;
+  closed_by: string;
+}
+
+export interface BillingAdjustmentsTable {
+  id: Generated<string>;
+  operation_id: string | null;
+  period_start: ColumnType<string, string | Date, string | Date>;
+  team_id: string | null;
+  team_name: string;
+  repository_id: number;
+  repository_name: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+  source_call_id: string | null;
+  source_period: ColumnType<string | null, string | null | undefined, string | null>;
+  source_statement_line_id: string | null;
+  reason: string;
+  created_by: string;
+  created_at: Timestamp;
+}
+
+export interface BillingStatementLinesTable {
+  id: Generated<string>;
+  period_start: ColumnType<string, string | Date, string | Date>;
+  team_id: string | null;
+  team_name: string;
+  repository_id: number;
+  repository_name: string;
+  model: string;
+  line_type: "usage" | "adjustment";
+  description: string | null;
+  adjustment_id: string | null;
+  calls: number;
+  unpriced_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   cost_usd: ColumnType<string | null, string | number | null | undefined, string | number | null>;
 }
 
@@ -558,6 +649,7 @@ export interface PilotPurgesTable {
   id: Generated<string>;
   installation_id: number;
   rows_deleted: Json<Record<string, number>>;
+  rows_preserved: Json<Record<string, number>>;
   purged_at: Date;
 }
 
@@ -603,6 +695,13 @@ export interface Database {
   intent_cards: IntentCardsTable;
   intent_feedback: IntentFeedbackTable;
   intent_spend: IntentSpendTable;
+  billing_teams: BillingTeamTable;
+  billing_team_repositories: BillingTeamRepositoriesTable;
+  billing_spend_calls: BillingSpendCallsTable;
+  billing_spend_allocations: BillingSpendAllocationsTable;
+  billing_periods: BillingPeriodTable;
+  billing_adjustments: BillingAdjustmentsTable;
+  billing_statement_lines: BillingStatementLinesTable;
   intent_displays: IntentDisplaysTable;
   policy_verdicts: PolicyVerdictsTable;
   guard_events: GuardEventsTable;
@@ -635,6 +734,13 @@ export const TABLE_NAMES = [
   "intent_cards",
   "intent_feedback",
   "intent_spend",
+  "billing_teams",
+  "billing_team_repositories",
+  "billing_spend_calls",
+  "billing_spend_allocations",
+  "billing_periods",
+  "billing_adjustments",
+  "billing_statement_lines",
   "intent_displays",
   "policy_verdicts",
   "guard_events",

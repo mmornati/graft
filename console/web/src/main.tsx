@@ -3,6 +3,7 @@ import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import type { Me, OverviewResponse } from "../../shared/api.js";
 import { useApi } from "./api.js";
+import { Billing } from "./billing.js";
 import { Mark } from "./components.js";
 import { Journal } from "./journal.js";
 import { ChangePage } from "./record.js";
@@ -62,6 +63,9 @@ function Header({
           </a>
           <a href={href.repositories()} aria-current={current(["repositories"])}>
             Repositories
+          </a>
+          <a href={href.billing()} aria-current={current(["billing"])}>
+            Billing
           </a>
         </nav>
         <div class="top__end">
@@ -132,6 +136,7 @@ function App() {
       gate: "Gate",
       system: "System",
       repositories: "Repositories",
+      billing: "Billing",
     };
     document.title = `${titles[route.view]} · Graft Console`;
   }, [route.view]);
@@ -146,6 +151,7 @@ function App() {
         {route.view === "gate" ? <Gate ov={ov} /> : null}
         {route.view === "system" ? <System ov={ov} /> : null}
         {route.view === "repositories" ? <Repositories /> : null}
+        {route.view === "billing" ? <Billing /> : null}
       </main>
       <div class="toast" id="toast" role="status" aria-live="polite" />
     </>

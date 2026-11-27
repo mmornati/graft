@@ -78,5 +78,7 @@ export function tracedLlm(client: LlmClient, provider: { kind: string; id?: stri
   }
   if (client.capabilities) traced.capabilities = client.capabilities.bind(client);
   if (client.costOf) traced.costOf = client.costOf.bind(client);
+  if (client.priceVersion) traced.priceVersion = client.priceVersion.bind(client);
+  if (client.priceSnapshot) traced.priceSnapshot = client.priceSnapshot.bind(client);
   return traced;
 }

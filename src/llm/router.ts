@@ -1,4 +1,5 @@
-import { costAt, priceFor } from "./pricing.js";
+import { createHash } from "node:crypto";
+import { costAt, PRICING_VERIFIED_AT, type Price, priceFor } from "./pricing.js";
 import { type LlmProvider, splitModelRef } from "./registry.js";
 import {
   FULL_CAPABILITIES,
@@ -81,6 +82,25 @@ export function createRouterLlm(routes: readonly RoutedProvider[]): LlmClient {
     costOf(usage: LlmUsage, ref: string): number | null {
       route(ref, undefined); // an unknown provider is a programmer error here too
       return costOf(usage, ref);
+    },
+    priceVersion(ref: string, installationId?: number): string | null {
+      const { r, model } = route(ref, installationId);
+      const configured = priceFor(model, r.provider.prices);
+      if (configured) {
+        const digest = createHash("sha256").update(JSON.stringify(configured)).digest("hex");
+        return `registry:${r.provider.id}:${digest}`;
+      }
+      if (r.provider.kind === "anthropic" && priceFor(model)) {
+        return `anthropic:${PRICING_VERIFIED_AT}`;
+      }
+      return null;
+    },
+    priceSnapshot(ref: string, installationId?: number): Price | null {
+      const { r, model } = route(ref, installationId);
+      return (
+        priceFor(model, r.provider.prices) ??
+        (r.provider.kind === "anthropic" ? priceFor(model) : null)
+      );
     },
   };
 }

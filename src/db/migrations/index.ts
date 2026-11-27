@@ -17,6 +17,8 @@ import * as m0015 from "./0015_mcp_open_claims.js";
 import * as m0016 from "./0016_phase1_gate.js";
 import * as m0017 from "./0017_intent_requested.js";
 import * as m0018 from "./0018_repository_filter.js";
+import * as m0019 from "./0019_team_chargeback.js";
+import * as m0020 from "./0020_billing_auditability.js";
 
 export const migrations: Record<string, Migration> = {
   "0001_initial": m0001,
@@ -37,4 +39,6 @@ export const migrations: Record<string, Migration> = {
   "0016_phase1_gate": m0016,
   "0017_intent_requested": m0017,
   "0018_repository_filter": m0018,
+  "0019_team_chargeback": m0019,
+  "0020_billing_auditability": m0020,
 };

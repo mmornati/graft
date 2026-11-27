@@ -462,6 +462,13 @@ describe("gateways and bearer tokens", () => {
     const direct = createLlmClient(testConfig({ ANTHROPIC_API_KEY: "sk-ant-x" }), silentLog);
     expect(direct.serverRefusalFallback?.("claude-sonnet-5-5")).toBe(true);
     expect(direct.serverRefusalFallback?.("claude-haiku-5-5")).toBe(false);
+    expect(direct.priceVersion?.("claude-sonnet-5-5")).toBe("anthropic:2026-10-06");
+    expect(direct.priceSnapshot?.("claude-sonnet-5-5")).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheWrite: 2.5,
+    });
     const gateway = createLlmClient(
       testConfig({
         ANTHROPIC_AUTH_TOKEN: "or-token",

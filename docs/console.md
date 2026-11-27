@@ -4,7 +4,7 @@
 
 The console is an optional web app for whoever runs Graft. It reads what Graft recorded in its database and shows it as a daily journal: the pull requests Graft handled, their intent cards and verdicts, guard events, the token budget, the gate, and the job queue. Anything that needs a human is pinned in the margin.
 
-Its database connection is **read-only**. By default, every action stays in the CLI: where the console shows a problem, it gives you the `pnpm graft …` command to copy. With an optional authenticated connection to Graft, repository administrators can manage repository activation from the Repositories tab. The console never gains database-write access or a GitHub App private key; Graft verifies permissions and performs these narrowly scoped changes.
+Its database connection is **read-only**. By default, every action stays in the CLI: where the console shows a problem, it gives you the `pnpm graft …` command to copy. With an optional authenticated connection to Graft, repository administrators can manage repository activation and billing-team memberships. The console never gains database-write access or a GitHub App private key; Graft verifies permissions and performs these narrowly scoped changes.
 
 Graft does not need the console. It runs in a container of its own, from its own image, with its own database role, and none of Graft's GitHub App or model credentials. Optional repository management uses a dedicated shared bridge secret.
 
@@ -18,6 +18,7 @@ Graft does not need the console. It runs in a container of its own, from its own
 | **Gate** (`#/gate`) | Card votes split the way the Phase 0 gate splits them (a vote by the PR's author never counts), the Wilson interval against the 90% target, and what the models did. A preview: `pnpm graft gate report --phase 0` is the authoritative report. |
 | **System** (`#/system`) | Jobs by name (done, waiting, oldest waiting, failed), webhook deliveries by event, the models that wrote, first-passed or verified cards (as recorded: `<provider id>/<model>` with a [provider registry](configuration.md#model-providers)), why cards were unavailable and why verifiers failed, repositories and modes, mode changes, the break-glass audit and MCP tokens (name and prefix, never the token). |
 | **Repositories** (`#/repositories`) | The enabled-repository list, whether filtering is on, and paginated GitHub repository search within an active installation. Only repository admins can enable or disable a repository; disabling requires confirmation. Needs the optional Graft connection described below. |
+| **Billing** (`#/billing`) | Billing teams and their repository memberships, plus a monthly per-model statement with input/output/cache tokens, estimated USD cost, unpriced calls and adjustments. Export the statement as CSV or JSON. Months close automatically in UTC once every call has a price; closed statements stay immutable and corrections appear in a later open month. Needs the optional Graft connection. See the [team token chargeback guide](features/team-token-chargeback.md). |
 
 **Needs you** pins, newest and most urgent first:
 
@@ -43,7 +44,7 @@ flowchart LR
 ```
 
 - **Language and stack:** TypeScript on Node 24, like Graft: a [Fastify](https://fastify.dev) backend-for-frontend (BFF) and a small [Preact](https://preactjs.com) web app, both bundled with esbuild. It lives in `console/`, a pnpm project of its own with its own lockfile, so Graft's install and image never include it.
-- **The BFF is the only thing that touches the database.** The browser calls a handful of JSON routes (`/api/days`, `/api/days/<date>`, `/api/overview`, `/api/changes`, `/api/changes/<id>`, `/api/system`); each is a fixed, parameterised query. The browser never sends SQL and never sees a connection string.
+- **The BFF is the only thing that touches the database.** The browser calls fixed JSON routes for the journal, changes, system, repositories and billing; it never sends SQL and never sees a connection string. Billing writes go through the signed Graft bridge, not the read-only console connection.
 - **Graft's schema types.** The console imports Graft's `src/db/schema.ts` as types only, so a column Graft renames breaks the console's typecheck, not a query in production. Its integration tests run against a database migrated by Graft's own migrations.
 
 ## Security
@@ -51,7 +52,7 @@ flowchart LR
 - **Two read-only locks.** The console connects as `graft_console`, a role with `SELECT` and nothing else, created by [`console/sql/readonly-role.sql`](https://github.com/mmornati/graft/blob/main/console/sql/readonly-role.sql). On top of that, every connection sets `default_transaction_read_only=on` and a statement timeout. At start the console checks both and refuses to run if its role can `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` any table (or is a superuser), unless you set `CONSOLE_REQUIRE_READONLY_ROLE=false` for local use.
 - **Sign-in with GitHub, restricted by either allow-list.** A login or numeric user id in `CONSOLE_ALLOWED_USERS`, **or** active membership in a `CONSOLE_ALLOWED_ORGANIZATIONS` organization, grants access. Numeric user ids survive a rename; organization entries are logins. Organization membership is checked through Graft's installation token, including private membership, and cached for at most one minute; it requires an active installation with `members: read`. The OAuth App still asks for no scopes. The GitHub login token is dropped after identity lookup; the console keeps only a signed, `HttpOnly`, `SameSite=Lax` cookie with login, id and expiry (`CONSOLE_SESSION_HOURS`, 12 by default). Removing a directly allowed user locks them out on the next request unless they still qualify through an allowed organization.
 - **Shared operator visibility.** Both allow-lists grant access to the entire dashboard, not just an organization's or a user's repositories. Repository-admin checks restrict activation changes, not visibility. Use only trusted organizations.
-- **Narrow administration bridge.** Optional requests to Graft carry a short-lived HMAC signature binding the timestamp, method, path, body and verified user identity. The bridge secret stays server-side. Graft checks current repository-admin permission and immutable user id for each activation change, verifies installation access, and records changes in `repository_filter_changes`. Browser mutations require a same-origin JSON request; the internal service API rejects browser origins.
+- **Narrow administration bridge.** Optional requests to Graft carry a short-lived HMAC signature binding the timestamp, method, path, body and verified user identity. The bridge secret stays server-side. Graft checks current repository-admin permission and immutable user id for each activation or billing-membership change, and verifies repository installation access. Browser mutations require a same-origin JSON request; the internal service API rejects browser origins.
 - **No sign-in only on loopback.** `CONSOLE_AUTH=none` is refused unless `HOST` is `127.0.0.1`, `::1` or `localhost`.
 - **Strict headers.** `Content-Security-Policy: default-src 'self'` with no inline script or style, fonts served by the console itself (no third-party requests), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on every API answer.
 - **No Graft credentials in the container.** It needs no GitHub App key, webhook secret or Anthropic key. Its own OAuth, session, database and optional administration-bridge secrets must remain runtime-only.
@@ -66,7 +67,7 @@ flowchart LR
 | `CONSOLE_GITHUB_CLIENT_ID`, `CONSOLE_GITHUB_CLIENT_SECRET` | (required for `github`) | From a GitHub OAuth App (below). |
 | `CONSOLE_ALLOWED_USERS` | empty | Comma-separated GitHub logins or numeric user ids. With `github`, at least this list or the organization list must be nonempty. |
 | `CONSOLE_ALLOWED_ORGANIZATIONS` | empty | Comma-separated organization logins whose active members can enter the entire console. Requires the Graft connection and an active App installation with `members: read` on each organization. Membership lookup failures do not grant access. |
-| `CONSOLE_GRAFT_URL` | unset | Graft server's base URL, without a path (for example `https://graft.example.com`, or an internal service URL on a trusted container network). Set with `CONSOLE_GRAFT_SECRET`. Enables repository management through Graft, not direct database writes. Use HTTPS outside a trusted private network. |
+| `CONSOLE_GRAFT_URL` | unset | Graft server's base URL, without a path (for example `https://graft.example.com`, or an internal service URL on a trusted container network). Set with `CONSOLE_GRAFT_SECRET`. Enables repository and billing-team management through Graft, not direct database writes. Use HTTPS outside a trusted private network. |
 | `CONSOLE_GRAFT_SECRET` | unset | At least 32 characters; must match Graft's `GRAFT_CONSOLE_SECRET`. Keep runtime-only and server-side. The two server clocks must agree within 30 seconds. |
 | `CONSOLE_SESSION_SECRET` | (required for `github`) | At least 32 characters: `openssl rand -hex 32`. Changing it signs everyone out. |
 | `CONSOLE_SESSION_HOURS` | `12` | Session length, 1 to 168. |
@@ -91,7 +92,7 @@ Install the GitHub App on all repositories, then control processing separately i
 1. Start the updated Graft server to apply migrations for the `enabled_repositories` and `repository_filter_changes` tables automatically, or run `pnpm db:migrate` explicitly before starting workers and the console.
 2. Generate a dedicated secret with `openssl rand -hex 32`. Set it as `GRAFT_CONSOLE_SECRET` on Graft and `CONSOLE_GRAFT_SECRET` on the console; set `CONSOLE_GRAFT_URL` to the reachable Graft server.
 3. Configure `CONSOLE_ALLOWED_USERS`, `CONSOLE_ALLOWED_ORGANIZATIONS`, or both. Organization access does not require additional OAuth scopes, but Graft's GitHub App must have `members: read`.
-4. Sign in, open **Repositories**, select an installation account and search by repository name (at least two characters). Search uses GitHub's Search Repositories API in pages of ten; it does not enumerate every repository in a large organization. GitHub limits search to its first 1,000 matches, so refine broad searches. Results outside the App's installation selection are omitted.
+4. Sign in, open **Repositories**, select an installation account and search by repository name (at least two characters). Search includes forks and uses GitHub's Search Repositories API in pages of ten; it does not enumerate every repository in a large organization. GitHub limits search to its first 1,000 matches, so refine broad searches. Results outside the App's installation selection are omitted.
 5. Enable the repositories you administer. Set `GRAFT_REPOSITORY_FILTER=on` on the Graft server and every worker, then restart them. You may prepare the list while filtering is off.
 
 When filtering is on, new repositories are disabled by default. Changes to the list take effect without a deployment. Enabling starts processing **future events**, not a retrospective review of every existing PR. Disabling skips future repository events and queued repository jobs, and the GitHub mutation guard refuses subsequent repository writes from an in-flight job. A model request already sent cannot be undone. Global maintenance and installation lifecycle processing continue.
@@ -99,6 +100,10 @@ When filtering is on, new repositories are disabled by default. Changes to the l
 Activation is separate from report/enforce modes. Renaming a repository within the same installation preserves activation; removing it, reinstalling after deletion, or transferring it to a different installation requires enabling it again. An App installed on all repositories still has access to them: this is a processing filter, not a GitHub permission boundary.
 
 Disabling does **not** remove existing comments, checks, or branch-protection requirements. Before disabling a repository, remove Graft's required checks from its rules if appropriate; otherwise future PRs may wait for checks Graft no longer publishes. Existing guard revert PRs and any previously enabled GitHub auto-merge remain as they are.
+
+## Team token chargeback
+
+The [team token chargeback guide](features/team-token-chargeback.md) covers setup, allocation rules, pricing, unpriced calls, monthly close, corrections, exports and purge retention. The **Billing** tab requires the same optional Graft connection as repository activation; the console never receives database write access or the GitHub App key.
 
 ## Deploying on Coolify
 
@@ -143,5 +148,7 @@ pnpm --dir console install
 ```bash
 CONSOLE_DATABASE_URL=postgres://graft:graft@localhost:55432/graft CONSOLE_AUTH=none CONSOLE_REQUIRE_READONLY_ROLE=false pnpm --dir console dev
 ```
+
+Alternatively, save the console variables in `console/.env` and run `pnpm --dir console dev`. The development command loads this file when present; variables already exported in the shell take precedence.
 
 Open <http://127.0.0.1:3100>. `dev` rebuilds the web app and the BFF on change and restarts the server. The tests (`pnpm --dir console test`) need the same local Postgres as Graft's (`pnpm db:up`); they create their own database, `graft_console_test`.

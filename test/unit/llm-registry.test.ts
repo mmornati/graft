@@ -353,6 +353,10 @@ describe("provider registry: routing", () => {
     );
     const usage = { ...ZERO_USAGE, inputTokens: 1_000_000, outputTokens: 1_000_000 };
     expect(llm.costOf?.(usage, "gateway/anthropic/claude-sonnet-5.5")).toBe(18);
+    expect(llm.priceSnapshot?.("gateway/anthropic/claude-sonnet-5.5")).toMatchObject({
+      input: 3,
+      output: 15,
+    });
     expect(llm.costOf?.(usage, "claude/claude-haiku-5-5-20260101")).toBeCloseTo(0.6);
     expect(llm.costOf?.(usage, "claude/claude-unknown-9")).toBeNull();
     expect(llm.serverRefusalFallback?.("claude/claude-sonnet-5-5")).toBe(true);

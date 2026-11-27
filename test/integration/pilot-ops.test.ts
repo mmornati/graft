@@ -9,11 +9,12 @@ import { type OpsDeps, main as opsMain } from "../../src/bin/graft-ops.js";
 import { loadConfig } from "../../src/config/index.js";
 import { migrateDownOne, migrateToLatest } from "../../src/db/migrator.js";
 import { TABLE_NAMES } from "../../src/db/schema.js";
+import { billingCloseJob } from "../../src/modules/billing/index.js";
 import { feedbackSweepJob } from "../../src/modules/intent/index.js";
 import { scheduleIncidentDetection } from "../../src/modules/pilot/incidents.js";
 import { detectIncident, metricsRollupJob, syncReviewers } from "../../src/modules/pilot/index.js";
 import { onChangeSignal, scheduleReviewerSync } from "../../src/modules/pilot/reviewers.js";
-import { OWNED_ROWS, purgeInstallation } from "../../src/pilot/purge.js";
+import { OWNED_ROWS, PRESERVED_ROWS, purgeInstallation } from "../../src/pilot/purge.js";
 import { createPgBossQueue } from "../../src/queue/queue.js";
 import { createTestApp, fakeGitHubFactory, jobContext, type TestApp } from "../helpers/app.js";
 import { FIXED_NOW, testConfig } from "../helpers/config.js";
@@ -144,7 +145,7 @@ describe("pilot doctor", () => {
     const queue = createPgBossQueue({
       connectionString: t.deps.config.databaseUrl,
       schema: t.deps.config.pgbossSchema,
-      registry: { jobs: [feedbackSweepJob, metricsRollupJob] },
+      registry: { jobs: [feedbackSweepJob, metricsRollupJob, billingCloseJob] },
       log: t.deps.log,
       supervise: true,
     });
@@ -162,7 +163,7 @@ describe("pilot doctor", () => {
       return await fn();
     } finally {
       await queue.stop();
-      await sql`delete from pgboss.schedule where name in ('intent.feedback.sweep', 'pilot.metrics.rollup')`.execute(
+      await sql`delete from pgboss.schedule where name in ('intent.feedback.sweep', 'pilot.metrics.rollup', 'billing.close-periods')`.execute(
         t.db,
       );
     }
@@ -374,6 +375,15 @@ async function seedEverything(o: { id: number; repo: number; login: string; seq:
     deleted: true,
   });
   const head = SHA(o.seq * 10 + 1);
+  const team = await t.db
+    .insertInto("billing_teams")
+    .values({ name: `Team ${o.seq}`, created_by: "operator" })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await t.db
+    .insertInto("billing_team_repositories")
+    .values({ team_id: team.id, repository_id: o.repo, created_by: "operator" })
+    .execute();
   await t.db
     .insertInto("enabled_repositories")
     .values({
@@ -502,6 +512,9 @@ async function countsFor(id: number, repo: number): Promise<Record<string, numbe
   const runs = sql`(select id from review_time_runs where repository_id = ${repo})`;
   return {
     installations: await n(sql`select count(*) as n from installations where id = ${id}`),
+    billing_team_repositories: await n(
+      sql`select count(*) as n from billing_team_repositories where repository_id = ${repo}`,
+    ),
     enabled_repositories: await n(
       sql`select count(*) as n from enabled_repositories where repository_id = ${repo}`,
     ),
@@ -619,9 +632,9 @@ describe("pilot purge", () => {
     expect(JSON.stringify(purges[0])).not.toContain(A.login);
   });
 
-  it("I-PURGE-2 every table of TABLE_NAMES except pilot_purges and service_state has a purge entry; a table without one is caught", async () => {
-    const covered = Object.keys(OWNED_ROWS);
-    const exempt = ["pilot_purges", "service_state"];
+  it("I-PURGE-2 every installation-scoped table is classified as deleted or preserved", async () => {
+    const covered = [...Object.keys(OWNED_ROWS), ...Object.keys(PRESERVED_ROWS)];
+    const exempt = ["pilot_purges", "service_state", "billing_teams", "billing_periods"];
     const missing = (names: readonly string[]) =>
       names.filter((n) => !exempt.includes(n) && !covered.includes(n));
     expect(missing(TABLE_NAMES)).toEqual([]);
@@ -670,6 +683,8 @@ describe("pilot purge", () => {
       expect(res.code).toBe(0);
       expect(res.out).toContain("would delete for installation");
       for (const [table, n] of Object.entries(before)) expect(res.out).toContain(`${table}: ${n}`);
+      expect(res.out).toContain("retained billing history (indefinitely");
+      expect(res.out).toContain("billing_spend_calls: 0");
       expect(await countsFor(A.id, A.repo)).toEqual(before);
       expect(await t.db.selectFrom("pilot_purges").selectAll().execute()).toEqual([]);
       // A wrong confirmation is refused even for a dry run.
@@ -982,13 +997,13 @@ describe("operations CLI", () => {
 
     // One migration behind: every command stops with the same instruction.
     const down = await migrateDownOne(t.db);
-    expect(down).toEqual(["0018_repository_filter"]);
+    expect(down).toEqual(["0020_billing_auditability"]);
     try {
       err = "";
       expect(await opsMain(["pilot", "doctor", "--installation", "1"], io, deps())).toBe(2);
       expect(err).toBe("run pnpm db:migrate\n");
     } finally {
-      expect(await migrateToLatest(t.db)).toEqual(["0018_repository_filter"]);
+      expect(await migrateToLatest(t.db)).toEqual(["0020_billing_auditability"]);
     }
   });
 });

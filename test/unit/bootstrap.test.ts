@@ -51,7 +51,7 @@ beforeEach(async () => {
 
 describe("startup migrations", () => {
   it("applies migrations before checking the schema and starting the queue", async () => {
-    vi.mocked(migrateToLatest).mockResolvedValue(["0018_repository_filter"]);
+    vi.mocked(migrateToLatest).mockResolvedValue(["0020_billing_auditability"]);
     await bootstrap({ supervise: false, migrate: true });
     expect(migrateToLatest).toHaveBeenCalledWith(vi.mocked(createDb).mock.results[0]?.value);
     expect(migrateToLatest).toHaveBeenCalledBefore(vi.mocked(pendingMigrations));

@@ -6,7 +6,8 @@ export type Route =
   | { view: "change"; id: string }
   | { view: "gate" }
   | { view: "system" }
-  | { view: "repositories" };
+  | { view: "repositories" }
+  | { view: "billing" };
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID = /^[0-9a-f-]{36}$/;
@@ -26,6 +27,8 @@ export function parseRoute(hash: string): Route {
       return { view: "system" };
     case "repositories":
       return { view: "repositories" };
+    case "billing":
+      return { view: "billing" };
     case "journal":
       return { view: "journal", date: parts[1] && DATE.test(parts[1]) ? parts[1] : null };
     default:
@@ -53,4 +56,5 @@ export const href = {
   gate: () => "#/gate",
   system: () => "#/system",
   repositories: () => "#/repositories",
+  billing: () => "#/billing",
 };

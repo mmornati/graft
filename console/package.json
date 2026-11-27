@@ -16,7 +16,7 @@
   "packageManager": "pnpm@11.14.0",
   "scripts": {
     "build": "tsx scripts/build.ts",
-    "dev": "tsx scripts/build.ts --watch",
+    "dev": "node --env-file-if-exists=.env --import tsx scripts/build.ts --watch",
     "start": "node --import ./dist/otel.js dist/server.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "test": "vitest run",

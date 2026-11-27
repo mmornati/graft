@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Logger } from "../core/logger.js";
 import { type AnthropicFederation, FederationError, federatedCredentials } from "./federation.js";
+import { PRICING_VERIFIED_AT, priceFor } from "./pricing.js";
 import {
   FULL_CAPABILITIES,
   type LlmCapabilities,
@@ -132,6 +133,8 @@ export function createAnthropicLlm(o: AnthropicLlmOptions): LlmClient {
   return {
     serverRefusalFallback,
     capabilities: () => caps,
+    priceVersion: (model: string) => (priceFor(model) ? `anthropic:${PRICING_VERIFIED_AT}` : null),
+    priceSnapshot: (model: string) => priceFor(model),
     async complete(req: LlmRequest): Promise<LlmResult> {
       const started = Date.now();
       const finish = (

@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -76,6 +84,7 @@ function repoWithHook(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "graft-hook-"));
   dirs.push(dir);
   git(dir, {}, "init", "-q", "-b", "main");
+  mkdirSync(path.join(dir, ".git/hooks"), { recursive: true });
   copyFileSync(HOOK, path.join(dir, ".git/hooks/prepare-commit-msg"));
   spawnSync("chmod", ["+x", path.join(dir, ".git/hooks/prepare-commit-msg")]);
   return dir;

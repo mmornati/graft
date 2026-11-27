@@ -11,6 +11,7 @@ import { PermanentJobError } from "../../queue/errors.js";
 import { defineJob } from "../../queue/job.js";
 import { recordCard, recordOutcome } from "../../telemetry/metrics.js";
 import { annotate, withSpan } from "../../telemetry/tracing.js";
+import { billingTeamSnapshot, storeBillingCalls } from "../billing/ledger.js";
 import { type Change, getChange, type LivePull, upsertChangeFromPull } from "../changes/index.js";
 import { ensureRepository, getActiveInstallation } from "../installations/index.js";
 import { computeProvenance, fetchPrCommits } from "../provenance/index.js";
@@ -85,7 +86,7 @@ function cardInputsKey(p: LivePull): string {
 
 export async function generateIntent(data: GenerateData, ctx: JobContext): Promise<IntentOutcome> {
   const { config } = ctx;
-  const startedAtMs = Date.now();
+  const startedAtMs = ctx.clock.now().getTime();
   const done = (outcome: IntentOutcome, extra: Record<string, unknown> = {}): IntentOutcome => {
     ctx.log.info({ outcome, prNumber: data.prNumber, ...extra }, "intent generate done");
     return outcome;
@@ -237,8 +238,43 @@ export async function generateIntent(data: GenerateData, ctx: JobContext): Promi
   }
   const opts = defaultGenerateOptions(config, settings.floor, settings.language);
   opts.log = ctx.log;
+  opts.nowMs = () => ctx.clock.now().getTime();
   opts.startedAtMs = startedAtMs;
   opts.installationId = data.installationId;
+  opts.captureBillingTeams = () => billingTeamSnapshot(ctx.db, data.repositoryId);
+  opts.persistSpendCall = async (call) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await ctx.db.transaction().execute(async (tx) => {
+          await storeBillingCalls(tx, {
+            calls: [call],
+            repositoryId: data.repositoryId,
+            repositoryName: `${data.owner}/${data.repo}`,
+            changeId: change.id,
+            recordedAt: ctx.clock.now(),
+          });
+          const usage = call.usage;
+          await tx
+            .insertInto("intent_spend")
+            .values({
+              repository_id: data.repositoryId,
+              change_id: change.id,
+              billing_spend_call_id: call.id ?? null,
+              tokens: usage.inputTokens + usage.outputTokens + usage.cacheWriteTokens,
+              llm_calls: 1,
+              spent_at: call.spentAt,
+              cost_usd: call.costUsd,
+            })
+            .onConflict((oc) => oc.column("billing_spend_call_id").doNothing())
+            .execute();
+        });
+        return;
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
+  };
   const prepared = prepareCardInputs(inputs, opts);
 
   const fresh = (current: Change | undefined): boolean =>

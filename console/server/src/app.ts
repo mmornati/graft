@@ -253,6 +253,59 @@ export async function buildApp(deps: AppDeps): Promise<AppServer> {
     return graft?.activation(user, body.repository, body.enabled, body.confirmation);
   });
 
+  app.get("/api/billing/teams", async (req) => {
+    const user = principal(req);
+    return graft?.billingTeams(user);
+  });
+  app.get("/api/billing/repositories", async (req) => {
+    const user = principal(req);
+    const q = parse(z.object({ after: int(0, Number.MAX_SAFE_INTEGER).default(0) }), req.query);
+    return graft?.billingRepositories(user, q.after);
+  });
+  app.get("/api/billing/statement", async (req) => {
+    const user = principal(req);
+    const q = parse(z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }), req.query);
+    return graft?.billingStatement(user, q.month);
+  });
+  app.post("/api/billing/change", async (req) => {
+    const user = principal(req);
+    if (
+      config.auth.mode !== "github" ||
+      req.headers.origin !== new URL(config.auth.publicUrl).origin ||
+      !req.headers["content-type"]?.startsWith("application/json")
+    ) {
+      throw new GraftError(403, "Billing changes require a same-origin JSON request.");
+    }
+    const body = parse(
+      z.discriminatedUnion("action", [
+        z.object({ action: z.literal("create"), name: z.string().min(1).max(100) }),
+        z.object({
+          action: z.literal("rename"),
+          id: z.uuid(),
+          name: z.string().min(1).max(100),
+        }),
+        z.object({ action: z.literal("archive"), id: z.uuid() }),
+        z.object({
+          action: z.literal("repository"),
+          teamId: z.uuid(),
+          repositoryId: int(1, Number.MAX_SAFE_INTEGER),
+          attached: z.boolean(),
+        }),
+        z.object({
+          action: z.literal("adjustment"),
+          sourcePeriod: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+          sourceLineId: z.uuid(),
+          operationId: z.uuid(),
+          amountUsd: z.string().regex(/^-?\d{1,12}(?:\.\d{1,2})?$/),
+          reason: z.string().min(1).max(500),
+        }),
+      ]),
+      req.body,
+    );
+    const { action, ...values } = body;
+    return graft?.billingChange(user, action, values);
+  });
+
   app.all("/api/*", async (_req, reply) => notFound(reply, "No such API route."));
 
   registerStatic(app, deps.web);

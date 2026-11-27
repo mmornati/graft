@@ -1,4 +1,5 @@
 /** setup, cleanup, verify, the preflight and the dry run, against the fake world and the test database. */
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sql } from "kysely";
@@ -277,21 +278,24 @@ describe("preflight", () => {
     const admin = new URL(TEST_DATABASE_URL);
     admin.pathname = "/postgres";
     const client = new pg.Client({ connectionString: admin.toString() });
+    const name = `graft_e2e_empty_${randomUUID().replaceAll("-", "")}`;
     await client.connect();
-    await client.query("DROP DATABASE IF EXISTS graft_e2e_empty WITH (FORCE)");
-    await client.query("CREATE DATABASE graft_e2e_empty");
     const open = env.deps.openReadOnlyDb;
     try {
+      await client.query(`CREATE DATABASE ${name}`);
       await healthy();
       const empty = new URL(TEST_DATABASE_URL);
-      empty.pathname = "/graft_e2e_empty";
+      empty.pathname = `/${name}`;
       env.deps.openReadOnlyDb = () => createDb(empty.toString(), { max: 1, readOnly: true });
       expect(await dryRun()).toBe(3);
       expect(output()).toContain("migrations");
     } finally {
       env.deps.openReadOnlyDb = open;
-      await client.query("DROP DATABASE IF EXISTS graft_e2e_empty WITH (FORCE)");
-      await client.end();
+      try {
+        await client.query(`DROP DATABASE IF EXISTS ${name}`);
+      } finally {
+        await client.end();
+      }
     }
   }, 60_000);
 });

@@ -29,6 +29,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | [features/guard.md](features/guard.md) | The post-merge guard: default-branch history, CI result classes, the culprit rule, confirmation, the report-mode comment, revert pull requests and opt-in auto-merge, `guard.checks`, `pnpm graft guard list`. |
 | [features/mcp.md](features/mcp.md) | The MCP server for agents: tokens, `get_status`, `get_policy`, `report_provenance`, `open_change`, verified commits. |
 | [features/pilots-and-gate.md](features/pilots-and-gate.md) | Pilot CLI, the Phase 0 and Phase 1 gates, review-time baseline, rollup, incidents. |
+| [features/team-token-chargeback.md](features/team-token-chargeback.md) | Billing teams, per-call token and cost allocation, unpriced calls, monthly statements, corrections, exports and purge retention. |
 | [e2e.md](e2e.md) | The live end-to-end runner against a real sandbox repository. |
 
 ## Internals
@@ -57,6 +58,7 @@ New to Graft? Start with the [two-and-a-half-minute video](video.md): how it wor
 | Page | What is in it |
 | --- | --- |
 | [spec/mvp-spec.md](spec/mvp-spec.md) | The MVP spec: thesis, users, scope, core features, architecture, success metrics, risks. |
+| [specs/spec-team-token-chargeback/SPEC.md](specs/spec-team-token-chargeback/SPEC.md) | The team chargeback product spec and companion cost-ledger and failure-mode notes. |
 | [plan/development-plan.md](plan/development-plan.md) | The 12-week plan: Phase 0 (shadow mode) and Phase 1 (enforce). |
 | [phase-0/README.md](phase-0/README.md) | How each Phase 0 step is built (spec, build, review, fix) and the constraints for every step. |
 | Step specs | [1 Base setup](phase-0/step-1-base-setup.md) · [2 Provenance](phase-0/step-2-provenance.md) · [3 Intent service](phase-0/step-3-intent-service.md) · [4 Evaluation set](phase-0/step-4-evaluation-set.md) · [5 Policy engine](phase-0/step-5-policy-engine.md) · [6 Pilots and gate](phase-0/step-6-pilots-and-gate.md) |

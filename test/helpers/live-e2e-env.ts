@@ -22,6 +22,7 @@ import { buildServer } from "../../src/http/server.js";
 import { agreeingVerifier, createFakeLlm, type FakeReply } from "../../src/llm/fake.js";
 import { unconfiguredLlm } from "../../src/llm/index.js";
 import type { LlmClient, LlmRequest } from "../../src/llm/types.js";
+import { billingCloseJob } from "../../src/modules/billing/index.js";
 import { mutationGate } from "../../src/modules/modes/index.js";
 import { startWorker } from "../../src/queue/worker.js";
 import { createTestApp, jobContext, postRaw, type TestApp } from "./app.js";
@@ -377,6 +378,7 @@ export async function createLiveEnv(
         permissionsRefreshCron: null,
         guardPruneCron: null,
       });
+      await t.deps.queue.unschedule(billingCloseJob);
       await server.close();
       await t.deps.queue.stop();
       // Maintenance timestamps would make the next test file's supervise() a no-op.

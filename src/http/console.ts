@@ -3,6 +3,17 @@ import type { FastifyPluginAsync } from "fastify";
 import { sql } from "kysely";
 import { z } from "zod";
 import type { AppDeps } from "../core/context.js";
+import {
+  archiveBillingTeam,
+  BillingStatementError,
+  BillingTeamError,
+  createBillingAdjustment,
+  createBillingTeam,
+  getBillingStatement,
+  listBillingTeams,
+  renameBillingTeam,
+  setBillingTeamRepository,
+} from "../modules/billing/index.js";
 import { upsertRepositories } from "../modules/installations/store.js";
 import { sanitizeError } from "../queue/errors.js";
 
@@ -60,6 +71,8 @@ export const consoleRoutes =
     app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
       if (err instanceof ConsoleError)
         return reply.code(err.statusCode).send({ message: err.message });
+      if (err instanceof BillingTeamError || err instanceof BillingStatementError)
+        return reply.code(err.statusCode).send({ message: err.message });
       if (err instanceof z.ZodError)
         return reply.code(400).send({ message: "Invalid console request." });
       req.log.error({ err: sanitizeError(err) }, "console administration failed");
@@ -83,13 +96,23 @@ export const consoleRoutes =
     };
     const verifyIdentity = async (user: User) => {
       const first = (await installations())[0];
-      if (!first) throw new ConsoleError(403, "No active Graft installation is available.");
-      const gh = await deps.github.forInstallation(Number(first.id));
+      const gh = first ? await deps.github.forInstallation(Number(first.id)) : deps.github.asApp();
       const { data } = await gh.request("GET /users/{username}", { username: user.login });
       if (data.id !== user.id)
         throw new ConsoleError(403, "Your GitHub identity changed. Sign in again.");
     };
-    const canAdmin = async (installationId: number, fullName: string, user: User) => {
+    const permissionCache = new Map<string, { canAdmin: boolean; expiresAt: number }>();
+    const canAdmin = async (
+      installationId: number,
+      fullName: string,
+      user: User,
+      useCache = true,
+    ) => {
+      const cacheKey = `${installationId}:${user.id}:${fullName.toLowerCase()}`;
+      const cached = permissionCache.get(cacheKey);
+      if (useCache && cached && cached.expiresAt > deps.clock.now().getTime())
+        return cached.canAdmin;
+      if (!useCache) permissionCache.delete(cacheKey);
       const [owner = "", repo = ""] = fullName.split("/");
       const gh = await deps.github.forInstallation(installationId);
       try {
@@ -97,11 +120,43 @@ export const consoleRoutes =
           "GET /repos/{owner}/{repo}/collaborators/{username}/permission",
           { owner, repo, username: user.login },
         );
-        return data.user?.id === user.id && data.permission === "admin";
+        const allowed = data.user?.id === user.id && data.permission === "admin";
+        if (useCache)
+          permissionCache.set(cacheKey, {
+            canAdmin: allowed,
+            expiresAt: deps.clock.now().getTime() + 30_000,
+          });
+        return allowed;
       } catch (err) {
-        if (statusOf(err) === 404) return false;
+        if (statusOf(err) === 404) {
+          if (useCache)
+            permissionCache.set(cacheKey, {
+              canAdmin: false,
+              expiresAt: deps.clock.now().getTime() + 30_000,
+            });
+          return false;
+        }
         throw err;
       }
+    };
+    const mapBounded = async <T, R>(
+      values: readonly T[],
+      concurrency: number,
+      fn: (value: T) => Promise<R>,
+    ): Promise<R[]> => {
+      const result = new Array<R>(values.length);
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+          while (next < values.length) {
+            const index = next++;
+            const value = values[index];
+            if (value === undefined) continue;
+            result[index] = await fn(value);
+          }
+        }),
+      );
+      return result;
     };
     const resolveRepository = async (fullName: string) => {
       const [owner = "", repo = ""] = fullName.split("/");
@@ -213,7 +268,7 @@ export const consoleRoutes =
       if (!inst) throw new ConsoleError(403, "Choose an active Graft installation.");
       const gh = await deps.github.forInstallation(Number(inst.id));
       const { data } = await gh.request("GET /search/repositories", {
-        q: `${query} in:name user:${inst.account_login}`,
+        q: `${query} in:name user:${inst.account_login} fork:true`,
         per_page: 10,
         page,
       });
@@ -268,7 +323,7 @@ export const consoleRoutes =
       const repositoryId = Number(repo.id);
       if (!Number.isSafeInteger(repositoryId))
         throw new ConsoleError(502, "GitHub returned an unsupported repository id.");
-      if (!(await canAdmin(resolved.installationId, repo.full_name, user))) {
+      if (!(await canAdmin(resolved.installationId, repo.full_name, user, false))) {
         throw new ConsoleError(403, "Only a repository administrator can change Graft activation.");
       }
       await deps.db.transaction().execute(async (tx) => {
@@ -339,5 +394,138 @@ export const consoleRoutes =
         "repository activation updated",
       );
       return { enabled, filtering: deps.config.repositoryFilter };
+    });
+
+    app.post("/internal/console/billing/teams", async (req) => {
+      const { user } = z.object({ user: userSchema }).parse(req.body);
+      await verifyIdentity(user);
+      return listBillingTeams(deps.db);
+    });
+
+    app.post("/internal/console/billing/repositories", async (req) => {
+      const { user, after } = z
+        .object({
+          user: userSchema,
+          after: z.number().int().nonnegative().safe().default(0),
+        })
+        .parse(req.body);
+      await verifyIdentity(user);
+      const activeInstallationIds = (await installations()).map((inst) => Number(inst.id));
+      if (!activeInstallationIds.length) return { after, repositories: [], next: null };
+      const rows = await deps.db
+        .selectFrom("repositories")
+        .select(["id", "full_name", "installation_id"])
+        .where("installation_id", "in", activeInstallationIds)
+        .where("removed_at", "is", null)
+        .where("id", ">", after)
+        .orderBy("id")
+        .limit(50)
+        .execute();
+      const repositories = await mapBounded(rows, 5, async (repo) => ({
+        id: Number(repo.id),
+        fullName: repo.full_name,
+        canAdmin: await canAdmin(Number(repo.installation_id), repo.full_name, user),
+      }));
+      const last = rows.at(-1);
+      return {
+        after,
+        repositories,
+        next: rows.length === 50 && last ? Number(last.id) : null,
+      };
+    });
+
+    app.post("/internal/console/billing/statement", async (req) => {
+      const { user, month } = z
+        .object({ user: userSchema, month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) })
+        .parse(req.body);
+      await verifyIdentity(user);
+      return getBillingStatement(deps.db, month);
+    });
+
+    app.post("/internal/console/billing/create", async (req) => {
+      const { user, name } = z
+        .object({ user: userSchema, name: z.string().min(1).max(100) })
+        .parse(req.body);
+      await verifyIdentity(user);
+      return createBillingTeam(deps.db, { name, actor: user.login, now: deps.clock.now() });
+    });
+
+    app.post("/internal/console/billing/rename", async (req) => {
+      const { user, id, name } = z
+        .object({ user: userSchema, id: z.uuid(), name: z.string().min(1).max(100) })
+        .parse(req.body);
+      await verifyIdentity(user);
+      await renameBillingTeam(deps.db, { id, name });
+      return { ok: true };
+    });
+
+    app.post("/internal/console/billing/archive", async (req) => {
+      const { user, id } = z.object({ user: userSchema, id: z.uuid() }).parse(req.body);
+      await verifyIdentity(user);
+      await archiveBillingTeam(deps.db, { id, now: deps.clock.now() });
+      return { ok: true };
+    });
+
+    app.post("/internal/console/billing/repository", async (req) => {
+      const { user, teamId, repositoryId, attached } = z
+        .object({
+          user: userSchema,
+          teamId: z.uuid(),
+          repositoryId: z.number().int().positive().safe(),
+          attached: z.boolean(),
+        })
+        .parse(req.body);
+      await verifyIdentity(user);
+      const repo = await deps.db
+        .selectFrom("repositories")
+        .select(["full_name", "installation_id"])
+        .where("id", "=", repositoryId)
+        .where("removed_at", "is", null)
+        .executeTakeFirst();
+      if (!repo) throw new ConsoleError(404, "Active Graft repository not found.");
+      if (
+        !(await installations()).some(
+          (installation) => Number(installation.id) === Number(repo.installation_id),
+        )
+      ) {
+        throw new ConsoleError(403, "That repository's installation is inactive or not allowed.");
+      }
+      if (!(await canAdmin(Number(repo.installation_id), repo.full_name, user, false))) {
+        throw new ConsoleError(
+          403,
+          "Only a repository administrator can change billing membership.",
+        );
+      }
+      await setBillingTeamRepository(deps.db, {
+        teamId,
+        repositoryId,
+        actor: user.login,
+        now: deps.clock.now(),
+        attached,
+      });
+      return { ok: true };
+    });
+
+    app.post("/internal/console/billing/adjustment", async (req) => {
+      const { user, sourcePeriod, sourceLineId, operationId, amountUsd, reason } = z
+        .object({
+          user: userSchema,
+          sourcePeriod: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+          sourceLineId: z.uuid(),
+          operationId: z.uuid(),
+          amountUsd: z.string().regex(/^-?\d{1,12}(?:\.\d{1,2})?$/),
+          reason: z.string().min(1).max(500),
+        })
+        .parse(req.body);
+      await verifyIdentity(user);
+      return createBillingAdjustment(deps.db, {
+        sourcePeriod,
+        sourceLineId,
+        operationId,
+        amountUsd,
+        reason,
+        actor: user.login,
+        now: deps.clock.now(),
+      });
     });
   };

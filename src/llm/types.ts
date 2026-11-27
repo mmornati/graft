@@ -1,3 +1,5 @@
+import type { Price } from "./pricing.js";
+
 /**
  * The model boundary (step 3, D1). Modules never build SDK clients: they receive an `LlmClient`
  * through `JobContext.llm`. `complete` returns a result for every API outcome (success, timeout,
@@ -105,6 +107,10 @@ export interface LlmClient {
    * the built-in Claude price table (`src/llm/pricing.ts`); null means unpriced.
    */
   costOf?(usage: LlmUsage, model: string): number | null;
+  /** Stable identifier for the effective price entry used by `costOf`; null when unpriced. */
+  priceVersion?(model: string, installationId?: number): string | null;
+  /** Immutable effective rates used for historical audit; null when unpriced. */
+  priceSnapshot?(model: string, installationId?: number): Price | null;
 }
 
 export const ZERO_USAGE: LlmUsage = Object.freeze({

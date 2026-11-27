@@ -578,6 +578,8 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
           where conname = 'review_time_runs_period_check'`.execute(t.db)
       ).rows[0]?.def;
     expect(await check()).toContain("phase1");
+    expect(await migrateDownOne(t.db)).toEqual(["0020_billing_auditability"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0019_team_chargeback"]);
     expect(await migrateDownOne(t.db)).toEqual(["0018_repository_filter"]);
     expect(await migrateDownOne(t.db)).toEqual(["0017_intent_requested"]);
     expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
@@ -588,6 +590,8 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     // The baseline extractor stores a phase1 run.
@@ -614,6 +618,8 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
     expect(
       (await t.db.selectFrom("review_time_runs").select("period").execute()).map((x) => x.period),
     ).toEqual(["phase1"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0020_billing_auditability"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0019_team_chargeback"]);
     expect(await migrateDownOne(t.db)).toEqual(["0018_repository_filter"]);
     expect(await migrateDownOne(t.db)).toEqual(["0017_intent_requested"]);
     try {
@@ -622,6 +628,8 @@ describe("the Phase 1 gate (Phase 1 step 7)", () => {
       expect(await migrateToLatest(t.db)).toEqual([
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     expect(await check()).toContain("phase1");

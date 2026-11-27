@@ -121,6 +121,10 @@ export async function revokeTokensOnTransfer(
   if (!row) return 0;
   const moved = Number(row.installation_id) !== installationId;
   if (!moved && row.removed_at === null) return 0;
+  await ex
+    .deleteFrom("billing_team_repositories")
+    .where("repository_id", "=", repositoryId)
+    .execute();
   await ex.deleteFrom("enabled_repositories").where("repository_id", "=", repositoryId).execute();
   const revoked = await ex
     .updateTable("mcp_tokens")

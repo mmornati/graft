@@ -15,6 +15,15 @@ const bridge = (): GraftApi => ({
   })),
   search: vi.fn(async () => ({ repositories: [], next: null, incomplete: false })),
   activation: vi.fn(async (_u, _r, enabled) => ({ enabled, filtering: true })),
+  billingTeams: vi.fn(async () => []),
+  billingRepositories: vi.fn(async (_u, after) => ({ after, repositories: [], next: null })),
+  billingStatement: vi.fn(async (_u, month) => ({
+    month,
+    closedAt: null,
+    closedBy: null,
+    lines: [],
+  })),
+  billingChange: vi.fn(async (_u, action) => ({ action })),
 });
 const orgConfig = () =>
   githubConfig({
@@ -145,6 +154,56 @@ describe("organization access and repository management", () => {
     });
     expect(result.statusCode).toBe(403);
     expect(result.json()).toMatchObject({ message: "Only repository admins" });
+    await app.close();
+  });
+
+  it("protects billing changes and forwards only the authenticated user", async () => {
+    const graft = bridge();
+    const app = await testApp({ config: orgConfig(), graft, now: () => NOW });
+    const headers = { cookie: cookie(), origin: "https://console.example.test" };
+    const statement = await app.inject({
+      url: "/api/billing/statement?month=2026-10",
+      headers: { cookie: cookie() },
+    });
+    expect(statement.statusCode).toBe(200);
+    expect(statement.json()).toMatchObject({ month: "2026-10", lines: [] });
+    expect(graft.billingStatement).toHaveBeenCalledWith(USER, "2026-10");
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/billing/change",
+      headers: { cookie: cookie() },
+      payload: { action: "create", name: "Platform" },
+    });
+    expect(rejected.statusCode).toBe(403);
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/billing/change",
+      headers,
+      payload: { action: "create", name: "Platform", user: { login: "forged", id: 8 } },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(graft.billingChange).toHaveBeenCalledWith(USER, "create", { name: "Platform" });
+    const invalid = await app.inject({
+      url: "/api/billing/statement?month=2026-13",
+      headers: { cookie: cookie() },
+    });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("fails billing requests explicitly when the optional Graft bridge is absent", async () => {
+    const app = await testApp({
+      config: githubConfig({ CONSOLE_ALLOWED_USERS: "org-member" }),
+      now: () => NOW,
+    });
+    for (const url of ["/api/billing/teams", "/api/billing/repositories?after=0"]) {
+      const response = await app.inject({ url, headers: { cookie: cookie() } });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        message: "Repository management needs CONSOLE_GRAFT_URL and CONSOLE_GRAFT_SECRET.",
+      });
+    }
     await app.close();
   });
 

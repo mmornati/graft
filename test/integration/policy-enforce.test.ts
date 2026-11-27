@@ -172,6 +172,8 @@ describe("approvals Graft can enforce (integration)", () => {
   it("I-ENF-1 migration 0009 down then up; down needs no pending row", async () => {
     await truncateAll(t.db);
     // Steps 3 to 5's migrations (and step 3 review 1's) sit on top of 0009.
+    expect(await migrateDownOne(t.db)).toEqual(["0020_billing_auditability"]);
+    expect(await migrateDownOne(t.db)).toEqual(["0019_team_chargeback"]);
     expect(await migrateDownOne(t.db)).toEqual(["0018_repository_filter"]);
     expect(await migrateDownOne(t.db)).toEqual(["0017_intent_requested"]);
     expect(await migrateDownOne(t.db)).toEqual(["0016_phase1_gate"]);
@@ -203,6 +205,8 @@ describe("approvals Graft can enforce (integration)", () => {
         "0016_phase1_gate",
         "0017_intent_requested",
         "0018_repository_filter",
+        "0019_team_chargeback",
+        "0020_billing_auditability",
       ]);
     }
     const cols = await sql<{ column_name: string }>`
